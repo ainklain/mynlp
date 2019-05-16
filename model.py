@@ -1,4 +1,5 @@
 
+import pickle
 import numpy as np
 import tensorflow as tf
 import sys
@@ -37,7 +38,7 @@ class FeedForward(Model):
         self.in_layer = Dense(num_units, activation=tf.nn.relu)
         self.out_layer = Dense(dim_out)
 
-    def __call__(self, inputs):
+    def call(self, inputs):
         return self.out_layer(self.in_layer(inputs))
 
 
@@ -69,7 +70,7 @@ class MultiHeadAttention(Model):
 
         return tf.matmul(attention_map, value)
 
-    def __call__(self, query, key, value, masked=False):
+    def call(self, query, key, value, masked=False):
         query = tf.concat(tf.split(self.q_layer(query), self.heads, axis=-1), axis=0)
         key = tf.concat(tf.split(self.k_layer(key), self.heads, axis=-1), axis=0)
         value = tf.concat(tf.split(self.v_layer(value), self.heads, axis=-1), axis=0)
@@ -94,7 +95,7 @@ class Encoder(Model):
             self.enc_layers['multihead_attn_' + str(i)] = MultiHeadAttention(model_hidden_size, heads)
             self.enc_layers['ff_' + str(i)] = FeedForward(dim_input, ffn_hidden_size)
 
-    def __call__(self, inputs):
+    def call(self, inputs):
         x = inputs
         for i in range(self.num_layers):
             x = sublayer_connection(x, self.enc_layers['multihead_attn_' + str(i)](x, x, x))
@@ -117,7 +118,7 @@ class Decoder(Model):
 
         self.logit_layer = Dense(dim_output)
 
-    def __call__(self, inputs, encoder_outputs):
+    def call(self, inputs, encoder_outputs):
         x = inputs
         for i in range(self.num_layers):
             x = sublayer_connection(x, self.dec_layers['masked_multihead_attn_' + str(i)](x, x, x, masked=True))
@@ -158,12 +159,18 @@ class NLPModel:
 
         self.optimizer = tf.optimizers.Adam(configs.learning_rate)
 
+        self._initialize(configs)
+
+    def _initialize(self, configs):
+        embed_temp = tf.zeros([1, configs.max_sequence_length, configs.embedding_size], dtype=tf.float32)
+        enc_temp = self.encoder(embed_temp)
+        _ = self.decoder(embed_temp, enc_temp)
+
     def train(self, features, labels):
-
-        x_embed = self.embedding(features['input']) + self.position_encode
-        y_embed = self.embedding(features['output']) + self.position_encode
-
         with tf.GradientTape() as tape:
+            x_embed = self.embedding(features['input']) + self.position_encode
+            y_embed = self.embedding(features['output']) + self.position_encode
+
             encoder_output = self.encoder(x_embed)
             logits = self.decoder(y_embed, encoder_output)
 
@@ -171,6 +178,7 @@ class NLPModel:
 
             labels_ = tf.one_hot(labels, self.vocabulary_length)
 
+            # var_lists = self.encoder.trainable_variables + self.decoder.trainable_variables
             var_lists = self.embedding.trainable_variables + self.encoder.trainable_variables + self.decoder.trainable_variables
             loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=labels_))
         grad = tape.gradient(loss, var_lists)
@@ -188,5 +196,27 @@ class NLPModel:
 
         predict = tf.argmax(logits, 2)
 
-        predictions = {'indexs': predict, 'logits': logits}
-        return predictions
+        return predict
+
+    def save_model(self, f_name):
+        w_dict = {}
+        w_dict['embedding'] = self.embedding.get_weights()
+        w_dict['encoder'] = self.encoder.get_weights()
+        w_dict['decoder'] = self.decoder.get_weights()
+
+        # f_name = os.path.join(model_path, model_name)
+        with open(f_name, 'wb') as f:
+            pickle.dump(w_dict, f)
+
+        print("model saved. (path: {})".format(f_name))
+
+    def load_model(self, f_name):
+        # f_name = os.path.join(model_path, model_name)
+        with open(f_name, 'rb') as f:
+            w_dict = pickle.load(f)
+
+        self.embedding.set_weights(w_dict['embedding'])
+        self.encoder.set_weights(w_dict['encoder'])
+        self.decoder.set_weights(w_dict['decoder'])
+
+        print("model loaded. (path: {})".format(f_name))
