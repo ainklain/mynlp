@@ -196,7 +196,7 @@ def rearrange(input, output, target):
 
 
 # 학습에 들어가 배치 데이터를 만드는 함수이다.
-def dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_size):
+def dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_size, mode='train'):
     # Dataset을 생성하는 부분으로써 from_tensor_slices부분은
     # 각각 한 문장으로 자른다고 보면 된다.
     # train_input_enc, train_output_dec, train_target_dec
@@ -214,7 +214,12 @@ def dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_s
     dataset = dataset.map(rearrange)
     # repeat()함수에 원하는 에포크 수를 넣을수 있으면
     # 아무 인자도 없다면 무한으로 이터레이터 된다.
-    dataset = dataset.repeat()
+    if mode == 'train':
+        dataset = dataset.repeat()
+    elif mode == 'test':
+        dataset = dataset.repeat(1)
+    else:
+        dataset = dataset.repeat()
     # make_one_shot_iterator를 통해 이터레이터를
     # 만들어 준다.
     # 이터레이터를 통해 다음 항목의 텐서

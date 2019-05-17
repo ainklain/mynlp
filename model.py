@@ -162,7 +162,8 @@ class NLPModel:
         self._initialize(configs)
 
     def _initialize(self, configs):
-        embed_temp = tf.zeros([1, configs.max_sequence_length, configs.embedding_size], dtype=tf.float32)
+        feature_temp = tf.zeros([1, configs.max_sequence_length], dtype=tf.float32)
+        embed_temp = self.embedding(feature_temp)
         enc_temp = self.encoder(embed_temp)
         _ = self.decoder(embed_temp, enc_temp)
 
