@@ -27,34 +27,58 @@ def normalize(arr_x, eps=1e-6):
     return (arr_x - np.mean(arr_x)) / (np.std(arr_x) + eps)
 
 
+def std_arr(arr_x, n):
+    stdarr = np.zeros_like(arr_x)
+    for t in range(1, len(arr_x)):
+        stdarr[t] = np.std(arr_x[max(0, t-n):(t+1)])
+
+    return stdarr
+
+def mdd_arr(logcumarr_x, n):
+    mddarr = np.zeros_like(logcumarr_x)
+    for t in range(len(logcumarr_x)):
+        mddarr[t] = logcumarr_x[t] - np.max(logcumarr_x[max(0, t-n):(t+1)])
+
+    return mddarr
+
+def dict_to_list(dict):
+    arr = list()
+    for key in dict.keys():
+        arr.append(dict[key])
+
+    return np.stack(arr, axis=1)
+
 def load_data(data_path, name='kospi', embedding_length=5):
     # 판다스를 통해서 데이터를 불러온다.
     data_df = pd.read_csv(data_path, header=0)
     # 질문과 답변 열을 가져와 question과 answer에 넣는다.
 
+    features = dict()
     # daily returns
-    feature1 = np.array(data_df[name], dtype=np.float32)
+    features['ret1d'] = np.array(data_df[name], dtype=np.float32)
     # cumulative returns
-    feature2 = np.cumsum(np.log(1. + feature1))
+    features['cumret'] = np.cumsum(np.log(1. + features['ret1d']))
+    # positive
+    features['pos'] = (features['ret1d'] >= 0) * np.array(1., dtype=np.float32)
+    # moving average
+    for n in [5, 20, 60, 120]:
+        features['ret{}d'.format(n)] = np.concatenate([features['cumret'][:n], features['cumret'][n:]-features['cumret'][:-n]])
+    # std
+    for n in [20, 60, 120]:
+        features['std{}d'.format(n)] = std_arr(features['ret1d'], n)
+        features['mdd{}d'.format(n)] = mdd_arr(features['cumret'], n)
+
+    features_list = dict_to_list(features)
 
     question = list()
     answer = list()
-    qlen_per_quarter = 60 // embedding_length
-    alen_per_quarter = 20 // embedding_length
+    for i in range(60, len(data_df) - 20, embedding_length):
+        sub_features = features_list[(i - 60): (i + 20)]
 
-    for i in range(qlen_per_quarter, len(data_df) // embedding_length - alen_per_quarter):
-        sub_f1 = feature1[embedding_length * (i - qlen_per_quarter): embedding_length * (i + alen_per_quarter)]
-        sub_f2 = feature2[embedding_length * (i - qlen_per_quarter): embedding_length * (i + alen_per_quarter)]
-        sub_f2 = normalize(sub_f2)
+        question.append(sub_features[:60].reshape([len(sub_features[:60]) // embedding_length, -1]))
+        answer.append(sub_features[60:].reshape([len(sub_features[60:]) // embedding_length, -1]))
 
-        question.append(np.concatenate([sub_f1[:embedding_length * qlen_per_quarter].reshape([-1, embedding_length]),
-                                        sub_f2[:embedding_length * qlen_per_quarter].reshape([-1, embedding_length])], axis=1))
-        answer.append(np.concatenate([sub_f1[embedding_length * qlen_per_quarter:].reshape([-1, embedding_length]),
-                                      sub_f2[embedding_length * qlen_per_quarter:].reshape([-1, embedding_length])], axis=1))
-
-
-    train_input, eval_input, train_label, eval_label = train_test_split(question, answer, test_size=0.33,
-                                                                        random_state=123)
+    train_input, eval_input, train_label, eval_label = train_test_split(question, answer, test_size=0.33, random_state=123)
     # 그 값을 리턴한다.
     return train_input, train_label, eval_input, eval_label
 
