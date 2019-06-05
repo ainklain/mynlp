@@ -66,9 +66,21 @@ class MultiHeadAttention(Model):
             paddings = tf.ones_like(masks) * (-2 ** 32 + 1)
             outputs = tf.where(tf.equal(masks, 0), paddings, outputs)
 
-        attention_map = tf.nn.softmax(outputs)
+        self.attention_map = tf.nn.softmax(outputs)
 
-        return tf.matmul(attention_map, value)
+        return tf.matmul(self.attention_map, value)
+
+    def show(self, ep, save=True):
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        fig = plt.figure()
+        # plt.imshow(self.attention_map[0], cmap='hot', interpolation='nearest')
+        sns.heatmap(self.attention_map[0], cmap='Greens')
+        if save is not None:
+            fig.savefig('./out/{}.jpg'.format(ep))
+            plt.close(fig)
+        else:
+            plt.show()
 
     def call(self, query, key, value, masked=False):
         query = tf.concat(tf.split(self.q_layer(query), self.heads, axis=-1), axis=0)
@@ -94,6 +106,9 @@ class Encoder(Model):
         for i in range(num_layers):
             self.enc_layers['multihead_attn_' + str(i)] = MultiHeadAttention(model_hidden_size, heads)
             self.enc_layers['ff_' + str(i)] = FeedForward(dim_input, ffn_hidden_size)
+
+    def show(self, ep, save=True):
+        self.enc_layers['multihead_attn_' + str(self.num_layers - 1)].show(ep, save=save)
 
     def call(self, inputs):
         x = inputs
@@ -131,10 +146,6 @@ class Decoder(Model):
 class TSModel:
     """omit embedding time series. just 1-D data used"""
     def __init__(self, configs):
-        if configs.xavier_initializer:
-            embeddings_initializer = 'glorot_normal'
-        else:
-            embeddings_initializer = 'uniform'
 
         # self.vocabulary_length = configs.vocabulary_length
         #
@@ -182,6 +193,7 @@ class TSModel:
             var_lists = self.encoder.trainable_variables + self.decoder.trainable_variables
             # loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=labels_))
             loss = tf.losses.MSE(labels, predict)
+            print("loss:{}".format(np.mean(loss.numpy())))
         grad = tape.gradient(loss, var_lists)
         self.optimizer.apply_gradients(zip(grad, var_lists))
 
