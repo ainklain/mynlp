@@ -36,7 +36,7 @@ def dict_to_list(dict, key_list=None):
     for key in key_list:
         arr.append(dict[key])
 
-    return np.stack(arr, axis=1), list(key_list)
+    return np.stack(arr, axis=-1), list(key_list)
 
 
 
@@ -71,6 +71,7 @@ def load_data(data_path, name='kospi', token_length=5):
         features['std{}d'.format(n)] = std_arr(y_1d, n)[::token_length]
         features['mdd{}d'.format(n)] = mdd_arr(log_cum_y, n)[::token_length]
 
+    # (batches, assets, features)
     features_list_normalize, columns_list_normal = dict_to_list(features, ['log_cum_y'])
     features_list_linear, columns_list_linear = dict_to_list(features, features.keys() - ['log_cum_y'])
     question = list()
@@ -78,11 +79,11 @@ def load_data(data_path, name='kospi', token_length=5):
 
     M = 60 // token_length
     K = 20 // token_length
-    for i in range(M, len(features['y']) - K):
+    for i in range(M, len(features['log_y']) - K):
         sub_features_linear = features_list_linear[(i - M): (i + K)]
         sub_features_normalize = normalize(features_list_normalize[(i - M): (i + K)])
 
-        sub_features = np.concatenate([sub_features_linear, sub_features_normalize], axis=1)
+        sub_features = np.concatenate([sub_features_linear, sub_features_normalize], axis=-1)
         columns_list = columns_list_linear + columns_list_normal
         question.append(sub_features[:M])
         answer.append(sub_features[M-1:])
@@ -93,14 +94,46 @@ def load_data(data_path, name='kospi', token_length=5):
 
 
 class FeatureCalculator:
-    def y_1d(self, prc_arr):
-        return prc_arr[1:] / prc_arr[:-1] - 1
+    def __init__(self, prc, sampling_freq):
+        self.sampling_freq = sampling_freq
+        self.log_cum_y = np.log(prc / prc[0, :])
+        self.y_1d = self.get_y_1d()
+        self.log_y = self.moving_average(sampling_freq, sampling_freq=sampling_freq)
 
-    def log_y_1d(self, prc_arr):
-        return np.log(prc_arr[1:] / prc_arr[:-1])
+    def get_y_1d(self, eps=1e-6):
+        return np.concatenate([self.log_cum_y[0:1, :], np.exp(self.log_cum_y[1:, :] - self.log_cum_y[:-1, :] + eps) - 1.], axis=0)
 
-    def log_cum_y(self, y):
-        return np.cumsum(np.log(1. + y))
+    def moving_average(self, n, sampling_freq=1):
+        return np.concatenate([self.log_cum_y[:n, :], self.log_cum_y[n:, :] - self.log_cum_y[:-n, :]], axis=0)[::sampling_freq, :]
+
+    def positive(self):
+        return (self.log_y >= 0) * np.array(1., dtype=np.float32) - (self.log_y < 0) * np.array(1., dtype=np.float32)
+
+    def get_std(self, n, sampling_freq=1):
+        stdarr = np.zeros_like(self.y_1d)
+        for t in range(1, len(self.y_1d)):
+            stdarr[t, :] = np.std(self.y_1d[max(0, t - n):(t + 1), :], axis=0)
+        return stdarr[::sampling_freq, :]
+
+    def get_mdd(self, n, sampling_freq=1):
+        mddarr = np.zeros_like(self.log_cum_y)
+        for t in range(len(self.log_cum_y)):
+            mddarr[t, :] = self.log_cum_y[t, :] - np.max(self.log_cum_y[max(0, t - n):(t + 1), :])
+
+        return mddarr[::sampling_freq, :]
+
+    def generate_features(self):
+        features = dict()
+        features['log_y'] = self.log_y
+        features['log_cum_y'] = self.log_cum_y[::self.sampling_freq]
+        features['positive'] = self.positive()
+        for n in [20, 60, 120]:
+            features['y_{}d'.format(n)] = self.moving_average(n, self.sampling_freq)
+            features['std{}d'.format(n)] = self.get_std(n, self.sampling_freq)
+            features['mdd{}d'.format(n)] = self.get_mdd(n, self.sampling_freq)
+
+        return features
+
 
 class DataGenerator:
     def __init__(self, data_path):
@@ -108,67 +141,59 @@ class DataGenerator:
         data_df = pd.read_csv(data_path, index_col=0)
         self.df_pivoted = data_df.pivot(index='eval_d', columns='bbticker')
 
-    def generate_dataset(self, start_d, end_d, token_length=5):
-        df_selected = self.df_pivoted[(self.df_pivoted.index >= start_d) & (self.df_pivoted.index <= end_d)]
-        full_data_selected = df_selected.ix[:, np.sum(df_selected.isna(), axis=0) == 0]
+    def get_full_dataset(self, start_d, end_d):
+        df_selected = self.df_pivoted[(self.df_pivoted.index >= start_d) & (self.df_pivoted.index < end_d)]
+        return df_selected.ix[:, np.sum(df_selected.isna(), axis=0) == 0]
 
-        train_rate = 0.6
+    def generate_dataset(self, start_d, end_d, sampling_freq=5, m_days=60, k_days=20, train_rate=0.6, seed=1234):
+        full_data_selected = self.get_full_dataset(start_d, end_d)
+
         train_dataset = full_data_selected.iloc[:int(len(full_data_selected) * train_rate)]
-        eval_dataset = full_data_selected.iloc[:int(len(full_data_selected) * train_rate)]
+        eval_dataset = full_data_selected.iloc[int(len(full_data_selected) * train_rate):]
 
-        factor_data_train = self.data_to_factor(train_dataset, token_length)
-        factor_data_eval = self.data_to_factor(eval_dataset, token_length)
+        train_input, train_label, features_list = self.data_to_factor(train_dataset, sampling_freq, m_days, k_days, seed)
+        eval_input, eval_label, _ = self.data_to_factor(eval_dataset, sampling_freq, m_days, k_days, seed)
 
-    def data_to_factor(self, dataset_df, token_length=5):
+        return train_input, train_label, eval_input, eval_label, features_list
+
+    def data_to_factor(self, dataset_df, token_length=5, m_days=60, k_days=20, seed=1234):
+        assert m_days % token_length == 0
+        assert k_days % token_length == 0
         prc = np.array(dataset_df, dtype=np.float32)
 
-        fc = FeatureCalculator()
-        y_1d = fc.y_1d(prc)
-        log_cum_y = fc.log_cum_y(y_1d)
+        fc = FeatureCalculator(prc, token_length)
+        features = fc.generate_features()
 
-        features = dict()
-        # daily returns
-        features['y'] = np.concatenate([log_cum_y[:token_length],
-                                        log_cum_y[token_length:] - log_cum_y[:-token_length]])[::token_length]
-
-        # cumulative returns
-        features['log_cum_y'] = np.cumsum(np.log(1. + features['y']))
-
-        # positive
-        features['positive'] = (features['y'] >= 0) * np.array(1., dtype=np.float32) - (features['y'] < 0) * np.array(
-            1., dtype=np.float32)
-
-        # moving average
-        for n in [5, 20, 60, 120]:
-            if n == token_length:
-                continue
-            features['y_{}d'.format(n)] = np.concatenate([log_cum_y[:n], log_cum_y[n:] - log_cum_y[:-n]])[
-                                          ::token_length]
-
-        # std
-        for n in [20, 60, 120]:
-            features['std{}d'.format(n)] = std_arr(y_1d, n)[::token_length]
-            features['mdd{}d'.format(n)] = mdd_arr(log_cum_y, n)[::token_length]
-
+        # (batches, assets, features)
         features_list_normalize, columns_list_normal = dict_to_list(features, ['log_cum_y'])
         features_list_linear, columns_list_linear = dict_to_list(features, features.keys() - ['log_cum_y'])
-        question = list()
-        answer = list()
 
-        M = 60 // token_length
-        K = 20 // token_length
-        for i in range(M, len(features['y']) - K):
-            sub_features_linear = features_list_linear[(i - M): (i + K)]
-            sub_features_normalize = normalize(features_list_normalize[(i - M): (i + K)])
+        M = m_days // token_length
+        K = k_days // token_length
+        for i, t in enumerate(range(M, len(features['log_y']) - K)):
+            sub_features_linear = features_list_linear[(t - M): (t + K)]
+            sub_features_normalize = normalize(features_list_normalize[(t - M): (t + K)])
 
-            sub_features = np.concatenate([sub_features_linear, sub_features_normalize], axis=1)
-            columns_list = columns_list_linear + columns_list_normal
-            question.append(sub_features[:M])
-            answer.append(sub_features[M - 1:])
+            sub_features = np.concatenate([sub_features_linear, sub_features_normalize], axis=-1)
+            features_list = columns_list_linear + columns_list_normal
+
+            question_t = np.transpose(sub_features[:M], [1, 0, 2])
+            answer_t = np.transpose(sub_features[M - 1:], [1, 0, 2])
+            if i == 0:
+                question = question_t[:]
+                answer = answer_t[:]
+            else:
+                question = np.concatenate([question, question_t], axis=0)
+                answer = np.concatenate([answer, answer_t], axis=0)
+
+        idx = np.arange(len(question))
+        if seed > 0:
+            np.random.seed(seed)
+            np.random.shuffle(idx)
+
+        return question[idx], answer[idx], features_list
 
 
-# 인덱스화 할 value와 키가 워드이고
-# 값이 인덱스인 딕셔너리를 받는다.
 def enc_processing(value):
 
 

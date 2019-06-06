@@ -179,6 +179,11 @@ class TSModel:
         # embed_temp = self.embedding(feature_temp)
         enc_temp = self.encoder(feature_temp)
         _ = self.decoder(feature_temp, enc_temp)
+        self.reset_eval_param()
+
+    def reset_eval_param(self):
+        self.eval_loss = 100000
+        self.eval_count = 0
 
     def train(self, features, labels):
         with tf.GradientTape() as tape:
@@ -188,8 +193,6 @@ class TSModel:
             encoder_output = self.encoder(x_embed)
             predict = self.decoder(y_embed, encoder_output)
 
-
-            # var_lists = self.encoder.trainable_variables + self.decoder.trainable_variables
             var_lists = self.encoder.trainable_variables + self.decoder.trainable_variables
             # loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=labels_))
             loss = tf.losses.MSE(labels, predict)
@@ -198,6 +201,28 @@ class TSModel:
         self.optimizer.apply_gradients(zip(grad, var_lists))
 
         self.accuracy.update_state(labels, predict)
+
+    def evaluate(self, datasets, steps=-1):
+        loss_avg = 0
+        for i, (features, labels) in enumerate(datasets.take(steps)):
+            x_embed = features['input'] + self.position_encode_in
+            y_embed = features['output'] + self.position_encode_out
+
+            encoder_output = self.encoder(x_embed)
+            predict = self.decoder(y_embed, encoder_output)
+
+            var_lists = self.encoder.trainable_variables + self.decoder.trainable_variables
+        # loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=labels_))
+            loss = tf.losses.MSE(labels, predict)
+            loss_avg += np.mean(loss.numpy())
+
+        loss_avg = loss_avg / i
+        print("eval loss:{} (steps:{})".format(loss_avg, i))
+        if loss_avg < self.eval_loss:
+            self.eval_loss = loss_avg
+            self.eval_count = 0
+        else:
+            self.eval_count += 1
 
     def predict(self, feature):
 
