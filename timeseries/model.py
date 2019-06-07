@@ -110,11 +110,11 @@ class Encoder(Model):
     def show(self, ep, save=True):
         self.enc_layers['multihead_attn_' + str(self.num_layers - 1)].show(ep, save=save)
 
-    def call(self, inputs):
+    def call(self, inputs, dropout=0.2):
         x = inputs
         for i in range(self.num_layers):
-            x = sublayer_connection(x, self.enc_layers['multihead_attn_' + str(i)](x, x, x))
-            x = sublayer_connection(x, self.enc_layers['ff_' + str(i)](x))
+            x = sublayer_connection(x, self.enc_layers['multihead_attn_' + str(i)](x, x, x), dropout=dropout)
+            x = sublayer_connection(x, self.enc_layers['ff_' + str(i)](x), dropout=dropout)
 
         return x
 
@@ -133,12 +133,12 @@ class Decoder(Model):
 
         self.logit_layer = Dense(dim_output)
 
-    def call(self, inputs, encoder_outputs):
+    def call(self, inputs, encoder_outputs, dropout=0.2):
         x = inputs
         for i in range(self.num_layers):
-            x = sublayer_connection(x, self.dec_layers['masked_multihead_attn_' + str(i)](x, x, x, masked=True))
-            x = sublayer_connection(x, self.dec_layers['multihead_attn_' + str(i)](x, encoder_outputs, encoder_outputs))
-            x = sublayer_connection(x, self.dec_layers['ff_' + str(i)](x))
+            x = sublayer_connection(x, self.dec_layers['masked_multihead_attn_' + str(i)](x, x, x, masked=True), dropout=dropout)
+            x = sublayer_connection(x, self.dec_layers['multihead_attn_' + str(i)](x, encoder_outputs, encoder_outputs), dropout=dropout)
+            x = sublayer_connection(x, self.dec_layers['ff_' + str(i)](x), dropout=dropout)
 
         return self.logit_layer(x)
 
@@ -146,14 +146,8 @@ class Decoder(Model):
 class TSModel:
     """omit embedding time series. just 1-D data used"""
     def __init__(self, configs):
-
-        # self.vocabulary_length = configs.vocabulary_length
-        #
         self.position_encode_in = positional_encoding(configs.embedding_size, configs.max_sequence_length_in)
         self.position_encode_out = positional_encoding(configs.embedding_size, configs.max_sequence_length_out)
-
-        # self.embedding = Embedding(configs.vocabulary_length, configs.embedding_size,
-        #                       embeddings_initializer=embeddings_initializer)
 
         self.encoder = Encoder(dim_input=configs.embedding_size,
                                model_hidden_size=configs.model_hidden_size,
@@ -168,6 +162,10 @@ class TSModel:
                                heads=configs.attention_head_size,
                                num_layers=configs.layer_size)
 
+        self.optim_encoder_w = None
+        self.optim_decoder_w = None
+        self.dropout_train = configs.dropout
+
         self.accuracy = tf.metrics.Accuracy()
 
         self.optimizer = tf.optimizers.Adam(configs.learning_rate)
@@ -179,28 +177,38 @@ class TSModel:
         # embed_temp = self.embedding(feature_temp)
         enc_temp = self.encoder(feature_temp)
         _ = self.decoder(feature_temp, enc_temp)
-        self.reset_eval_param()
 
-    def reset_eval_param(self):
+        self.optim_encoder_w = self.encoder.get_weights()
+        self.optim_decoder_w = self.decoder.get_weights()
+
+        self._reset_eval_param()
+
+    def weight_to_optim(self):
+        self.encoder.set_weights(self.optim_encoder_w)
+        self.decoder.set_weights(self.optim_decoder_w)
+        self._reset_eval_param()
+
+    def _reset_eval_param(self):
         self.eval_loss = 100000
         self.eval_count = 0
 
-    def train(self, features, labels):
+    def train(self, features, labels, print_loss=False):
         with tf.GradientTape() as tape:
             x_embed = features['input'] + self.position_encode_in
             y_embed = features['output'] + self.position_encode_out
 
-            encoder_output = self.encoder(x_embed)
-            predict = self.decoder(y_embed, encoder_output)
+            encoder_output = self.encoder(x_embed, dropout=self.dropout_train)
+            predict = self.decoder(y_embed, encoder_output, dropout=self.dropout_train)
 
             var_lists = self.encoder.trainable_variables + self.decoder.trainable_variables
             # loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=labels_))
             loss = tf.losses.MSE(labels, predict)
-            print("loss:{}".format(np.mean(loss.numpy())))
         grad = tape.gradient(loss, var_lists)
         self.optimizer.apply_gradients(zip(grad, var_lists))
 
         self.accuracy.update_state(labels, predict)
+        if print_loss:
+            print("loss:{}".format(np.mean(loss.numpy())))
 
     def evaluate(self, datasets, steps=-1):
         loss_avg = 0
@@ -208,8 +216,8 @@ class TSModel:
             x_embed = features['input'] + self.position_encode_in
             y_embed = features['output'] + self.position_encode_out
 
-            encoder_output = self.encoder(x_embed)
-            predict = self.decoder(y_embed, encoder_output)
+            encoder_output = self.encoder(x_embed, dropout=0.)
+            predict = self.decoder(y_embed, encoder_output, dropout=0.)
 
             var_lists = self.encoder.trainable_variables + self.decoder.trainable_variables
         # loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=labels_))
@@ -221,6 +229,8 @@ class TSModel:
         if loss_avg < self.eval_loss:
             self.eval_loss = loss_avg
             self.eval_count = 0
+            self.optim_encoder_w = self.encoder.get_weights()
+            self.optim_decoder_w = self.decoder.get_weights()
         else:
             self.eval_count += 1
 
@@ -229,8 +239,8 @@ class TSModel:
         x_embed = feature['input'] + self.position_encode_in
         y_embed = feature['output'] + self.position_encode_out
 
-        encoder_output = self.encoder(x_embed)
-        predict = self.decoder(y_embed, encoder_output)
+        encoder_output = self.encoder(x_embed, dropout=0.)
+        predict = self.decoder(y_embed, encoder_output, dropout=0.)
 
         # predict = tf.argmax(logits, 2)
 
@@ -238,8 +248,8 @@ class TSModel:
 
     def save_model(self, f_name):
         w_dict = {}
-        w_dict['encoder'] = self.encoder.get_weights()
-        w_dict['decoder'] = self.decoder.get_weights()
+        w_dict['encoder'] = self.optim_encoder_w
+        w_dict['decoder'] = self.optim_decoder_w
 
         # f_name = os.path.join(model_path, model_name)
         with open(f_name, 'wb') as f:
@@ -252,7 +262,10 @@ class TSModel:
         with open(f_name, 'rb') as f:
             w_dict = pickle.load(f)
 
-        self.encoder.set_weights(w_dict['encoder'])
-        self.decoder.set_weights(w_dict['decoder'])
+        self.optim_encoder_w = w_dict['encoder']
+        self.optim_decoder_w = w_dict['decoder']
+
+        self.encoder.set_weights(self.optim_encoder_w)
+        self.decoder.set_weights(self.optim_decoder_w)
 
         print("model loaded. (path: {})".format(f_name))

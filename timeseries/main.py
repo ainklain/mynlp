@@ -1,20 +1,14 @@
 # https://github.com/NLP-kr/tensorflow-ml-nlp
 
-
 from timeseries.config import Config
 from timeseries.model import TSModel
-
-import data_process
-from timeseries.data_process import dataset_process, load_data, DataGenerator
+from timeseries.data_process import dataset_process, load_data, DataGenerator, DataScheduler
 
 
 import numpy as np
 import pandas as pd
 import os
-import sys
-import tensorflow as tf
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 
 def predict_plot(model, dataset, columns_list, size=250, save_dir='out.jpg'):
@@ -29,11 +23,11 @@ def predict_plot(model, dataset, columns_list, size=250, save_dir='out.jpg'):
     pred_y = np.zeros_like(true_y)
     pred_avg = np.zeros_like(true_y)
 
+    prev_w_both = 0
+    prev_w_pos = 0
+    prev_w_y = 0
+    prev_w_avg = 0
     for j, (features, labels) in enumerate(dataset.take(size)):
-        prev_w_both = 0
-        prev_w_pos = 0
-        prev_w_y = 0
-        prev_w_avg = 0
         predictions = model.predict(features)
         true_y[j] = labels[0, 0, idx_y]
         if predictions[0, 0, idx_y] > 0:
@@ -70,29 +64,21 @@ def predict_plot(model, dataset, columns_list, size=250, save_dir='out.jpg'):
     plt.close(fig)
 
 
-def main_all_asset():
+
+def main_all_asset_dataprocess_modified():
     configs = Config()
-    configs.data_path = './timeseries/asset_data.csv'
 
-    data_out_path = os.path.join(os.getcwd(), './out/')
-    os.makedirs(data_out_path, exist_ok=True)
-
+    # initiate and load model
     model = TSModel(configs)
     if os.path.exists(configs.f_name):
         model.load_model(configs.f_name)
 
-    dg = DataGenerator(configs.data_path)
-    # 훈련 데이터와 테스트 데이터를 가져온다.
-    date_ = list(dg.df_pivoted.index)
-    t = 2500
-    for t in range(2500, len(date_), 250):
-    # for t in range(2500, 2750, 250):
-        print(t)
-        os.makedirs(os.path.join(os.getcwd(), './out/{}/'.format(t)), exist_ok=True)
-        os.makedirs(os.path.join(os.getcwd(), './out/{}/test/'.format(t)), exist_ok=True)
+    # get data for all assets and dates
+    ds = DataScheduler(configs)
+
+    while not ds.done:
+        ds.run('train')
         # 10 years
-        start_t = date_[t - 2500]
-        end_t = date_[t]
         train_input, train_label, eval_input, eval_label, features_list = \
             dg.generate_dataset(start_t, end_t, m_days=60, k_days=20)
 
@@ -115,9 +101,8 @@ def main_all_asset():
         dataset_eval = dataset_process(eval_input_enc, eval_output_dec, eval_target_dec, 1, mode='test')
 
         for i, (features, labels) in enumerate(dataset_train.take(configs.train_steps)):
-            model.train(features, labels)
-
-            if i % 100 == 0:
+            print_loss = False
+            if i % 50 == 0:
                 # model.encoder.show(i, save=True)
                 model.save_model(configs.f_name)
 
@@ -125,14 +110,18 @@ def main_all_asset():
                 predict_plot(model, dataset_eval, features_list, 250, save_dir='out/{}/eval_{}.jpg'.format(t, i))
 
             if i % 10 == 0:
+                print_loss = True
                 model.evaluate(dataset_eval, steps=20)
-                print("i:{} / min_eval_loss:{} / count:{}".format(i, model.eval_loss, model.eval_count))
+                print("[t: {} / i: {}] min_eval_loss:{} / count:{}".format(t, i, model.eval_loss, model.eval_count))
                 if model.eval_count >= 10:
                     print("[t: {} / i: {}] train finished.".format(t, i))
-                    model.reset_eval_param()
+                    model.weight_to_optim()
                     break
 
-        test_dataset_temp = dg.get_full_dataset(date_[t-60], date_[t+250])
+            model.train(features, labels, print_loss=print_loss)
+
+
+        test_dataset_temp = dg.get_full_dataset(dg.date_[t-60], dg.date_[t+250])
         test_dataset_temp.columns = test_dataset_temp.columns.droplevel(0)
         bbticker = list(test_dataset_temp.columns)
         test_dataset_arr = test_dataset_temp.values
@@ -144,7 +133,83 @@ def main_all_asset():
             predict_plot(model, dataset_test, features_list, size=len(test_input), save_dir='./out/{}/test/{}.jpg'.format(t, bbticker[j]))
 
 
-def main():
+def main_all_asset():
+    configs = Config()
+
+    data_out_path = os.path.join(os.getcwd(), configs.data_out_path)
+    os.makedirs(data_out_path, exist_ok=True)
+
+    # initiate and load model
+    model = TSModel(configs)
+    if os.path.exists(configs.f_name):
+        model.load_model(configs.f_name)
+
+    # get data for all assets and dates
+    dg = DataGenerator(configs.data_path)
+
+    t = 2500
+    for t in range(2500, len(dg.date_)-250, 250):
+        print(t)
+        # make directories for graph results (both train and test one)
+        os.makedirs(os.path.join(data_out_path, '/{}/'.format(t)), exist_ok=True)
+        os.makedirs(os.path.join(data_out_path, '/{}/test/'.format(t)), exist_ok=True)
+        # 10 years
+        start_t = dg.date_[t - 2500]
+        end_t = dg.date_[t]
+        train_input, train_label, eval_input, eval_label, features_list = \
+            dg.generate_dataset(start_t, end_t, m_days=60, k_days=20)
+
+        # 훈련셋 인코딩 만드는 부분이다.
+        train_input_enc = train_input[:]
+        # 훈련셋 디코딩 입력 부분 만드는 부분이다.
+        train_output_dec = train_label[:, :-1, :]
+        # 훈련셋 디코딩 출력 부분 만드는 부분이다.
+        train_target_dec = train_label[:, 1:, :]
+
+        # 훈련셋 인코딩 만드는 부분이다.
+        eval_input_enc = eval_input[:]
+        # 훈련셋 디코딩 입력 부분 만드는 부분이다.
+        eval_output_dec = eval_label[:, :-1, :]
+        # 훈련셋 디코딩 출력 부분 만드는 부분이다.
+        eval_target_dec = eval_label[:, 1:, :]
+
+        dataset_train = dataset_process(train_input_enc, train_output_dec, train_target_dec, configs.batch_size)
+        dataset_insample_test = dataset_process(train_input_enc, train_output_dec, train_target_dec, 1, mode='test')
+        dataset_eval = dataset_process(eval_input_enc, eval_output_dec, eval_target_dec, 1, mode='test')
+
+        for i, (features, labels) in enumerate(dataset_train.take(configs.train_steps)):
+            print_loss = False
+            if i % 50 == 0:
+                # model.encoder.show(i, save=True)
+                model.save_model(configs.f_name)
+
+                predict_plot(model, dataset_insample_test, features_list, 250, save_dir='out/{}/train_{}.jpg'.format(t, i))
+                predict_plot(model, dataset_eval, features_list, 250, save_dir='out/{}/eval_{}.jpg'.format(t, i))
+
+            if i % 10 == 0:
+                print_loss = True
+                model.evaluate(dataset_eval, steps=20)
+                print("[t: {} / i: {}] min_eval_loss:{} / count:{}".format(t, i, model.eval_loss, model.eval_count))
+                if model.eval_count >= 10:
+                    print("[t: {} / i: {}] train finished.".format(t, i))
+                    model.weight_to_optim()
+                    break
+
+            model.train(features, labels, print_loss=print_loss)
+
+
+        test_dataset_temp = dg.get_full_dataset(dg.date_[t-60], dg.date_[t+250])
+        bbticker = list(test_dataset_temp.columns)
+        test_dataset_arr = test_dataset_temp.values
+
+        for j in range(len(bbticker)):
+            test_input, test_label, _ = dg.data_to_factor(test_dataset_arr[:, j:j+1], token_length=5, m_days=60, k_days=20, seed=-1)
+            dataset_test = dataset_process(test_input[:], test_label[:, :-1, :], test_label[:, 1:, :], 1, mode='test')
+
+            predict_plot(model, dataset_test, features_list, size=len(test_input), save_dir='./out/{}/test/{}.jpg'.format(t, bbticker[j]))
+
+
+def main_single_asset():
     configs = Config()
 
     name = 'gpa'
