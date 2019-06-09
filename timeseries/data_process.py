@@ -1,71 +1,10 @@
+from timeseries.utils import *
 
 import pandas as pd
 import tensorflow as tf
 import numpy as np
 import os
-
 from sklearn.model_selection import train_test_split
-
-
-def normalize(arr_x, eps=1e-6):
-    return (arr_x - np.mean(arr_x, axis=0)) / (np.std(arr_x, axis=0) + eps)
-
-
-def dict_to_list(dict, key_list=None):
-    arr = list()
-    if key_list is None:
-        key_list = dict.keys()
-
-    for key in key_list:
-        arr.append(dict[key])
-
-    return np.stack(arr, axis=-1), list(key_list)
-
-
-class FeatureCalculator:
-    def __init__(self, prc, sampling_freq):
-        self.sampling_freq = sampling_freq
-        self.log_cum_y = np.log(prc / prc[0, :])
-        self.y_1d = self.get_y_1d()
-        self.log_y = self.moving_average(sampling_freq, sampling_freq=sampling_freq)
-
-    def get_y_1d(self, eps=1e-6):
-        return np.concatenate([self.log_cum_y[0:1, :], np.exp(self.log_cum_y[1:, :] - self.log_cum_y[:-1, :] + eps) - 1.], axis=0)
-
-    def moving_average(self, n, sampling_freq=1):
-        return np.concatenate([self.log_cum_y[:n, :], self.log_cum_y[n:, :] - self.log_cum_y[:-n, :]], axis=0)[::sampling_freq, :]
-
-    def positive(self):
-        return (self.log_y >= 0) * np.array(1., dtype=np.float32) - (self.log_y < 0) * np.array(1., dtype=np.float32)
-
-    def get_std(self, n, sampling_freq=1):
-        stdarr = np.zeros_like(self.y_1d)
-        for t in range(1, len(self.y_1d)):
-            stdarr[t, :] = np.std(self.y_1d[max(0, t - n):(t + 1), :], axis=0)
-        return stdarr[::sampling_freq, :]
-
-    def get_mdd(self, n, sampling_freq=1):
-        mddarr = np.zeros_like(self.log_cum_y)
-        for t in range(len(self.log_cum_y)):
-            mddarr[t, :] = self.log_cum_y[t, :] - np.max(self.log_cum_y[max(0, t - n):(t + 1), :])
-
-        return mddarr[::sampling_freq, :]
-
-    def generate_features(self):
-        features = dict()
-        features['log_y'] = self.log_y
-        features['log_cum_y'] = self.log_cum_y[::self.sampling_freq]
-        features['positive'] = self.positive()
-        for n in [20, 60, 120]:
-            features['y_{}d'.format(n)] = self.moving_average(n, self.sampling_freq)
-            features['std{}d'.format(n)] = self.get_std(n, self.sampling_freq)
-            features['mdd{}d'.format(n)] = self.get_mdd(n, self.sampling_freq)
-
-        # remove redundant values at t=0 (y=0, cum_y=0, ...)
-        for key in features.keys():
-            features[key] = features[key][1:]
-
-        return features
 
 
 class DataScheduler:
@@ -81,59 +20,135 @@ class DataScheduler:
         self.m_days = configs.m_days
         self.k_days = configs.k_days
         self.sampling_days = configs.sampling_days
+        self.max_seq_len_in = configs.max_sequence_length_in
+        self.max_seq_len_out = configs.max_sequence_length_out
 
+        self.train_batch_size = configs.batch_size
         self.train_rate = configs.train_rate
 
         self._initialize()
 
     def _initialize(self):
-        self.base_d = self.train_set_length
+        self.base_idx = self.train_set_length
 
-        self.train_begin_d = 0
-        self.eval_begin_d = int(self.base_d * self.train_rate)
-        self.test_begin_d = self.base_d - self.m_days
-        self.test_end_d = self.base_d + self.retrain_days
+        self.train_begin_idx = 0
+        self.eval_begin_idx = int(self.base_idx * self.train_rate)
+        self.test_begin_idx = self.base_idx - self.m_days
+        self.test_end_idx = self.base_idx + self.retrain_days
 
-    def _encoding_set(self, input, label, mode='train'):
-        input_enc = input[:]
-        output_enc = label[:, :-1, :]
-
-        if mode == 'test':
-            target_enc = np.zeros_like(output_enc)
-        else:
-            target_enc = label[:, 1:, :]
-
-        return
-
-    def run(self, mode='train', steps=1):
-        # make directories for graph results (both train and test one)
-        os.makedirs(os.path.join(self.data_out_path, '/{}/'.format(self.end_d)), exist_ok=True)
-        os.makedirs(os.path.join(self.data_out_path, '/{}/test/'.format(self.end_d)), exist_ok=True)
+    def _dataset(self, mode='train', bbtickers=None):
+        input_enc, output_dec, target_dec = [], [], []
+        features_list = []
         if mode == 'train':
-            train_input, train_label, features_list = self.data_generator.generate_dataset_v2(
-                self.train_begin_d, self.eval_begin_d,
-                sampling_days=self.sampling_days,
-                m_days=self.m_days,
-                k_days=self.k_days)
-
+            start_idx = self.train_begin_idx + self.m_days
+            end_idx = self.eval_begin_idx - self.k_days
+            step_size = self.sampling_days
+            k_days = self.k_days
         elif mode == 'eval':
-            eval_input, eval_label, features_list = self.data_generator.generate_dataset_v2(
-                self.eval_begin_d, self.base_d,
-                sampling_days=self.sampling_days,
-                m_days=self.m_days,
-                k_days=self.k_days)
-
+            start_idx = self.eval_begin_idx + self.m_days
+            end_idx = self.test_begin_idx - self.k_days
+            step_size = self.sampling_days
+            k_days = self.k_days
         elif mode == 'test':
-            test_input, test_label, features_list = self.data_generator.generate_dataset_v2(
-                self.test_begin_d, self.test_end_d,
-                sampling_days=self.sampling_days,
-                m_days=self.m_days,
-                k_days=0)
+            start_idx = self.test_begin_idx + self.m_days
+            end_idx = self.test_end_idx
+            step_size = self.sampling_days
+            k_days = self.sampling_days
         else:
             raise NotImplementedError
 
-    def _run(self):
-        pass
+        print(bbtickers)
+        for i, d in enumerate(range(start_idx, end_idx, step_size)):
+            _sampled_data = self.data_generator.sample_inputdata(d,
+                                                     bbtickers=bbtickers,
+                                                     sampling_days=self.sampling_days,
+                                                     m_days=self.m_days,
+                                                     k_days=k_days,
+                                                     max_seq_len_in=self.max_seq_len_in,
+                                                     max_seq_len_out=self.max_seq_len_out)
+            if _sampled_data is False:
+                return False
+            else:
+                tmp_ie, tmp_od, tmp_td, features_list = _sampled_data
+            input_enc.append(tmp_ie)
+            output_dec.append(tmp_od)
+            target_dec.append(tmp_td)
+        input_enc = np.concatenate(input_enc, axis=0)
+        output_dec = np.concatenate(output_dec, axis=0)
+        target_dec = np.concatenate(target_dec, axis=0)
+
+        return input_enc, output_dec, target_dec, features_list
+
+    def train(self,
+            model,
+            train_steps=1,
+            eval_steps=10,
+            save_steps=50,
+            early_stopping_count=10,
+            model_name='ts_model_v1.0'):
+
+        # make directories for graph results (both train and test one)
+        train_out_path = os.path.join(self.data_out_path, '{}'.format(self.base_idx))
+        os.makedirs(train_out_path, exist_ok=True)
+
+        train_input_enc, train_output_dec, train_target_dec, features_list = self._dataset('train')
+        eval_input_enc, eval_output_dec, eval_target_dec, _ = self._dataset('eval')
+
+        train_dataset = dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_size=self.train_batch_size)
+        train_dataset_plot = dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_size=1)
+        eval_dataset = dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_size=1)
+        for i, (features, labels) in enumerate(train_dataset.take(train_steps)):
+            print_loss = False
+            if i % save_steps == 0:
+                model.save_model(model_name)
+                predict_plot(model, train_dataset_plot, features_list, 250,
+                             save_dir='{}/train_{}.jpg'.format(train_out_path, i))
+                predict_plot(model, eval_dataset, features_list, 250,
+                             save_dir='{}/eval_{}.jpg'.format(train_out_path, i))
+
+            if i % eval_steps == 0:
+                print_loss = True
+                model.evaluate(eval_dataset, steps=20)
+                print("[t: {} / i: {}] min_eval_loss:{} / count:{}".format(self.base_idx, i, model.eval_loss, model.eval_count))
+                if model.eval_count >= early_stopping_count:
+                    print("[t: {} / i: {}] train finished.".format(self.base_idx, i))
+                    model.weight_to_optim()
+                    break
+
+            model.train(features, labels, print_loss=print_loss)
+
+    def test(self, model):
+        test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
+        os.makedirs(test_out_path, exist_ok=True)
+        dg = self.data_generator
+        bbtickers = list(dg.df_pivoted.columns[~dg.df_pivoted.ix[self.base_idx].isna()])
+        dataset_list = list()
+        for bbticker in bbtickers:
+            _dataset = self._dataset('test', bbtickers=[bbticker])
+            if _dataset is False:
+                continue
+            else:
+                input_enc, output_dec, target_dec, features_list = _dataset
+            test_dataset = dataset_process(input_enc, output_dec, target_dec, batch_size=1, mode='test')
+            predict_plot(model, test_dataset, features_list,
+                         size=self.retrain_days // self.sampling_days,
+                         save_dir='{}/{}.jpg'.format(test_out_path, bbticker))
+
+            dataset_list.append(test_dataset)
+        return dataset_list, features_list
+
+    def test_bbticker(self, model, bbticker):
+        input_enc, output_dec, target_dec, features_list = self._dataset('test', bbtickers=[bbticker])
+        test_dataset = dataset_process(input_enc, output_dec, target_dec, batch_size=1, mode='test')
+        predict_plot(model, test_dataset, features_list, size=self.retrain_days // self.sampling_days)
+        return input_enc, output_dec, target_dec, features_list
+
+    def next(self):
+        self.base_idx += self.retrain_days
+        self.train_begin_idx += self.retrain_days
+        self.eval_begin_idx += self.retrain_days
+        self.test_begin_idx = self.base_idx - self.m_days
+        self.test_end_idx = self.base_idx + self.retrain_days
 
     def get_date(self):
         return self.date_[self.base_d]
@@ -144,7 +159,7 @@ class DataScheduler:
 
     @property
     def done(self):
-        if self.end_d == self.dg.max_length:
+        if self.test_end_idx > self.data_generator.max_length:
             return True
         else:
             return False
@@ -162,28 +177,61 @@ class DataGenerator_v2:
         df_selected = self.df_pivoted[(self.df_pivoted.index > start_d) & (self.df_pivoted.index <= end_d)]
         return df_selected.ix[:, np.sum(df_selected.isna(), axis=0) == 0]
 
-    def sample_inputdata(self, base_d, sampling_days=5, m_days=60):
-        df_selected = self.df_pivoted[self.df_pivoted.index <= base_d][-(m_days+1):]
+    def sample_inputdata(self, base_idx, bbtickers=None, sampling_days=5, m_days=60, k_days=20,
+                         max_seq_len_in=60,
+                         max_seq_len_out=20):
+        # df_selected = self.df_pivoted[self.df_pivoted.index <= base_d][-(m_days+1):]
+        print("base_idx:{} / date: {}".format(base_idx, self.date_[base_idx]))
+        df_selected = self.df_pivoted[(self.df_pivoted.index <= self.date_[base_idx+k_days])
+                                      & (self.df_pivoted.index >= self.date_[base_idx-m_days])]
         dataset_df = df_selected.ix[:, np.sum(df_selected.isna(), axis=0) == 0]
+
+        if bbtickers is not None:
+            assert type(bbtickers) == list
+            bbtickers_exist = list()
+            for bbticker in bbtickers:
+                if bbticker in dataset_df.columns:
+                    bbtickers_exist.append(bbticker)
+            if len(bbtickers_exist) >= 1:
+                dataset_df = dataset_df[bbtickers_exist]
+            else:
+                return False
 
         prc = np.array(dataset_df, dtype=np.float32)
 
         fc = FeatureCalculator(prc, sampling_days)
         features = fc.generate_features()
 
+        assert prc.shape[0] == m_days + k_days + 1
+
+        M = m_days // sampling_days
+        K = k_days // sampling_days
+
         # (timeseries, assets, features)
         features_list_linear, columns_list_linear = dict_to_list(features, features.keys() - ['log_cum_y'])
         features_list_normalize, columns_list_normal = dict_to_list(features, ['log_cum_y'])
-        features_list_normalize = normalize(features_list_normalize)
-
-        assert features_list_linear.shape[0] == m_days / sampling_days
+        features_list_normalize = normalize(features_list_normalize,  M=M)
 
         features_normalized = np.concatenate([features_list_linear, features_list_normalize], axis=-1)
         features_list = columns_list_linear + columns_list_normal
 
-        question = np.transpose(features_normalized[:], [1, 0, 2])
-        answer =  np.transpose(np.concatenate([features_normalized[-1:],
-                                               np.zeros_like(features_normalized[-1:])]), [1, 0, 2])
+        assert features_normalized.shape[0] == M + K
+
+        _, n_asset, n_feature = features_normalized.shape
+        question = np.zeros([n_asset, max_seq_len_in, n_feature], dtype=np.float32)
+        answer = np.zeros([n_asset, max_seq_len_out+1, n_feature], dtype=np.float32)
+
+        question[:] = np.transpose(features_normalized[:M], [1, 0, 2])
+
+        answer_data = features_normalized[-(K + 1):]
+        answer[:, :len(answer_data), :] = np.transpose(answer_data, [1, 0, 2])
+
+        input_enc, output_dec, target_dec = question[:], answer[:, :-1, :], answer[:, 1:, :]
+        return input_enc, output_dec, target_dec, features_list
+
+    @property
+    def max_length(self):
+        return len(self.date_)
 
 
 class DataGenerator:
@@ -221,7 +269,7 @@ class DataGenerator:
 
         # len(features['log_y'])
         for i, t in enumerate(range(-M + 1, K + 1)):
-            sub_features_linear = features_list_linear[]
+            sub_features_linear = features_list_linear[i]
             sub_features_normalize = normalize(features_list_normalize[(t - M): (t + K)])
 
             sub_features = np.concatenate([sub_features_linear, sub_features_normalize], axis=-1)
@@ -378,7 +426,8 @@ def dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_s
     # 3개를 각각 한문장으로 나눈다.
     dataset = tf.data.Dataset.from_tensor_slices((train_input_enc, train_output_dec, train_target_dec))
     # 전체 데이터를 섞는다.
-    dataset = dataset.shuffle(buffer_size=len(train_input_enc))
+    if mode == 'train':
+        dataset = dataset.shuffle(buffer_size=len(train_input_enc))
     # 배치 인자 값이 없다면  에러를 발생 시킨다.
     assert batch_size is not None, "train batchSize must not be None"
     # from_tensor_slices를 통해 나눈것을
@@ -389,9 +438,7 @@ def dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_s
     dataset = dataset.map(rearrange)
     # repeat()함수에 원하는 에포크 수를 넣을수 있으면
     # 아무 인자도 없다면 무한으로 이터레이터 된다.
-    if mode == 'train':
-        dataset = dataset.repeat()
-    elif mode == 'test':
+    if batch_size == 1:
         dataset = dataset.repeat(1)
     else:
         dataset = dataset.repeat()
@@ -400,6 +447,7 @@ def dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_s
     # 이터레이터를 통해 다음 항목의 텐서
     # 개체를 넘겨준다.
     return dataset
+
 
 
 
