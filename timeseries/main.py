@@ -5,6 +5,7 @@ from timeseries.model import TSModel
 from timeseries.data_process import dataset_process, load_data, DataGenerator, DataScheduler
 
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import os
@@ -20,6 +21,7 @@ def main_all_asset_dataprocess_modified():
 
     # get data for all assets and dates
     ds = DataScheduler(configs)
+    ds.test_end_idx = ds.base_idx + 1000
 
     ii = 0
     while not ds.done:
@@ -34,9 +36,21 @@ def main_all_asset_dataprocess_modified():
 
         ds.next()
 
-        # input_enc, output_dec, target_dec, features_list = ds.test_bbticker(model, 'aex index')
+        # ds.set_idx(4005)
+        # ds.train_tickers(model,
+        #                  ['aex index', 'spx index', 'kospi index', 'krw krwt curncy'],
+        #                train_steps=configs.train_steps,
+        #                eval_steps=10,
+        #                save_steps=50,
+        #                early_stopping_count=2,
+        #                model_name='ts_model_test')
+
+        # input_enc, output_dec, target_dec, features_list = ds.test_bbticker(model, 'kospi index')
         # print(input_enc[0, 0, :], '\n', output_dec[0, 0, :], '\n', target_dec[0, 0, :])
         # print(features_list)
+        test_dataset = dataset_process(input_enc, output_dec, target_dec, batch_size=1) # , mode='test')
+        columns_list = features_list
+        predict_plot(model, test_dataset, features_list,  size=100)
 
         ii += 1
         if ii > 10000:

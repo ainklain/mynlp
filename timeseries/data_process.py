@@ -36,6 +36,14 @@ class DataScheduler:
         self.test_begin_idx = self.base_idx - self.m_days
         self.test_end_idx = self.base_idx + self.retrain_days
 
+    def set_idx(self, base_idx):
+        self.base_idx = base_idx
+
+        self.train_begin_idx = np.max([0, base_idx - self.train_set_length])
+        self.eval_begin_idx = int(self.train_set_length * self.train_rate) + self.train_begin_idx
+        self.test_begin_idx = self.base_idx - self.m_days
+        self.test_end_idx = self.base_idx + self.retrain_days
+
     def _dataset(self, mode='train', bbtickers=None):
         input_enc, output_dec, target_dec = [], [], []
         features_list = []
@@ -53,7 +61,8 @@ class DataScheduler:
             start_idx = self.test_begin_idx + self.m_days
             end_idx = self.test_end_idx
             step_size = self.sampling_days
-            k_days = self.sampling_days
+            # k_days = self.sampling_days
+            k_days = self.k_days
         else:
             raise NotImplementedError
 
@@ -137,10 +146,52 @@ class DataScheduler:
             dataset_list.append(test_dataset)
         return dataset_list, features_list
 
+    def train_tickers(self,
+                      model,
+                      bbtickers,
+                      train_steps=1,
+                      eval_steps=10,
+                      save_steps=50,
+                      early_stopping_count=10,
+                      model_name='ts_model_v1.0'):
+        # make directories for graph results (both train and test one)
+        train_out_path = os.path.join(self.data_out_path, '{}'.format(self.base_idx))
+        os.makedirs(train_out_path, exist_ok=True)
+
+        train_input_enc, train_output_dec, train_target_dec, features_list = self._dataset('train', bbtickers=bbtickers)
+        eval_input_enc, eval_output_dec, eval_target_dec, _ = self._dataset('eval', bbtickers=bbtickers)
+
+        train_dataset = dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_size=self.train_batch_size)
+        train_dataset_plot = dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_size=1)
+        eval_dataset = dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_size=1)
+        for i, (features, labels) in enumerate(train_dataset.take(train_steps)):
+            print_loss = False
+            if i % save_steps == 0:
+                model.save_model(model_name)
+                predict_plot(model, train_dataset_plot, features_list, 250,
+                             save_dir='{}/train_{}.jpg'.format(train_out_path, i))
+                predict_plot(model, eval_dataset, features_list, 250,
+                             save_dir='{}/eval_{}.jpg'.format(train_out_path, i))
+
+            if i % eval_steps == 0:
+                print_loss = True
+                model.evaluate(eval_dataset, steps=20)
+                print("[t: {} / i: {}] min_eval_loss:{} / count:{}".format(self.base_idx, i, model.eval_loss, model.eval_count))
+                if model.eval_count >= early_stopping_count:
+                    print("[t: {} / i: {}] train finished.".format(self.base_idx, i))
+                    model.weight_to_optim()
+                    break
+
+            model.train(features, labels, print_loss=print_loss)
+
     def test_bbticker(self, model, bbticker):
+        test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
+        os.makedirs(test_out_path, exist_ok=True)
         input_enc, output_dec, target_dec, features_list = self._dataset('test', bbtickers=[bbticker])
         test_dataset = dataset_process(input_enc, output_dec, target_dec, batch_size=1, mode='test')
-        predict_plot(model, test_dataset, features_list, size=self.retrain_days // self.sampling_days)
+        predict_plot(model, test_dataset, features_list, size=self.retrain_days // self.sampling_days,
+                     save_dir='{}/{}.jpg'.format(test_out_path, bbticker))
+        print('{}/{}.jpg'.format(test_out_path, bbticker))
         return input_enc, output_dec, target_dec, features_list
 
     def next(self):

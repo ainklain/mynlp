@@ -16,7 +16,7 @@ class Config:
         self.train_steps = 200000
         self.dropout = 0.5
         self.embedding_size = 12
-        self.learning_rate = 1e-3
+        self.learning_rate = 1e-5
         self.shuffle_seek = 1000
         # self.model_hidden_size = 128
         self.model_hidden_size = self.embedding_size
