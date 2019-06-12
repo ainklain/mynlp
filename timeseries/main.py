@@ -15,9 +15,9 @@ def main_all_asset_dataprocess_modified():
     configs = Config()
 
     # initiate and load model
-    model = TSModel(configs)
-    if os.path.exists(configs.f_name):
-        model.load_model(configs.f_name)
+    # model = TSModel(configs)
+    # if os.path.exists(configs.f_name):
+    #     model.load_model(configs.f_name)
 
     # get data for all assets and dates
     ds = DataScheduler(configs)
@@ -25,10 +25,11 @@ def main_all_asset_dataprocess_modified():
 
     ii = 0
     while not ds.done:
+        model = TSModel(configs)
         ds.train(model,
                train_steps=configs.train_steps,
                eval_steps=10,
-               save_steps=50,
+               save_steps=200,
                early_stopping_count=20,
                model_name=configs.f_name)
 
