@@ -75,7 +75,7 @@ def predict_plot(model, dataset, columns_list, size=250, save_dir='out.jpg'):
                          'pred_pos': np.cumsum(np.log(1. + pred_pos)),
                          'pred_y': np.cumsum(np.log(1. + pred_y)),
                          'pred_avg': np.cumsum(np.log(1. + pred_avg)),
-                         'pred_chart': np.cumsum(np.log(1. + pred_chart)),
+                         # 'pred_chart': np.cumsum(np.log(1. + pred_chart)),
     })
 
     # plt.plot(data['true_y'], label='real')

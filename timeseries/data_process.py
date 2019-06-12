@@ -44,6 +44,32 @@ class DataScheduler:
         self.test_begin_idx = self.base_idx - self.m_days
         self.test_end_idx = self.base_idx + self.retrain_days
 
+    def _dataset_custom(self, start_idx, end_idx, step_size, k_days=None, bbtickers=None):
+        if k_days is None:
+            k_days = self.k_days
+        input_enc, output_dec, target_dec = [], [], []
+        print(bbtickers)
+        for i, d in enumerate(range(start_idx, end_idx, step_size)):
+            _sampled_data = self.data_generator.sample_inputdata(d,
+                                                     bbtickers=bbtickers,
+                                                     sampling_days=self.sampling_days,
+                                                     m_days=self.m_days,
+                                                     k_days=k_days,
+                                                     max_seq_len_in=self.max_seq_len_in,
+                                                     max_seq_len_out=self.max_seq_len_out)
+            if _sampled_data is False:
+                return False
+            else:
+                tmp_ie, tmp_od, tmp_td, features_list = _sampled_data
+            input_enc.append(tmp_ie)
+            output_dec.append(tmp_od)
+            target_dec.append(tmp_td)
+        input_enc = np.concatenate(input_enc, axis=0)
+        output_dec = np.concatenate(output_dec, axis=0)
+        target_dec = np.concatenate(target_dec, axis=0)
+
+        return input_enc, output_dec, target_dec, features_list
+
     def _dataset(self, mode='train', bbtickers=None):
         input_enc, output_dec, target_dec = [], [], []
         features_list = []
@@ -122,6 +148,7 @@ class DataScheduler:
                 if model.eval_count >= early_stopping_count:
                     print("[t: {} / i: {}] train finished.".format(self.base_idx, i))
                     model.weight_to_optim()
+                    model.save_model(model_name)
                     break
 
             model.train(features, labels, print_loss=print_loss)
