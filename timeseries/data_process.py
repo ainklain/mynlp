@@ -7,6 +7,18 @@ import os
 from sklearn.model_selection import train_test_split
 
 
+
+def data_split():
+    data_path = './data/kr_data.csv'
+    data_df = pd.read_csv(data_path)
+    data_pivoted = pd.pivot(data_df, index='date_', columns='infocode')
+
+    for col in data_pivoted.columns.levels[0]:
+        df_ = data_pivoted[[col]]
+        df_.columns = df_.columns.droplevel(0)
+        df_.to_csv('./data/kr_{}.csv'.format(col))
+
+
 class DataScheduler:
     def __init__(self, configs):
         # make a directory for outputs
@@ -246,7 +258,7 @@ class DataScheduler:
 class DataGenerator_v2:
     def __init__(self, data_path):
         # data_path ='./timeseries/asset_data.csv'
-        data_df = pd.read_csv(data_path, index_col=0)
+        data_df = pd.read_csv(data_path)
         self.df_pivoted = data_df.pivot(index='eval_d', columns='bbticker')
         self.df_pivoted.columns = self.df_pivoted.columns.droplevel(0)
         self.date_ = list(self.df_pivoted.index)
