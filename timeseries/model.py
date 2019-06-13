@@ -77,7 +77,7 @@ class MultiHeadAttention(Model):
         # plt.imshow(self.attention_map[0], cmap='hot', interpolation='nearest')
         sns.heatmap(self.attention_map[0], cmap='Greens')
         if save is not None:
-            fig.savefig('./out/{}.jpg'.format(ep))
+            fig.savefig('./out/{}.png'.format(ep))
             plt.close(fig)
         else:
             plt.show()
@@ -169,8 +169,8 @@ class TSModel:
         self.accuracy = tf.metrics.Accuracy()
 
         # decayed_learning_rate = learning_rate * decay_rate ^ (global_step / decay_steps)
-        # lr = tf.optimizers.schedules.PolynomialDecay(0.01, 1000, 1e-5)
-        lr = tf.optimizers.schedules.PiecewiseConstantDecay([100, 200, 300], [1e-2, 1e-3, 1e-4, 1e-5])
+        lr = tf.optimizers.schedules.PolynomialDecay(0.01, 1000, 1e-5)
+        # lr = tf.optimizers.schedules.PiecewiseConstantDecay([50, 150, 300], [1e-2, 1e-3, 1e-4, 1e-5])
         self.optimizer = tf.optimizers.Adam(lr)
 
         self._initialize(configs)

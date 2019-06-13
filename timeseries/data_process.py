@@ -60,7 +60,15 @@ class DataScheduler:
         if k_days is None:
             k_days = self.k_days
         input_enc, output_dec, target_dec = [], [], []
-        print(bbtickers)
+
+        if bbtickers is not None:
+            print(bbtickers)
+
+        print("start idx:{} ({}) / end idx: {} ({})".format(
+            start_idx,
+            self.data_generator.date_[start_idx],
+            end_idx,
+            self.data_generator.date_[end_idx]))
         for i, d in enumerate(range(start_idx, end_idx, step_size)):
             _sampled_data = self.data_generator.sample_inputdata(d,
                                                      bbtickers=bbtickers,
@@ -104,7 +112,14 @@ class DataScheduler:
         else:
             raise NotImplementedError
 
-        print(bbtickers)
+        if bbtickers is not None:
+            print(bbtickers)
+
+        print("start idx:{} ({}) / end idx: {} ({})".format(
+            start_idx,
+            self.data_generator.date_[start_idx],
+            end_idx,
+            self.data_generator.date_[end_idx]))
         for i, d in enumerate(range(start_idx, end_idx, step_size)):
             _sampled_data = self.data_generator.sample_inputdata(d,
                                                      bbtickers=bbtickers,
@@ -149,9 +164,9 @@ class DataScheduler:
             if i % save_steps == 0:
                 model.save_model(model_name)
                 predict_plot(model, train_dataset_plot, features_list, 250,
-                             save_dir='{}/train_{}.jpg'.format(train_out_path, i))
+                             save_dir='{}/train_{}.png'.format(train_out_path, i))
                 predict_plot(model, eval_dataset, features_list, 250,
-                             save_dir='{}/eval_{}.jpg'.format(train_out_path, i))
+                             save_dir='{}/eval_{}.png'.format(train_out_path, i))
 
             if i % eval_steps == 0:
                 print_loss = True
@@ -180,7 +195,7 @@ class DataScheduler:
             test_dataset = dataset_process(input_enc, output_dec, target_dec, batch_size=1, mode='test')
             predict_plot(model, test_dataset, features_list,
                          size=self.retrain_days // self.sampling_days,
-                         save_dir='{}/{}.jpg'.format(test_out_path, bbticker))
+                         save_dir='{}/{}.png'.format(test_out_path, bbticker))
 
             dataset_list.append(test_dataset)
         return dataset_list, features_list
@@ -208,9 +223,9 @@ class DataScheduler:
             if i % save_steps == 0:
                 model.save_model(model_name)
                 predict_plot(model, train_dataset_plot, features_list, 250,
-                             save_dir='{}/train_{}.jpg'.format(train_out_path, i))
+                             save_dir='{}/train_{}.png'.format(train_out_path, i))
                 predict_plot(model, eval_dataset, features_list, 250,
-                             save_dir='{}/eval_{}.jpg'.format(train_out_path, i))
+                             save_dir='{}/eval_{}.png'.format(train_out_path, i))
 
             if i % eval_steps == 0:
                 print_loss = True
@@ -229,8 +244,8 @@ class DataScheduler:
         input_enc, output_dec, target_dec, features_list = self._dataset('test', bbtickers=[bbticker])
         test_dataset = dataset_process(input_enc, output_dec, target_dec, batch_size=1, mode='test')
         predict_plot(model, test_dataset, features_list, size=self.retrain_days // self.sampling_days,
-                     save_dir='{}/{}.jpg'.format(test_out_path, bbticker))
-        print('{}/{}.jpg'.format(test_out_path, bbticker))
+                     save_dir='{}/{}.png'.format(test_out_path, bbticker))
+        print('{}/{}.png'.format(test_out_path, bbticker))
         return input_enc, output_dec, target_dec, features_list
 
     def next(self):
@@ -271,7 +286,7 @@ class DataGenerator_v2:
                          max_seq_len_in=60,
                          max_seq_len_out=20):
         # df_selected = self.df_pivoted[self.df_pivoted.index <= base_d][-(m_days+1):]
-        print("base_idx:{} / date: {}".format(base_idx, self.date_[base_idx]))
+        # print("base_idx:{} / date: {}".format(base_idx, self.date_[base_idx]))
         df_selected = self.df_pivoted[(self.df_pivoted.index <= self.date_[base_idx+k_days])
                                       & (self.df_pivoted.index >= self.date_[base_idx-m_days])]
         dataset_df = df_selected.ix[:, np.sum(df_selected.isna(), axis=0) == 0]

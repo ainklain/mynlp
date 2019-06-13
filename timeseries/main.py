@@ -108,8 +108,8 @@ def main_all_asset():
                 # model.encoder.show(i, save=True)
                 model.save_model(configs.f_name)
 
-                predict_plot(model, dataset_insample_test, features_list, 250, save_dir='out/{}/train_{}.jpg'.format(t, i))
-                predict_plot(model, dataset_eval, features_list, 250, save_dir='out/{}/eval_{}.jpg'.format(t, i))
+                predict_plot(model, dataset_insample_test, features_list, 250, save_dir='out/{}/train_{}.png'.format(t, i))
+                predict_plot(model, dataset_eval, features_list, 250, save_dir='out/{}/eval_{}.png'.format(t, i))
 
             if i % 10 == 0:
                 print_loss = True
@@ -131,7 +131,7 @@ def main_all_asset():
             test_input, test_label, _ = dg.data_to_factor(test_dataset_arr[:, j:j+1], token_length=5, m_days=60, k_days=20, seed=-1)
             dataset_test = dataset_process(test_input[:], test_label[:, :-1, :], test_label[:, 1:, :], 1, mode='test')
 
-            predict_plot(model, dataset_test, features_list, size=len(test_input), save_dir='./out/{}/test/{}.jpg'.format(t, bbticker[j]))
+            predict_plot(model, dataset_test, features_list, size=len(test_input), save_dir='./out/{}/test/{}.png'.format(t, bbticker[j]))
 
 
 def main_single_asset():
@@ -175,8 +175,8 @@ def main_single_asset():
 
 
 
-            predict_plot(model, dataset_insample_test, columns_list, len(train_input_enc), save_dir='out/{}/train_{}.jpg'.format(name, i))
-            predict_plot(model, dataset_eval, columns_list, len(eval_input_enc), save_dir='out/{}/eval_{}.jpg'.format(name, i))
+            predict_plot(model, dataset_insample_test, columns_list, len(train_input_enc), save_dir='out/{}/train_{}.png'.format(name, i))
+            predict_plot(model, dataset_eval, columns_list, len(eval_input_enc), save_dir='out/{}/eval_{}.png'.format(name, i))
 
 
 

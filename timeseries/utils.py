@@ -27,7 +27,7 @@ def dict_to_list(dict, key_list=None):
     return np.stack(arr, axis=-1), ordered_key_list
 
 
-def predict_plot(model, dataset, columns_list, size=250, save_dir='out.jpg'):
+def predict_plot(model, dataset, columns_list, size=250, save_dir='out.png'):
 
     cost_rate = 0.000
     idx_y = columns_list.index('log_y')
