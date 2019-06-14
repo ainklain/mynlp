@@ -99,6 +99,84 @@ def predict_plot(model, dataset, columns_list, size=250, save_dir='out.png'):
     # plt.plot(pred_chart, label='pred')
     # plt.legend()
 
+
+
+def predict_plot_with_actor(model, actor, dataset, columns_list, size=250, save_dir='out.png'):
+
+    cost_rate = 0.000
+    idx_y = columns_list.index('log_y')
+    idx_pos = columns_list.index('positive')
+    idx_ma20 = columns_list.index('y_20d')
+
+    true_y = np.zeros(size)
+    pred_both = np.zeros_like(true_y)
+    pred_pos = np.zeros_like(true_y)
+    pred_y = np.zeros_like(true_y)
+    pred_avg = np.zeros_like(true_y)
+    pred_actor = np.zeros_like(true_y)
+
+    prev_w_both = 0
+    prev_w_pos = 0
+    prev_w_y = 0
+    for j, (features, labels) in enumerate(dataset.take(size)):
+        predictions = model.predict(features)
+        actions, v = actor.evaluate_state(predictions, stochastic=False)
+        a_value = actions.numpy()[0, 0]
+        assert (a_value >= 0) and (a_value <= 1)
+        true_y[j] = labels[0, 0, idx_y]
+        pred_actor[j] = labels[0, 0, idx_y] * a_value
+
+        if predictions[0, 0, idx_y] > 0:
+            pred_y[j] = labels[0, 0, idx_y] - cost_rate * (1. - prev_w_y)
+            prev_w_y = 1
+        else:
+            pred_y[j] = - cost_rate * prev_w_y
+            prev_w_y = 0
+        if predictions[0, 0, idx_pos] > 0:
+            pred_pos[j] = labels[0, 0, idx_y] - cost_rate * (1. - prev_w_pos)
+            prev_w_pos = 1
+        else:
+            pred_pos[j] = - cost_rate * prev_w_pos
+            prev_w_pos = 0
+        if (predictions[0, 0, idx_y] > 0) and (predictions[0, 0, idx_pos] > 0):
+            pred_both[j] = labels[0, 0, idx_y] - cost_rate * (1. - prev_w_both)
+            prev_w_both = 1
+        else:
+            pred_both[j] = - cost_rate * prev_w_both
+            prev_w_both = 0
+
+        pred_avg[j] = (pred_y[j] + pred_pos[j]) / 2.
+
+    data = pd.DataFrame({'true_y': np.cumsum(np.log(1. + true_y)),
+                         'pred_both': np.cumsum(np.log(1. + pred_both)),
+                         'pred_pos': np.cumsum(np.log(1. + pred_pos)),
+                         'pred_y': np.cumsum(np.log(1. + pred_y)),
+                         'pred_avg': np.cumsum(np.log(1. + pred_avg)),
+                         'pred_actor': np.cumsum(np.log(1. + pred_actor)),
+    })
+
+    # plt.plot(data['true_y'], label='real')
+    # plt.plot(data['pred_chart'], label='pred')
+    # plt.plot(data['pred_y'], label='pred_y')
+    # plt.legend()
+
+    fig = plt.figure()
+    plt.plot(data)
+    plt.legend(data.columns)
+    fig.savefig(save_dir)
+    plt.close(fig)
+
+    #
+    # for j, (features, labels) in enumerate(dataset.take(size)):
+    #     predictions = model.predict(features)
+    #     true_y[j] = labels[0, 0, columns_list.index('log_cum_y')]
+    #     pred_chart[j] = predictions[0, 0, columns_list.index('log_cum_y')]
+    #
+    # plt.plot(true_y, label='real')
+    # plt.plot(pred_chart, label='pred')
+    # plt.legend()
+
+
 class FeatureCalculator:
     def __init__(self, prc, sampling_freq):
         self.sampling_freq = sampling_freq

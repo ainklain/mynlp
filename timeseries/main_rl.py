@@ -102,7 +102,7 @@ def main():
             else:
                 new_data = False
 
-            s = env.reset(length=201, n_tasks=20, new_data=new_data)
+            s = env.reset(length=201, n_tasks=1, new_data=new_data)
             while True:
                 a, v = ppo.evaluate_state(s, stochastic=True)
 
@@ -149,6 +149,34 @@ def main():
                     break
             e_t = time.time()
             print('episode time: {}'.format(e_t - s_t))
+
+
+            if episode % 50 == 0:
+                s = env.reset(length=201, n_tasks=1, new_data=False)
+                while True:
+                    a, v = ppo.evaluate_state(s, stochastic=False)
+                    a = tf.clip_by_value(a, env.action_space.low, env.action_space.high)
+                    s, r, done, _ = env.step(np.squeeze(a))
+
+                    if done:
+                        print("global step: {}".format(ppo.global_step))
+                        env.render(save_filename='./out/rltest/env_{}_{}.png'.format(ppo.global_step, episode))
+                        break
+
+            test_i = 100
+            s = env.reset_test(start_idx=[8000])
+            while True:
+                a, v = ppo.evaluate_state(s, stochastic=False)
+                a = tf.clip_by_value(a, env.action_space.low, env.action_space.high)
+                s, r, done, _ = env.step(np.squeeze(a))
+
+                if done:
+                    print("global step: {}".format(ppo.global_step))
+                    env.render(save_filename='./out/rltest/new_env_{}.png'.format(test_i))
+                    break
+
+
+
         env.close()
 
 

@@ -17,7 +17,7 @@ from tensorflow.keras.layers import Dense, Conv2D, Flatten
 from tensorflow.keras.regularizers import l2
 
 
-LR = 1e-4
+LR = 1e-3
 L2_REG = 0.001
 EPOCHS = 10
 MINIBATCH = 32
@@ -234,9 +234,9 @@ class MyEnv(gym.Env):
         self.nav_history[self.i_step] = self.nav_history[prev_step] * (1. + r_instant)
         self.cum_y_history[self.i_step] = self.cum_y_history[prev_step] * np.exp(log_y)
 
-        r_relative = 0
-        if r_instant > np.exp(log_y) - 1:
-            r_relative = r_instant - (np.exp(log_y)-1.)
+        # r_relative = 0
+        # if r_instant > np.exp(log_y) - 1:
+        r_relative = r_instant - (np.exp(log_y)-1.)
 
         r_delayed = 0.
         if self.i_step > 0 and self.i_step * self.step_size % 250 == 0:
@@ -247,16 +247,22 @@ class MyEnv(gym.Env):
             elif self.nav_history[self.i_step] < np.max(self.nav_history[base_idx:(self.i_step+1)]) * 0.9:
                 r_delayed = -0.5
 
-            cum_nav = self.nav_history[self.i_step] / self.nav_history[base_idx] - 1
-            cum_y = self.cum_y_history[self.i_step] / self.cum_y_history[base_idx] - 1
-            if cum_nav >= cum_y + 0.05:
-                r_relative += 0.1
-            elif cum_nav < cum_y - 0.1:
-                r_relative -= 0.1
+            # cum_nav = self.nav_history[self.i_step] / self.nav_history[base_idx] - 1
+            # cum_y = self.cum_y_history[self.i_step] / self.cum_y_history[base_idx] - 1
+            # if cum_nav >= cum_y + 0.05:
+            #     r_relative += 0.1
+            # elif cum_nav < cum_y - 0.1:
+            #     r_relative -= 0.1
+
+        r_delayed = 0       # 조건 초기화
 
         if self.i_step == len(self.env_data) - 1:
             done = True
             obs_ = None
+            if self.nav_history[self.i_step] > (1.07) ** (self.i_step / (250 // self.step_size)):
+                r_delayed = 0.5
+            else:
+                r_delayed = -0.000
         else:
             obs_ = self.env_data[self.i_step + 1]['obs'].numpy()
             if self.nav_history[self.i_step] < np.max(self.nav_history[:(self.i_step+1)]) * 0.8:
@@ -329,7 +335,7 @@ class MyEnv(gym.Env):
         # self.ax4.yaxis.set_ticks_position=('right')
         # self.ax4_1.yaxis.set_ticks_position = ('left')
 
-        self.ax4.plot(x_, self.r_history[:last_step, 0], label='total', color='k')
+        self.ax4.plot(x_, np.cumsum(self.r_history[:last_step, 0]), label='total', color='k')
         self.ax4.plot(x_, self.r_history[:last_step, 1], label='instant', color='b')
         self.ax4.plot(x_, self.r_history[:last_step, 2], label='delayed', color='g')
         self.ax4.plot(x_, self.r_history[:last_step, 3], label='relative', color='r')
@@ -365,6 +371,29 @@ class MyEnv(gym.Env):
             #     ew_mean_return, ew_std_return, ew_cum_return))
 
 
+    def reset_test(self, start_idx=8000, length=2000, step_size=5, n_tasks=1, new_data=True, bbtickers=['kospi index']):
+        self.render_call = 0
+
+        self.i_step = 0
+        self.step_size = step_size
+        self.prev_position = 0
+
+        self.a_history = np.zeros(length)
+        self.r_history = np.zeros([length, 4])
+        self.nav_history = np.ones(length)
+        self.cost_history = np.zeros(length)
+        self.cum_y_history = np.ones(length)
+
+        self.n_tasks = n_tasks
+        task_i = np.random.random_integers(0, n_tasks - 1)
+        if new_data is True:
+            self.datasets, self.features = self.get_testdatasets(start_idx, length, step_size, n_tasks, bbtickers=bbtickers)
+            self.datasets_to_env(self.datasets, self.features, length)
+
+        self.env_data = self.env_data_list[task_i]
+        obs = self.env_data[self.i_step]['obs'].numpy()
+        return obs
+
     def datasets_to_env(self, datasets, features, length):
         s_t = time()
         self.env_data_list = list()
@@ -381,7 +410,7 @@ class MyEnv(gym.Env):
         print('datasets_to_env time: {}'.format(e_t - s_t))
 
 
-    def dataset_to_env(self, dataset, features, length):
+    def dataset_to_env(self, dataset, features, length=-1):
         s_t = time()
         self.env_data = list()
         idx_y = features.index('log_y')
@@ -413,5 +442,27 @@ class MyEnv(gym.Env):
         e_t = time()
         print('get_datasets time: {}'.format(e_t - s_t))
         return datasets, features_list
+
+    def get_testdatasets(self, start_idx, length, step_size, n_tasks=1, bbtickers=None):
+        s_t = time()
+        ds = self.data_scheduler
+
+        if start_idx is None:
+            s_idx = ds.train_begin_idx + ds.m_days
+            e_idx = ds.eval_begin_idx - length
+            start_idx = np.random.random_integers(s_idx, e_idx, n_tasks)
+
+        if step_size is None:
+            step_size = self.data_scheduler.sampling_days
+
+        datasets = list()
+        for idx in start_idx:
+            input_enc, output_dec, target_dec, features_list = self.data_scheduler._dataset_custom(start_idx=idx, end_idx=idx + length, step_size=step_size, bbtickers=bbtickers)
+            datasets.append(dataset_process(input_enc, output_dec, target_dec, batch_size=1, mode='test'))
+
+        e_t = time()
+        print('get_testdatasets time: {}'.format(e_t - s_t))
+        return datasets, features_list
+
 
 

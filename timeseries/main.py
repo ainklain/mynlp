@@ -4,11 +4,18 @@ from timeseries.config import Config
 from timeseries.model import TSModel
 from timeseries.data_process import dataset_process, load_data, DataGenerator, DataScheduler
 
+from timeseries.rl import MyEnv, PPO
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import os
+
+
+EP_MAX = 1000
+BATCH = 2048
+GAMMA = 0.99
+LAMBDA = 0.95
 
 
 def main_all_asset_dataprocess_modified():
@@ -26,6 +33,10 @@ def main_all_asset_dataprocess_modified():
     ii = 0
     while not ds.done:
         model = TSModel(configs)
+        if os.path.exists(configs.f_name):
+            model.load_model(configs.f_name)
+
+        ds.set_idx(8000)
         ds.train(model,
                train_steps=configs.train_steps,
                eval_steps=10,
@@ -33,7 +44,15 @@ def main_all_asset_dataprocess_modified():
                early_stopping_count=20,
                model_name=configs.f_name)
 
-        test_dataset_list, features_list = ds.test(model)
+        env = MyEnv(model, data_scheduler=ds, configs=configs, trading_costs=0.001)
+
+        ppo = PPO(env)
+        f_name = './{}.pkl'.format('actor_v1.1')
+        if os.path.exists(f_name):
+            ppo.load_model(f_name)
+
+
+        test_dataset_list, features_list = ds.test(model, ppo)
 
         ds.next()
 

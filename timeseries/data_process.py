@@ -180,7 +180,7 @@ class DataScheduler:
 
             model.train(features, labels, print_loss=print_loss)
 
-    def test(self, model):
+    def test(self, model, actor=None):
         test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
         os.makedirs(test_out_path, exist_ok=True)
         dg = self.data_generator
@@ -193,9 +193,14 @@ class DataScheduler:
             else:
                 input_enc, output_dec, target_dec, features_list = _dataset
             test_dataset = dataset_process(input_enc, output_dec, target_dec, batch_size=1, mode='test')
-            predict_plot(model, test_dataset, features_list,
-                         size=self.retrain_days // self.sampling_days,
-                         save_dir='{}/{}.png'.format(test_out_path, bbticker))
+            if actor is not None:
+                predict_plot_with_actor(model, actor, test_dataset, features_list,
+                             size=self.retrain_days // self.sampling_days,
+                             save_dir='{}/actor_{}.png'.format(test_out_path, bbticker))
+            else:
+                predict_plot(model, test_dataset, features_list,
+                             size=self.retrain_days // self.sampling_days,
+                             save_dir='{}/{}.png'.format(test_out_path, bbticker))
 
             dataset_list.append(test_dataset)
         return dataset_list, features_list
