@@ -1,4 +1,5 @@
 from timeseries.utils import *
+from timeseries.features import processing
 
 import pandas as pd
 import tensorflow as tf
@@ -20,12 +21,16 @@ def data_split():
 
 
 class DataScheduler:
-    def __init__(self, configs):
+    def __init__(self, configs, is_infocode=True):
         # make a directory for outputs
         self.data_out_path = os.path.join(os.getcwd(), configs.data_out_path)
         os.makedirs(self.data_out_path, exist_ok=True)
 
-        self.data_generator = DataGenerator_v2(configs.data_path)
+        self.is_infocode = is_infocode
+        if is_infocode:
+            self.data_generator = DataGenerator_v3(configs.data_path)    # infocode
+        else:
+            self.data_generator = DataGenerator_v2(configs.data_path)  # bbticker
 
         self.train_set_length = configs.train_set_length
         self.retrain_days = configs.retrain_days
@@ -56,13 +61,12 @@ class DataScheduler:
         self.test_begin_idx = self.base_idx - self.m_days
         self.test_end_idx = self.base_idx + self.retrain_days
 
-    def _dataset_custom(self, start_idx, end_idx, step_size, k_days=None, bbtickers=None):
+    def _dataset_custom(self, start_idx, end_idx, step_size, k_days=None, codes_list=None):
         if k_days is None:
             k_days = self.k_days
         input_enc, output_dec, target_dec = [], [], []
 
-        if bbtickers is not None:
-            print(bbtickers)
+        code_dict = self.get_code_dict(codes_list)
 
         print("start idx:{} ({}) / end idx: {} ({})".format(
             start_idx,
@@ -71,12 +75,12 @@ class DataScheduler:
             self.data_generator.date_[end_idx]))
         for i, d in enumerate(range(start_idx, end_idx, step_size)):
             _sampled_data = self.data_generator.sample_inputdata(d,
-                                                     bbtickers=bbtickers,
                                                      sampling_days=self.sampling_days,
                                                      m_days=self.m_days,
                                                      k_days=k_days,
                                                      max_seq_len_in=self.max_seq_len_in,
-                                                     max_seq_len_out=self.max_seq_len_out)
+                                                     max_seq_len_out=self.max_seq_len_out,
+                                                                 **code_dict)
             if _sampled_data is False:
                 return False
             else:
@@ -90,7 +94,7 @@ class DataScheduler:
 
         return input_enc, output_dec, target_dec, features_list
 
-    def _dataset(self, mode='train', bbtickers=None):
+    def _dataset(self, mode='train', codes_list=None):
         input_enc, output_dec, target_dec = [], [], []
         features_list = []
         if mode == 'train':
@@ -112,8 +116,7 @@ class DataScheduler:
         else:
             raise NotImplementedError
 
-        if bbtickers is not None:
-            print(bbtickers)
+        code_dict = self.get_code_dict(codes_list)
 
         print("start idx:{} ({}) / end idx: {} ({})".format(
             start_idx,
@@ -122,12 +125,12 @@ class DataScheduler:
             self.data_generator.date_[end_idx]))
         for i, d in enumerate(range(start_idx, end_idx, step_size)):
             _sampled_data = self.data_generator.sample_inputdata(d,
-                                                     bbtickers=bbtickers,
                                                      sampling_days=self.sampling_days,
                                                      m_days=self.m_days,
                                                      k_days=k_days,
                                                      max_seq_len_in=self.max_seq_len_in,
-                                                     max_seq_len_out=self.max_seq_len_out)
+                                                     max_seq_len_out=self.max_seq_len_out,
+                                                                 **code_dict)
             if _sampled_data is False:
                 return False
             else:
@@ -180,34 +183,65 @@ class DataScheduler:
 
             model.train(features, labels, print_loss=print_loss)
 
+    def get_code_dict(self, codes_list):
+        if codes_list is not None:
+            print(codes_list)
+
+            if type(codes_list) != list:
+                codes_list = [codes_list]
+
+        if self.is_infocode is True:
+            code_dict = {'infocodes': codes_list}
+        else:
+            code_dict = {'bbtickers': codes_list}
+
+        return code_dict
+
     def test(self, model, actor=None):
         test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
         os.makedirs(test_out_path, exist_ok=True)
         dg = self.data_generator
-        bbtickers = list(dg.df_pivoted.columns[~dg.df_pivoted.ix[self.base_idx].isna()])
+        codes_list = list(dg.df_pivoted.columns[~dg.df_pivoted.ix[self.base_idx].isna()])
         dataset_list = list()
-        for bbticker in bbtickers:
-            _dataset = self._dataset('test', bbtickers=[bbticker])
+        for code_ in codes_list:
+            code_dict = self.get_code_dict(code_)
+            _dataset = self._dataset('test', **code_dict)
             if _dataset is False:
                 continue
             else:
                 input_enc, output_dec, target_dec, features_list = _dataset
-            test_dataset = dataset_process(input_enc, output_dec, target_dec, batch_size=1, mode='test')
+
+            assert np.sum(input_enc[:, -1, :] - output_dec[:, 0, :]) == 0
+            new_output = np.zeros_like(output_dec)
+            new_output[:, 0, :] = output_dec[:, 0, :]
+
             if actor is not None:
+                for t in range(self.max_seq_len_out):
+                    if t > 0:
+                        new_output[:, t, :] = obs[:, t - 1, :]
+                    features_pred = {'input': input_enc, 'output': new_output}
+                    obs = model.predict(features_pred)
+
+                test_dataset = dataset_process(input_enc, new_output, target_dec, batch_size=1, mode='test')
+
                 predict_plot_with_actor(model, actor, test_dataset, features_list,
                              size=self.retrain_days // self.sampling_days,
-                             save_dir='{}/actor_{}.png'.format(test_out_path, bbticker))
+                             save_dir='{}/actor_{}.png'.format(test_out_path, code_))
             else:
+
+                test_dataset = dataset_process(input_enc, new_output, target_dec, batch_size=1, mode='test')
+                # test_dataset = dataset_process(input_enc, output_dec, target_dec, batch_size=1, mode='test')
+
                 predict_plot(model, test_dataset, features_list,
                              size=self.retrain_days // self.sampling_days,
-                             save_dir='{}/{}.png'.format(test_out_path, bbticker))
+                             save_dir='{}/{}.png'.format(test_out_path, code_))
 
             dataset_list.append(test_dataset)
         return dataset_list, features_list
 
     def train_tickers(self,
                       model,
-                      bbtickers,
+                      codes_list,
                       train_steps=1,
                       eval_steps=10,
                       save_steps=50,
@@ -217,8 +251,10 @@ class DataScheduler:
         train_out_path = os.path.join(self.data_out_path, '{}'.format(self.base_idx))
         os.makedirs(train_out_path, exist_ok=True)
 
-        train_input_enc, train_output_dec, train_target_dec, features_list = self._dataset('train', bbtickers=bbtickers)
-        eval_input_enc, eval_output_dec, eval_target_dec, _ = self._dataset('eval', bbtickers=bbtickers)
+        code_dict = self.get_code_dict(codes_list)
+
+        train_input_enc, train_output_dec, train_target_dec, features_list = self._dataset('train', **code_dict)
+        eval_input_enc, eval_output_dec, eval_target_dec, _ = self._dataset('eval', **code_dict)
 
         train_dataset = dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_size=self.train_batch_size)
         train_dataset_plot = dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_size=1)
@@ -275,7 +311,51 @@ class DataScheduler:
             return False
 
 
+
+class DataGenerator_v3:
+    # v3: korea stocks data with fft
+    def __init__(self, data_path):
+        data_path = './data/kr_close_.csv'
+        data_df = pd.read_csv(data_path, index_col=0)
+        self.data_df = data_df[np.sum(~data_df.isna(), axis=1) >= 10]
+        self.date_ = list(self.data_df.index)
+
+    def get_full_dataset(self, start_d, end_d):
+        df_selected = self.data_df[(self.data_df.index > start_d) & (self.data_df.index <= end_d)]
+        return df_selected.ix[:, np.sum(df_selected.isna(), axis=0) == 0]
+
+    def sample_inputdata(self, base_idx, infocodes=None, sampling_days=5, m_days=60, k_days=20,
+                         max_seq_len_in=12,
+                         max_seq_len_out=4):
+
+        features_list, features_data = processing(self.data_df, self.date_[base_idx-m_days], self.date_[base_idx+k_days], infocodes)
+
+        assert features_data.shape[0] == m_days + k_days + 1
+
+        M = m_days // sampling_days
+        K = k_days // sampling_days
+
+        features_sampled_data = features_data[::5]
+        _, n_asset, n_feature = features_sampled_data.shape
+        question = np.zeros([n_asset, max_seq_len_in, n_feature], dtype=np.float32)
+        answer = np.zeros([n_asset, max_seq_len_out+1, n_feature], dtype=np.float32)
+
+        question[:] = np.transpose(features_sampled_data[:M], [1, 0, 2])
+
+        answer_data = features_sampled_data[-(K + 1):]
+        answer[:, :len(answer_data), :] = np.transpose(answer_data, [1, 0, 2])
+
+        input_enc, output_dec, target_dec = question[:], answer[:, :-1, :], answer[:, 1:, :]
+        return input_enc, output_dec, target_dec, features_list
+
+    @property
+    def max_length(self):
+        return len(self.date_)
+
+
+
 class DataGenerator_v2:
+    # v2: bloomberg data
     def __init__(self, data_path):
         # data_path ='./timeseries/asset_data.csv'
         data_df = pd.read_csv(data_path)
@@ -288,8 +368,8 @@ class DataGenerator_v2:
         return df_selected.ix[:, np.sum(df_selected.isna(), axis=0) == 0]
 
     def sample_inputdata(self, base_idx, bbtickers=None, sampling_days=5, m_days=60, k_days=20,
-                         max_seq_len_in=60,
-                         max_seq_len_out=20):
+                         max_seq_len_in=12,
+                         max_seq_len_out=4):
         # df_selected = self.df_pivoted[self.df_pivoted.index <= base_d][-(m_days+1):]
         # print("base_idx:{} / date: {}".format(base_idx, self.date_[base_idx]))
         df_selected = self.df_pivoted[(self.df_pivoted.index <= self.date_[base_idx+k_days])

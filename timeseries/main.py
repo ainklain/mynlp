@@ -19,35 +19,35 @@ LAMBDA = 0.95
 
 
 def main_all_asset_dataprocess_modified():
-    configs = Config()
+        configs = Config()
 
-    # initiate and load model
-    # model = TSModel(configs)
-    # if os.path.exists(configs.f_name):
-    #     model.load_model(configs.f_name)
+        # initiate and load model
+        # model = TSModel(configs)
+        # if os.path.exists(configs.f_name):
+        #     model.load_model(configs.f_name)
 
-    # get data for all assets and dates
-    ds = DataScheduler(configs)
-    ds.test_end_idx = ds.base_idx + 1000
+        # get data for all assets and dates
+        ds = DataScheduler(configs)
+        ds.test_end_idx = ds.base_idx + 1000
 
-    ii = 0
-    while not ds.done:
-        model = TSModel(configs)
-        if os.path.exists(configs.f_name):
-            model.load_model(configs.f_name)
+        ii = 0
+        while not ds.done:
+            model = TSModel(configs)
+            if os.path.exists(configs.f_name):
+                model.load_model(configs.f_name)
 
-        ds.set_idx(8000)
-        ds.train(model,
-               train_steps=configs.train_steps,
-               eval_steps=10,
-               save_steps=200,
-               early_stopping_count=20,
-               model_name=configs.f_name)
+        # ds.set_idx(8000)
+        # ds.train(model,
+        #        train_steps=configs.train_steps,
+        #        eval_steps=10,
+        #        save_steps=200,
+        #        early_stopping_count=20,
+        #        model_name=configs.f_name)
 
         env = MyEnv(model, data_scheduler=ds, configs=configs, trading_costs=0.001)
 
         ppo = PPO(env)
-        f_name = './{}.pkl'.format('actor_v1.1')
+        f_name = './{}.pkl'.format('actor_v1.0')
         if os.path.exists(f_name):
             ppo.load_model(f_name)
 

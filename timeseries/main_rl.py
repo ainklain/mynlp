@@ -62,7 +62,7 @@ def main():
     configs = Config()
 
     # get data for all assets and dates
-    ds = DataScheduler(configs)
+    ds = DataScheduler(configs, is_infocode=True)
     ds.test_end_idx = ds.base_idx + 1000
 
     ii = 0
@@ -102,7 +102,7 @@ def main():
             else:
                 new_data = False
 
-            s = env.reset(length=201, n_tasks=1, new_data=new_data)
+            s = env.reset(length=201, n_tasks=2, new_data=new_data)
             while True:
                 a, v = ppo.evaluate_state(s, stochastic=True)
 
@@ -152,7 +152,7 @@ def main():
 
 
             if episode % 50 == 0:
-                s = env.reset(length=201, n_tasks=1, new_data=False)
+                s = env.reset(length=201, n_tasks=2, new_data=False)
                 while True:
                     a, v = ppo.evaluate_state(s, stochastic=False)
                     a = tf.clip_by_value(a, env.action_space.low, env.action_space.high)

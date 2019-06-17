@@ -17,13 +17,12 @@ from tensorflow.keras.layers import Dense, Conv2D, Flatten
 from tensorflow.keras.regularizers import l2
 
 
-LR = 1e-3
+LR = 1e-4
 L2_REG = 0.001
 EPOCHS = 10
 MINIBATCH = 32
 ENTROPY_BETA = 0.01
 VF_COEFF = 1.0
-
 
 
 class MyActor(Model):
@@ -195,7 +194,8 @@ class MyEnv(gym.Env):
         self.n_features = configs.embedding_size
         self.action_space = gym.spaces.Box(0, 1, shape=(1, ), dtype=np.float32)
         self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf,
-                                                shape=(1, self.n_timesteps, self.n_features),
+                                                # shape=(1, self.n_timesteps, self.n_features),
+                                                shape=(1, 1, self.n_features),
                                                 dtype=np.float32)
 
     def reset(self, start_idx=None, length=200, step_size=5, n_tasks=1, new_data=True):
@@ -321,6 +321,7 @@ class MyEnv(gym.Env):
         actions = self.a_history[:last_step]
         pal = sns.color_palette("hls", 19)
         self.ax2.stackplot(x_, actions, colors=pal)
+        self.ax2.set_ylim([0., 1.])
 
         self.ax3.plot(x_, self.cost_history[:last_step])
 
@@ -403,7 +404,7 @@ class MyEnv(gym.Env):
             for j, (features, labels) in enumerate(dataset.take(length)):
                 obs = self.model.predict(features)
                 true_log_y = labels[0, 0, idx_y]
-                env_data.append({'obs': obs, 'log_y': true_log_y})
+                env_data.append({'obs': obs[:, :1, :], 'log_y': true_log_y})
             self.env_data_list.append(env_data)
 
         e_t = time()
@@ -422,7 +423,7 @@ class MyEnv(gym.Env):
         e_t = time()
         print('dataset_to_env time: {}'.format(e_t - s_t))
 
-    def get_datasets(self, start_idx, length, step_size, n_tasks=1):
+    def get_datasets(self, start_idx, length, step_size, n_tasks=1, no_future=True):
         s_t = time()
         ds = self.data_scheduler
 
@@ -437,13 +438,25 @@ class MyEnv(gym.Env):
         datasets = list()
         for idx in start_idx:
             input_enc, output_dec, target_dec, features_list = self.data_scheduler._dataset_custom(start_idx=idx, end_idx=idx + length, step_size=step_size)
-            datasets.append(dataset_process(input_enc, output_dec, target_dec, batch_size=1))
+
+            if no_future:
+                new_output = np.zeros_like(output_dec)
+                new_output[:, 0, :] = output_dec[:, 0, :]
+                for t in range(self.n_timesteps):
+                    if t > 0:
+                        new_output[:, t, :] = obs[:, t - 1, :]
+                    features_pred = {'input': input_enc, 'output': new_output}
+                    obs = self.model.predict(features_pred)
+            else:
+                new_output = output_dec
+
+            datasets.append(dataset_process(input_enc, new_output, target_dec, batch_size=1))
 
         e_t = time()
         print('get_datasets time: {}'.format(e_t - s_t))
         return datasets, features_list
 
-    def get_testdatasets(self, start_idx, length, step_size, n_tasks=1, bbtickers=None):
+    def get_testdatasets(self, start_idx, length, step_size, n_tasks=1, bbtickers=None, no_future=True):
         s_t = time()
         ds = self.data_scheduler
 
@@ -458,7 +471,19 @@ class MyEnv(gym.Env):
         datasets = list()
         for idx in start_idx:
             input_enc, output_dec, target_dec, features_list = self.data_scheduler._dataset_custom(start_idx=idx, end_idx=idx + length, step_size=step_size, bbtickers=bbtickers)
-            datasets.append(dataset_process(input_enc, output_dec, target_dec, batch_size=1, mode='test'))
+
+            if no_future:
+                new_output = np.zeros_like(output_dec)
+                new_output[:, 0, :] = output_dec[:, 0, :]
+                for t in range(self.n_timesteps):
+                    if t > 0:
+                        new_output[:, t, :] = obs[:, t - 1, :]
+                    features_pred = {'input': input_enc, 'output': new_output}
+                    obs = self.model.predict(features_pred)
+            else:
+                new_output = output_dec
+
+            datasets.append(dataset_process(input_enc, new_output, target_dec, batch_size=1, mode='test'))
 
         e_t = time()
         print('get_testdatasets time: {}'.format(e_t - s_t))

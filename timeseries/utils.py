@@ -32,7 +32,6 @@ def predict_plot(model, dataset, columns_list, size=250, save_dir='out.png'):
     cost_rate = 0.000
     idx_y = columns_list.index('log_y')
     idx_pos = columns_list.index('positive')
-    idx_ma20 = columns_list.index('y_20d')
 
     true_y = np.zeros(size)
     pred_both = np.zeros_like(true_y)
@@ -114,6 +113,7 @@ def predict_plot_with_actor(model, actor, dataset, columns_list, size=250, save_
     pred_y = np.zeros_like(true_y)
     pred_avg = np.zeros_like(true_y)
     pred_actor = np.zeros_like(true_y)
+    action_arr = np.zeros_like(true_y)
 
     prev_w_both = 0
     prev_w_pos = 0
@@ -125,6 +125,7 @@ def predict_plot_with_actor(model, actor, dataset, columns_list, size=250, save_
         assert (a_value >= 0) and (a_value <= 1)
         true_y[j] = labels[0, 0, idx_y]
         pred_actor[j] = labels[0, 0, idx_y] * a_value
+        action_arr[j] = a_value
 
         if predictions[0, 0, idx_y] > 0:
             pred_y[j] = labels[0, 0, idx_y] - cost_rate * (1. - prev_w_y)
@@ -161,8 +162,11 @@ def predict_plot_with_actor(model, actor, dataset, columns_list, size=250, save_
     # plt.legend()
 
     fig = plt.figure()
-    plt.plot(data)
-    plt.legend(data.columns)
+    ax1, ax2 = fig.subplots(2, 1)
+    ax1.plot(data)
+    ax1.legend(data.columns)
+    ax2.plot(np.arange(action_arr), action_arr)
+    ax2.set_ylim([0., 1.])
     fig.savefig(save_dir)
     plt.close(fig)
 
@@ -178,6 +182,8 @@ def predict_plot_with_actor(model, actor, dataset, columns_list, size=250, save_
 
 
 class FeatureCalculator:
+    # example:
+    #
     def __init__(self, prc, sampling_freq):
         self.sampling_freq = sampling_freq
         self.log_cum_y = np.log(prc / prc[0, :])
