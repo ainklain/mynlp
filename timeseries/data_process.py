@@ -8,11 +8,10 @@ import os
 from sklearn.model_selection import train_test_split
 
 
-
 def data_split():
     data_path = './data/kr_data.csv'
     data_df = pd.read_csv(data_path)
-    data_pivoted = pd.pivot(data_df, index='date_', columns='infocode')
+    data_pivoted = pd.pivot(data_df, index='marketdate', columns='infocode')
 
     for col in data_pivoted.columns.levels[0]:
         df_ = data_pivoted[[col]]
@@ -82,12 +81,16 @@ class DataScheduler:
                                                      max_seq_len_out=self.max_seq_len_out,
                                                                  **code_dict)
             if _sampled_data is False:
-                return False
+                continue
             else:
                 tmp_ie, tmp_od, tmp_td, features_list = _sampled_data
             input_enc.append(tmp_ie)
             output_dec.append(tmp_od)
             target_dec.append(tmp_td)
+
+        if len(input_enc) == 0:
+            return False
+
         input_enc = np.concatenate(input_enc, axis=0)
         output_dec = np.concatenate(output_dec, axis=0)
         target_dec = np.concatenate(target_dec, axis=0)
@@ -118,26 +121,27 @@ class DataScheduler:
 
         code_dict = self.get_code_dict(codes_list)
 
-        print("start idx:{} ({}) / end idx: {} ({})".format(
-            start_idx,
-            self.data_generator.date_[start_idx],
-            end_idx,
-            self.data_generator.date_[end_idx]))
+        print("start idx:{} ({}) / end idx: {} ({})".format(start_idx, self.data_generator.date_[start_idx],
+                                                            end_idx, self.data_generator.date_[end_idx]))
         for i, d in enumerate(range(start_idx, end_idx, step_size)):
             _sampled_data = self.data_generator.sample_inputdata(d,
-                                                     sampling_days=self.sampling_days,
-                                                     m_days=self.m_days,
-                                                     k_days=k_days,
-                                                     max_seq_len_in=self.max_seq_len_in,
-                                                     max_seq_len_out=self.max_seq_len_out,
+                                                                 sampling_days=self.sampling_days,
+                                                                 m_days=self.m_days,
+                                                                 k_days=k_days,
+                                                                 max_seq_len_in=self.max_seq_len_in,
+                                                                 max_seq_len_out=self.max_seq_len_out,
                                                                  **code_dict)
             if _sampled_data is False:
-                return False
+                continue
             else:
                 tmp_ie, tmp_od, tmp_td, features_list = _sampled_data
             input_enc.append(tmp_ie)
             output_dec.append(tmp_od)
             target_dec.append(tmp_td)
+
+        if len(input_enc) == 0:
+            return False
+
         input_enc = np.concatenate(input_enc, axis=0)
         output_dec = np.concatenate(output_dec, axis=0)
         target_dec = np.concatenate(target_dec, axis=0)
@@ -156,12 +160,25 @@ class DataScheduler:
         train_out_path = os.path.join(self.data_out_path, '{}'.format(self.base_idx))
         os.makedirs(train_out_path, exist_ok=True)
 
-        train_input_enc, train_output_dec, train_target_dec, features_list = self._dataset('train')
-        eval_input_enc, eval_output_dec, eval_target_dec, _ = self._dataset('eval')
+        _train_dataset = self._dataset('train')
+        _eval_dataset = self._dataset('eval')
+        if _train_dataset is False or _eval_dataset is False:
+            return False
 
-        train_dataset = dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_size=self.train_batch_size)
-        train_dataset_plot = dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_size=1)
-        eval_dataset = dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_size=1)
+        train_input_enc, train_output_dec, train_target_dec, features_list = _train_dataset
+        eval_input_enc, eval_output_dec, eval_target_dec, _ = _eval_dataset
+
+        assert np.sum(train_input_enc[:, -1, :] - train_output_dec[:, 0, :]) == 0
+        assert np.sum(eval_input_enc[:, -1, :] - eval_output_dec[:, 0, :]) == 0
+
+        train_new_output = np.zeros_like(train_output_dec)
+        train_new_output[:, 0, :] = train_output_dec[:, 0, :]
+        eval_new_output = np.zeros_like(eval_output_dec)
+        eval_new_output[:, 0, :] = eval_output_dec[:, 0, :]
+
+        train_dataset = dataset_process(train_input_enc, train_new_output, train_target_dec, batch_size=self.train_batch_size)
+        train_dataset_plot = dataset_process(train_input_enc, train_new_output, train_target_dec, batch_size=1)
+        eval_dataset = dataset_process(eval_input_enc, eval_new_output, eval_target_dec, batch_size=1)
         for i, (features, labels) in enumerate(train_dataset.take(train_steps)):
             print_loss = False
             if i % save_steps == 0:
@@ -203,9 +220,9 @@ class DataScheduler:
         dg = self.data_generator
         codes_list = list(dg.df_pivoted.columns[~dg.df_pivoted.ix[self.base_idx].isna()])
         dataset_list = list()
+        features_list = list()
         for code_ in codes_list:
-            code_dict = self.get_code_dict(code_)
-            _dataset = self._dataset('test', **code_dict)
+            _dataset = self._dataset('test', codes_list=[code_])
             if _dataset is False:
                 continue
             else:
@@ -216,11 +233,11 @@ class DataScheduler:
             new_output[:, 0, :] = output_dec[:, 0, :]
 
             if actor is not None:
-                for t in range(self.max_seq_len_out):
-                    if t > 0:
-                        new_output[:, t, :] = obs[:, t - 1, :]
-                    features_pred = {'input': input_enc, 'output': new_output}
-                    obs = model.predict(features_pred)
+                # for t in range(self.max_seq_len_out):
+                #     if t > 0:
+                #         new_output[:, t, :] = obs[:, t - 1, :]
+                #     features_pred = {'input': input_enc, 'output': new_output}
+                #     obs = model.predict(features_pred)
 
                 test_dataset = dataset_process(input_enc, new_output, target_dec, batch_size=1, mode='test')
 
@@ -311,31 +328,55 @@ class DataScheduler:
             return False
 
 
-
 class DataGenerator_v3:
     # v3: korea stocks data with fft
     def __init__(self, data_path):
         data_path = './data/kr_close_.csv'
         data_df = pd.read_csv(data_path, index_col=0)
-        self.data_df = data_df[np.sum(~data_df.isna(), axis=1) >= 10]
-        self.date_ = list(self.data_df.index)
+        self.df_pivoted = data_df[np.sum(~data_df.isna(), axis=1) >= 10]  # 최소 10종목 이상 존재 하는 날짜만
+        self.date_ = list(self.df_pivoted.index)
 
     def get_full_dataset(self, start_d, end_d):
-        df_selected = self.data_df[(self.data_df.index > start_d) & (self.data_df.index <= end_d)]
-        return df_selected.ix[:, np.sum(df_selected.isna(), axis=0) == 0]
+        df_selected = self.df_pivoted[(self.df_pivoted.index > start_d) & (self.df_pivoted.index <= end_d)]
+        df_selected = df_selected.ix[:, np.sum(~df_selected.isna(), axis=0) >= len(df_selected.index) * 0.9]  # 90% 이상 데이터 존재
+        df_selected.ffill(axis=0)
+        return df_selected
 
     def sample_inputdata(self, base_idx, infocodes=None, sampling_days=5, m_days=60, k_days=20,
                          max_seq_len_in=12,
                          max_seq_len_out=4):
 
-        features_list, features_data = processing(self.data_df, self.date_[base_idx-m_days], self.date_[base_idx+k_days], infocodes)
+        df_selected = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx-m_days])
+                                      & (self.df_pivoted.index <= self.date_[base_idx+k_days])]
+        df_not_null = df_selected.ix[:, np.sum(~df_selected.isna(), axis=0) >= len(df_selected.index) * 0.9]  # 90% 이상 데이터 존재
+        df_not_null.ffill(axis=0)
+        df_not_null = df_not_null.ix[:, np.sum(df_not_null.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
+
+        if infocodes is not None:
+            assert type(infocodes) == list
+            infocodes_exist = []
+            for infocode in infocodes:
+                if infocode in df_not_null.columns:
+                    infocodes_exist.append(infocode)
+
+            if len(infocodes_exist) >= 1:
+                df_not_null = df_not_null[infocodes_exist]
+            else:
+                return False
+
+        if df_not_null.empty:
+            print('no data')
+            return False
+
+        features_list, features_data = processing(df_not_null, m_days=m_days)
 
         assert features_data.shape[0] == m_days + k_days + 1
 
         M = m_days // sampling_days
         K = k_days // sampling_days
 
-        features_sampled_data = features_data[::5]
+        features_sampled_data = features_data[::5][1:]  # 0, 5, 10, ... 데이터 중 0 데이터 제거 (의미없음)
+        assert features_sampled_data.shape[0] == M + K
         _, n_asset, n_feature = features_sampled_data.shape
         question = np.zeros([n_asset, max_seq_len_in, n_feature], dtype=np.float32)
         answer = np.zeros([n_asset, max_seq_len_out+1, n_feature], dtype=np.float32)
@@ -346,12 +387,13 @@ class DataGenerator_v3:
         answer[:, :len(answer_data), :] = np.transpose(answer_data, [1, 0, 2])
 
         input_enc, output_dec, target_dec = question[:], answer[:, :-1, :], answer[:, 1:, :]
+
+        assert np.sum(input_enc[:, -1, :] - output_dec[:, 0, :]) == 0
         return input_enc, output_dec, target_dec, features_list
 
     @property
     def max_length(self):
         return len(self.date_)
-
 
 
 class DataGenerator_v2:

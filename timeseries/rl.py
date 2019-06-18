@@ -198,7 +198,7 @@ class MyEnv(gym.Env):
                                                 shape=(1, 1, self.n_features),
                                                 dtype=np.float32)
 
-    def reset(self, start_idx=None, length=200, step_size=5, n_tasks=1, new_data=True):
+    def reset(self, start_idx=None, length=200, step_size=5, n_tasks=1, new_data=True, task_i=None):
         self.render_call = 0
 
         self.i_step = 0
@@ -212,7 +212,9 @@ class MyEnv(gym.Env):
         self.cum_y_history = np.ones(length)
 
         self.n_tasks = n_tasks
-        task_i = np.random.random_integers(0, n_tasks - 1)
+        if task_i is None:
+            task_i = np.random.random_integers(0, n_tasks - 1)
+
         if new_data is True:
             self.datasets, self.features = self.get_datasets(start_idx, length, step_size, n_tasks)
             self.datasets_to_env(self.datasets, self.features, length)

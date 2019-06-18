@@ -14,7 +14,7 @@ import time
 
 
 EP_MAX = 1000
-BATCH = 2048
+BATCH = 1024
 GAMMA = 0.99
 LAMBDA = 0.95
 
@@ -69,10 +69,11 @@ def main():
     # while not ds.done:
     for _ in range(1):
         model = TSModel(configs)
+        configs.f_name = 'ts_model_test1.0'
         if os.path.exists(configs.f_name):
             model.load_model(configs.f_name)
 
-        ds.set_idx(8000)
+        # ds.set_idx(8000)
         ds.train(model,
                  train_steps=configs.train_steps,
                  eval_steps=10,
@@ -81,6 +82,7 @@ def main():
                  model_name=configs.f_name)
 
         env = MyEnv(model, data_scheduler=ds, configs=configs, trading_costs=0.001)
+        test_env = MyEnv(model, data_scheduler=ds, configs=configs, trading_costs=0.001)
         # actor = MyActor(1, configs.max_sequence_length_out, configs.embedding_size)
 
         t, done = 0, False
@@ -89,7 +91,7 @@ def main():
         rolling_r = RunningStats()
 
         ppo = PPO(env)
-        f_name = './{}.pkl'.format('actor_v1.0')
+        f_name = './{}.pkl'.format('actor_v1.0_5')
         if os.path.exists(f_name):
             ppo.load_model(f_name)
 
@@ -102,7 +104,7 @@ def main():
             else:
                 new_data = False
 
-            s = env.reset(length=201, n_tasks=2, new_data=new_data)
+            s = env.reset(length=201, n_tasks=5, new_data=new_data)
             while True:
                 a, v = ppo.evaluate_state(s, stochastic=True)
 
@@ -142,7 +144,7 @@ def main():
 
                 if done:
                     print("global step: {}".format(ppo.global_step))
-                    if ppo.global_step % 10 == 0:
+                    if ppo.global_step % 100 == 0:
                         env.render(save_filename='./out/env_{}_{}.png'.format(ppo.global_step, episode))
 
                     ppo.save_model(f_name)
@@ -151,17 +153,40 @@ def main():
             print('episode time: {}'.format(e_t - s_t))
 
 
-            if episode % 50 == 0:
-                s = env.reset(length=201, n_tasks=2, new_data=False)
-                while True:
-                    a, v = ppo.evaluate_state(s, stochastic=False)
-                    a = tf.clip_by_value(a, env.action_space.low, env.action_space.high)
-                    s, r, done, _ = env.step(np.squeeze(a))
+            if episode % 200 == 0:
+                for ep_i in range(5):
+                    s = env.reset(length=201, n_tasks=5, new_data=False, task_i=ep_i)
+                    while True:
+                        a, v = ppo.evaluate_state(s, stochastic=False)
+                        a = tf.clip_by_value(a, env.action_space.low, env.action_space.high)
+                        s, r, done, _ = env.step(np.squeeze(a))
 
-                    if done:
-                        print("global step: {}".format(ppo.global_step))
-                        env.render(save_filename='./out/rltest/env_{}_{}.png'.format(ppo.global_step, episode))
-                        break
+                        if done:
+                            print("global step: {}".format(ppo.global_step))
+                            env.render(save_filename='./out/rltest/env_{}_{}.png'.format(ep_i, ppo.global_step))
+                            break
+
+            if episode % 500 == 0:
+                if episode == 0:
+                    test_new_data = True
+                else:
+                    test_new_data = False
+
+                for ep_it in range(5):
+                    s_t = test_env.reset(length=201, n_tasks=5, new_data=test_new_data, task_i=ep_it)
+                    if test_new_data is True:
+                        test_new_data = False
+                    while True:
+                        a_t, v_t = ppo.evaluate_state(s_t, stochastic=False)
+                        a_t = tf.clip_by_value(a_t, test_env.action_space.low, test_env.action_space.high)
+                        s_t, r_t, done_t, _ = test_env.step(np.squeeze(a_t))
+
+                        if done_t:
+                            print("global step: {}".format(ppo.global_step))
+                            test_env.render(save_filename='./out/rltest/new/env_{}_{}.png'.format(ep_it, ppo.global_step))
+                            break
+
+
 
             test_i = 100
             s = env.reset_test(start_idx=[8000])

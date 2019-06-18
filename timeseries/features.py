@@ -14,10 +14,11 @@ def log_y_nd(log_p, n):
     return np.r_[log_p[:n, :] - log_p[:1, :], log_p[n:, :] - log_p[:-n, :]]
 
 
-def fft(log_p, n):
-    log_p_fft = np.fft.fft(log_p, axis=0)
+def fft(log_p, n, m_days):
+    n_size = len(log_p)
+    log_p_fft = np.fft.fft(log_p[:(m_days+1)], axis=0)
     log_p_fft[n:-n] = 0
-    return np.real(np.fft.ifft(log_p_fft, axis=0))
+    return np.real(np.fft.ifft(log_p_fft, n_size, axis=0))
 
 
 def std_nd(log_p, n):
@@ -37,24 +38,9 @@ def mdd_nd(log_p, n):
     return mddarr
 
 
-def processing(df, start_d, end_d, infocodes_list=None):
-
-    if type(df.columns) == pd.MultiIndex:
-        df.columns = df.columns.droplevel(0)
-
-    df_selected = df[(df.index >= start_d) & (df.index <= end_d)]
-    df_not_null = df_selected.ix[:, np.sum(df_selected.isna(), axis=0) == 0]
-
-    if infocodes_list is not None:
-        assert type(infocodes_list) == list
-        infocodes_exist = []
-        for infocode in infocodes_list:
-            if infocode in df.columns:
-                infocodes_exist.append(infocode)
-            if len(infocodes_exist) >= 1:
-                df_not_null = df_not_null[infocodes_exist]
-            else:
-                return False
+def processing(df_not_null, m_days):
+    # if type(df.columns) == pd.MultiIndex:
+    #     df.columns = df.columns.droplevel(0)
 
     log_p = np.log(df_not_null.values, dtype=np.float32)
     log_p = log_p - log_p[0, :]
@@ -65,9 +51,9 @@ def processing(df, start_d, end_d, infocodes_list=None):
     log_120y = log_y_nd(log_p, 120)
     # log_240y = log_y_nd(log_p, 240)
 
-    fft_3com = fft(log_p, 3)
-    fft_6com = fft(log_p, 6)
-    fft_100com = fft(log_p, 100)
+    fft_3com = fft(log_p, 3, m_days)
+    fft_6com = fft(log_p, 6, m_days)
+    fft_100com = fft(log_p, 100, m_days)
 
     std_20 = std_nd(log_p, 20)
     std_60 = std_nd(log_p, 60)
@@ -168,4 +154,7 @@ class FeatureCalculator:
             features[key] = features[key][1:]
 
         return features
+
+
+
 
