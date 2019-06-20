@@ -60,26 +60,23 @@ class DataScheduler:
         self.test_begin_idx = self.base_idx - self.m_days
         self.test_end_idx = self.base_idx + self.retrain_days
 
-    def _dataset_custom(self, start_idx, end_idx, step_size, k_days=None, codes_list=None):
+    def _dataset_custom(self, start_idx, end_idx, k_days=None, codes_list=None):
+        ds = self.data_generator
         if k_days is None:
             k_days = self.k_days
         input_enc, output_dec, target_dec = [], [], []
 
         code_dict = self.get_code_dict(codes_list)
 
-        print("start idx:{} ({}) / end idx: {} ({})".format(
-            start_idx,
-            self.data_generator.date_[start_idx],
-            end_idx,
-            self.data_generator.date_[end_idx]))
-        for i, d in enumerate(range(start_idx, end_idx, step_size)):
-            _sampled_data = self.data_generator.sample_inputdata(d,
-                                                     sampling_days=self.sampling_days,
-                                                     m_days=self.m_days,
-                                                     k_days=k_days,
-                                                     max_seq_len_in=self.max_seq_len_in,
-                                                     max_seq_len_out=self.max_seq_len_out,
-                                                                 **code_dict)
+        print("start idx:{} ({}) / end idx: {} ({})".format(start_idx, ds.date_[start_idx], end_idx, ds.date_[end_idx]))
+        for i, d in enumerate(range(start_idx, end_idx, self.sampling_days)):
+            _sampled_data = ds.sample_inputdata(d,
+                                                sampling_days=self.sampling_days,
+                                                m_days=self.m_days,
+                                                k_days=k_days,
+                                                max_seq_len_in=self.max_seq_len_in,
+                                                max_seq_len_out=self.max_seq_len_out,
+                                                **code_dict)
             if _sampled_data is False:
                 continue
             else:
@@ -97,40 +94,40 @@ class DataScheduler:
 
         return input_enc, output_dec, target_dec, features_list
 
-    def _dataset(self, mode='train', codes_list=None):
-        input_enc, output_dec, target_dec = [], [], []
-        features_list = []
+    def get_data_params(self, mode='train'):
+        dg = self.data_generator
+        data_params = dict()
+        data_params['sampling_days'] = self.sampling_days
+        data_params['m_days'] = self.m_days
+        data_params['k_days'] = self.k_days
+        data_params['max_seq_len_in'] = self.max_seq_len_in
+        data_params['max_seq_len_out'] = self.max_seq_len_out
+
         if mode == 'train':
             start_idx = self.train_begin_idx + self.m_days
             end_idx = self.eval_begin_idx - self.k_days
-            step_size = self.sampling_days
-            k_days = self.k_days
         elif mode == 'eval':
             start_idx = self.eval_begin_idx + self.m_days
             end_idx = self.test_begin_idx - self.k_days
-            step_size = self.sampling_days
-            k_days = self.k_days
         elif mode == 'test':
             start_idx = self.test_begin_idx + self.m_days
             end_idx = self.test_end_idx
-            step_size = self.sampling_days
-            # k_days = self.sampling_days
-            k_days = self.k_days
         else:
             raise NotImplementedError
 
+        print("start idx:{} ({}) / end idx: {} ({})".format(start_idx, dg.date_[start_idx], end_idx, dg.date_[end_idx]))
+
+        return start_idx, end_idx, data_params
+
+    def _dataset(self, mode='train', codes_list=None):
+        input_enc, output_dec, target_dec = [], [], []
+        features_list = []
+        start_idx, end_idx, data_params = self.get_data_params(mode)
+
         code_dict = self.get_code_dict(codes_list)
 
-        print("start idx:{} ({}) / end idx: {} ({})".format(start_idx, self.data_generator.date_[start_idx],
-                                                            end_idx, self.data_generator.date_[end_idx]))
-        for i, d in enumerate(range(start_idx, end_idx, step_size)):
-            _sampled_data = self.data_generator.sample_inputdata(d,
-                                                                 sampling_days=self.sampling_days,
-                                                                 m_days=self.m_days,
-                                                                 k_days=k_days,
-                                                                 max_seq_len_in=self.max_seq_len_in,
-                                                                 max_seq_len_out=self.max_seq_len_out,
-                                                                 **code_dict)
+        for i, d in enumerate(range(start_idx, end_idx, self.sampling_days)):
+            _sampled_data = self.data_generator.sample_inputdata(d, **data_params, **code_dict)
             if _sampled_data is False:
                 continue
             else:
@@ -163,6 +160,7 @@ class DataScheduler:
         _train_dataset = self._dataset('train')
         _eval_dataset = self._dataset('eval')
         if _train_dataset is False or _eval_dataset is False:
+            print('no train/eval data')
             return False
 
         train_input_enc, train_output_dec, train_target_dec, features_list = _train_dataset
@@ -365,7 +363,6 @@ class DataGenerator_v3:
                 return False
 
         if df_not_null.empty:
-            print('no data')
             return False
 
         features_list, features_data = processing(df_not_null, m_days=m_days)

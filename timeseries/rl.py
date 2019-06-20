@@ -268,8 +268,8 @@ class MyEnv(gym.Env):
         else:
             obs_ = self.env_data[self.i_step + 1]['obs'].numpy()
             if self.nav_history[self.i_step] < np.max(self.nav_history[:(self.i_step+1)]) * 0.8:
-                r_delayed = -0.5
-                done =True
+                r_delayed = -0.05
+                done =False
             else:
                 done = False
         info = None

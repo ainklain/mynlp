@@ -69,16 +69,16 @@ def main():
     # while not ds.done:
     for _ in range(1):
         model = TSModel(configs)
-        configs.f_name = 'ts_model_test1.0'
+        configs.f_name = 'ts_model_test1.3'
         if os.path.exists(configs.f_name):
             model.load_model(configs.f_name)
 
-        # ds.set_idx(8000)
+        ds.set_idx(5750)
         ds.train(model,
                  train_steps=configs.train_steps,
                  eval_steps=10,
                  save_steps=200,
-                 early_stopping_count=20,
+                 early_stopping_count=100,
                  model_name=configs.f_name)
 
         env = MyEnv(model, data_scheduler=ds, configs=configs, trading_costs=0.001)
@@ -91,7 +91,7 @@ def main():
         rolling_r = RunningStats()
 
         ppo = PPO(env)
-        f_name = './{}.pkl'.format('actor_v1.0_5')
+        f_name = './{}.pkl'.format('actor_v1.0_new2')
         if os.path.exists(f_name):
             ppo.load_model(f_name)
 
@@ -99,12 +99,12 @@ def main():
         for episode in range(EP_MAX + 1):
             print("episode:{}".format(episode))
             s_t = time.time()
-            if episode == 0:
+            if episode % 1000 == 0:
                 new_data = True
             else:
                 new_data = False
 
-            s = env.reset(length=201, n_tasks=5, new_data=new_data)
+            s = env.reset(length=201, n_tasks=10, new_data=new_data)
             while True:
                 a, v = ppo.evaluate_state(s, stochastic=True)
 
@@ -154,8 +154,8 @@ def main():
 
 
             if episode % 200 == 0:
-                for ep_i in range(5):
-                    s = env.reset(length=201, n_tasks=5, new_data=False, task_i=ep_i)
+                for ep_i in range(10):
+                    s = env.reset(length=201, n_tasks=10, new_data=False, task_i=ep_i)
                     while True:
                         a, v = ppo.evaluate_state(s, stochastic=False)
                         a = tf.clip_by_value(a, env.action_space.low, env.action_space.high)
@@ -180,8 +180,8 @@ def main():
                         a_t, v_t = ppo.evaluate_state(s_t, stochastic=False)
                         a_t = tf.clip_by_value(a_t, test_env.action_space.low, test_env.action_space.high)
                         s_t, r_t, done_t, _ = test_env.step(np.squeeze(a_t))
-
                         if done_t:
+
                             print("global step: {}".format(ppo.global_step))
                             test_env.render(save_filename='./out/rltest/new/env_{}_{}.png'.format(ep_it, ppo.global_step))
                             break
