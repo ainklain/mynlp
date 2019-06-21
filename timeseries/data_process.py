@@ -372,7 +372,7 @@ class DataGenerator_v3:
         M = m_days // sampling_days
         K = k_days // sampling_days
 
-        features_sampled_data = features_data[::5][1:]  # 0, 5, 10, ... 데이터 중 0 데이터 제거 (의미없음)
+        features_sampled_data = features_data[::sampling_days][1:]  # 0, 5, 10, ... 데이터 중 0 데이터 제거 (의미없음)
         assert features_sampled_data.shape[0] == M + K
         _, n_asset, n_feature = features_sampled_data.shape
         question = np.zeros([n_asset, max_seq_len_in, n_feature], dtype=np.float32)

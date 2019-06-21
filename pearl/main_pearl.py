@@ -42,12 +42,12 @@ def main():
     if os.path.exists(ts_configs.f_name):
         model.load_model(ts_configs.f_name)
 
-    ds.set_idx(5750)
+    ds.set_idx(6000)
     ds.train(model,
              train_steps=ts_configs.train_steps,
              eval_steps=10,
              save_steps=200,
-             early_stopping_count=100,
+             early_stopping_count=50,
              model_name=ts_configs.f_name)
 
     # env = MyEnv(model, data_scheduler=ds, configs=ts_configs, trading_costs=0.001)
@@ -113,15 +113,15 @@ def main():
     )
     algorithm = PEARLSoftActorCritic(
         env=env,
-        train_tasks=list(tasks[:variant['n_train_tasks']]),
-        eval_tasks=list(tasks[-variant['n_eval_tasks']:]),
+        train_tasks=list(tasks[:variant['env_params']['n_tasks_dict']['train']]),
+        eval_tasks=list(tasks[-variant['env_params']['n_tasks_dict']['eval']:]),
         nets=[agent, qf1, qf2, vf, target_vf],
         latent_dim=latent_dim,
         **variant['algo_params']
     )
 
     def example():
-        train_tasks = list(tasks[:variant['n_train_tasks']])
+        train_tasks = list(tasks[:variant['env_params']['n_tasks_dict']['train']])
         meta_batch = 64
         indices = np.random.choice(train_tasks, meta_batch)
 

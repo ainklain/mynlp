@@ -2,7 +2,7 @@ import abc
 import numpy as np
 
 import tensorflow as tf
-from tensorflow import Variable
+from tensorflow import Variable, Tensor
 
 import pearl.tf2_util as tfu
 from pearl.core.serializable import Serializable
@@ -96,7 +96,7 @@ def tf2_ify(np_array_or_other):
 
 
 def np_ify(tensor_or_other):
-    if isinstance(tensor_or_other, Variable):
+    if isinstance(tensor_or_other, Variable) or isinstance(tensor_or_other, Tensor):
         return tensor_or_other.numpy()
     else:
         return tensor_or_other

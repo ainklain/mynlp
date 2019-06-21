@@ -10,7 +10,7 @@ default_config = dict(
     env_params=dict(
         n_tasks_dict={'train': 20, 'eval': 5, 'test': 2},  # number of distinct tasks in this domain, shoudl equal sum of train and eval tasks
         trading_costs=0.001,
-        length=500,     # length of timeseries per each task
+        length=100,     # length of timeseries per each task
         # randomize_tasks=True, # shuffle the tasks after creating them
     ),
     algo_params=dict(

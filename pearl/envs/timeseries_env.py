@@ -36,6 +36,7 @@ class MyEnv(Env):
                                             dtype=np.float32)
 
         self._sample_tasks(length)
+        self.reset_task(0)
 
     def get_all_task_idx(self):
         return range(len(self.env_data_list))
@@ -64,12 +65,12 @@ class MyEnv(Env):
             env_data = list()
             idx_y = features_list.index('log_y')
             for j, (features, labels) in enumerate(dataset.take(length * self.n_tasks_dict[mode])):
-                if (j > 0) and (j % self.n_tasks_dict[mode] == 0):
+                if (j > 0) and (j % length == 0):
                     self.env_data_list.append(env_data)
                     env_data = list()
 
                 prediction = self.model.predict(features)
-                true_log_y = labels[0, 0, idx_y]
+                true_log_y = np.array(labels[0, 0, idx_y])
                 env_data.append({'obs': np.squeeze(prediction[:, :1, :]), 'log_y': true_log_y})
 
             e_t = time()
@@ -91,11 +92,11 @@ class MyEnv(Env):
         self.cost_history = np.zeros(self.length)
         self.cum_y_history = np.ones(self.length)
 
-        obs = self.env_data[self.i_step]['obs'].numpy()
+        obs = self.env_data[self.i_step]['obs']
         return obs
 
     def step(self, action):
-        log_y = self.env_data[self.i_step]['log_y'].numpy()
+        log_y = self.env_data[self.i_step]['log_y']
 
         cost = self.trading_costs * np.abs(action - self.prev_position)
         r_instant = (np.exp(log_y) - 1.) * action - cost
@@ -113,13 +114,13 @@ class MyEnv(Env):
 
         if self.i_step == len(self.env_data) - 1:
             done = True
-            obs_ = None
-            if self.nav_history[self.i_step] > 1.07 ** (self.i_step / (250 // self.step_size)):
+            obs_ = np.zeros_like(self.env_data[self.i_step]['obs'])
+            if self.nav_history[self.i_step] > 1.07 ** (self.i_step / (250 // self.data_scheduler.sampling_days)):
                 r_delayed = 0.5
             else:
                 r_delayed = -0.000
         else:
-            obs_ = self.env_data[self.i_step + 1]['obs'].numpy()
+            obs_ = self.env_data[self.i_step + 1]['obs']
             if self.nav_history[self.i_step] < np.max(self.nav_history[:(self.i_step+1)]) * 0.8:
                 r_delayed = -0.05
                 done = False
@@ -132,7 +133,7 @@ class MyEnv(Env):
 
         self.i_step += 1
 
-        return obs_, r_total, done, info
+        return obs_, np.squeeze(r_total), done, info
 
     def render(self, mode='human', statistics=False, save_filename=None):
         return self._render(mode=mode, statistics=statistics, save_filename=save_filename)

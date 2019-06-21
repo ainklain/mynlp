@@ -79,8 +79,8 @@ def rollout(env, agent, max_path_length=np.inf, accum_context=True, resample_z=F
     o = env.reset()
     next_o = None
     path_length = 0
-    if animated:
-        env.render()
+    # if animated:
+    #     env.render()
     while path_length < max_path_length:
         a, agent_info = agent.get_action(o)
         next_o, r, d, env_info = env.step(a)
@@ -95,10 +95,12 @@ def rollout(env, agent, max_path_length=np.inf, accum_context=True, resample_z=F
         env_infos.append(env_info)
         path_length += 1
         if d:
+            if animated:        # for timeseries test only
+                env.render()
             break
         o = next_o
-        if animated:
-            env.render()
+        # if animated:
+        #     env.render()
 
     actions = np.array(actions)
     if len(actions.shape) == 1:
