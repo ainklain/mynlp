@@ -33,10 +33,10 @@ def sublayer_connection(inputs, sublayer, dropout=0.2):
 
 
 class FeedForward(Model):
-    def __init__(self, dim_out, num_units):
+    def __init__(self, dim_out, num_units, out_activation='linear'):
         super().__init__()
         self.in_layer = Dense(num_units, activation=tf.nn.relu)
-        self.out_layer = Dense(dim_out)
+        self.out_layer = Dense(dim_out, activation=out_activation)
 
     def call(self, inputs):
         return self.out_layer(self.in_layer(inputs))
@@ -162,6 +162,11 @@ class TSModel:
                                heads=configs.attention_head_size,
                                num_layers=configs.layer_size)
 
+        self.predictor_ret = FeedForward(4, 64)
+        self.predictor_pos = FeedForward(2, 64, out_activation='softmax')
+        self.predictor_vol = FeedForward(3, 64)
+        self.predictor_mdd = FeedForward(2, 64)
+
         self.optim_encoder_w = None
         self.optim_decoder_w = None
         self.dropout_train = configs.dropout
@@ -169,9 +174,9 @@ class TSModel:
         self.accuracy = tf.metrics.Accuracy()
 
         # decayed_learning_rate = learning_rate * decay_rate ^ (global_step / decay_steps)
-        lr = tf.optimizers.schedules.PolynomialDecay(1e-3, 2000, 5e-4)
+        # lr = tf.optimizers.schedules.PolynomialDecay(1e-3, 2000, 5e-4)
         # lr = tf.optimizers.schedules.PiecewiseConstantDecay([50, 150, 300], [1e-2, 1e-3, 1e-4, 1e-5])
-        self.optimizer = tf.optimizers.Adam(lr)
+        self.optimizer = tf.optimizers.Adam(1e-5)
 
         self._initialize(configs)
 
@@ -212,6 +217,52 @@ class TSModel:
         self.accuracy.update_state(labels, predict)
         if print_loss:
             print("loss:{}".format(np.mean(loss.numpy())))
+
+    def train_mtl(self, features, labels_mtl, print_loss=False):
+        with tf.GradientTape(persistent=True) as tape:
+            x_embed = features['input'] + self.position_encode_in
+            y_embed = features['output'] + self.position_encode_out
+
+            encoder_output = self.encoder(x_embed, dropout=self.dropout_train)
+            predict = self.decoder(y_embed, encoder_output, dropout=self.dropout_train)
+
+            pred_ret = self.predictor_ret(predict)
+            pred_pos = self.predictor_pos(predict)
+            pred_vol = self.predictor_vol(predict)
+            pred_mdd = self.predictor_mdd(predict)
+
+            var_lists = self.encoder.trainable_variables + self.decoder.trainable_variables \
+                        + self.predictor_ret.trainable_variables \
+                        + self.predictor_pos.trainable_variables \
+                        + self.predictor_vol.trainable_variables \
+                        + self.predictor_mdd.trainable_variables
+
+            # loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=labels_))
+            # loss = tf.losses.MSE(labels, predict)
+            loss_ret = tf.losses.MSE(labels_mtl['ret'], pred_ret) * 0.3
+            loss_pos = tf.losses.categorical_crossentropy(labels_mtl['pos'], pred_pos) * 0.4
+            loss_vol = tf.losses.MSE(labels_mtl['std'], pred_vol) * 0.2
+            loss_mdd = tf.losses.MSE(labels_mtl['mdd'], pred_mdd) * 0.1
+
+        grad = tape.gradient(loss_ret + loss_pos + loss_vol + loss_mdd, var_lists)
+        self.optimizer.apply_gradients(zip(grad, var_lists))
+        # grad_ret = tape.gradient(loss_ret, var_lists + self.predictor_ret.trainable_variables)
+        # grad_pos = tape.gradient(loss_pos, var_lists + self.predictor_pos.trainable_variables)
+        # grad_vol = tape.gradient(loss_vol, var_lists + self.predictor_vol.trainable_variables)
+        # grad_mdd = tape.gradient(loss_mdd, var_lists + self.predictor_mdd.trainable_variables)
+        #
+        # self.optimizer.apply_gradients(zip(grad_ret, var_lists + self.predictor_ret.trainable_variables))
+        # self.optimizer.apply_gradients(zip(grad_pos, var_lists + self.predictor_pos.trainable_variables))
+        # self.optimizer.apply_gradients(zip(grad_vol, var_lists + self.predictor_vol.trainable_variables))
+        # self.optimizer.apply_gradients(zip(grad_mdd, var_lists + self.predictor_mdd.trainable_variables))
+
+        del tape
+
+        if print_loss:
+            print("loss_ret:{} / loss_pos: {} / loss_vol: {} / loss_mdd: {}".format(np.mean(loss_ret.numpy()),
+                                                                                    np.mean(loss_pos.numpy()),
+                                                                                    np.mean(loss_vol.numpy()),
+                                                                                    np.mean(loss_mdd.numpy())))
 
     def evaluate(self, datasets, steps=-1):
         loss_avg = 0

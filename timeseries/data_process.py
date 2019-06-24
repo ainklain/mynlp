@@ -29,7 +29,8 @@ class DataScheduler:
         if is_infocode:
             self.data_generator = DataGenerator_v3(configs.data_path)    # infocode
         else:
-            self.data_generator = DataGenerator_v2(configs.data_path)  # bbticker
+            self.data_generator = DataGenerator_factor(configs.data_path)
+            # self.data_generator = DataGenerator_v2(configs.data_path)  # bbticker
 
         self.train_set_length = configs.train_set_length
         self.retrain_days = configs.retrain_days
@@ -61,16 +62,16 @@ class DataScheduler:
         self.test_end_idx = self.base_idx + self.retrain_days
 
     def _dataset_custom(self, start_idx, end_idx, k_days=None, codes_list=None):
-        ds = self.data_generator
+        dg = self.data_generator
         if k_days is None:
             k_days = self.k_days
         input_enc, output_dec, target_dec = [], [], []
 
         code_dict = self.get_code_dict(codes_list)
 
-        print("start idx:{} ({}) / end idx: {} ({})".format(start_idx, ds.date_[start_idx], end_idx, ds.date_[end_idx]))
+        print("start idx:{} ({}) / end idx: {} ({})".format(start_idx, dg.date_[start_idx], end_idx, dg.date_[end_idx]))
         for i, d in enumerate(range(start_idx, end_idx, self.sampling_days)):
-            _sampled_data = ds.sample_inputdata(d,
+            _sampled_data = dg.sample_inputdata(d,
                                                 sampling_days=self.sampling_days,
                                                 m_days=self.m_days,
                                                 k_days=k_days,
@@ -106,12 +107,15 @@ class DataScheduler:
         if mode == 'train':
             start_idx = self.train_begin_idx + self.m_days
             end_idx = self.eval_begin_idx - self.k_days
+            data_params['balance_class'] = True
         elif mode == 'eval':
             start_idx = self.eval_begin_idx + self.m_days
             end_idx = self.test_begin_idx - self.k_days
+            data_params['balance_class'] = True
         elif mode == 'test':
             start_idx = self.test_begin_idx + self.m_days
             end_idx = self.test_end_idx
+            data_params['balance_class'] = False
         else:
             raise NotImplementedError
 
@@ -197,6 +201,20 @@ class DataScheduler:
                     break
 
             model.train(features, labels, print_loss=print_loss)
+            # labels_mtl = {'ret': np.stack([labels[:, :, features_list.index('log_y')],
+            #                                      labels[:, :, features_list.index('log_20y')],
+            #                                      labels[:, :, features_list.index('log_60y')],
+            #                                      labels[:, :, features_list.index('log_120y')]], axis=-1),
+            #               'pos': (np.concatenate([labels[:, :, features_list.index('positive')].numpy() > 0,
+            #                                       labels[:, :, features_list.index('positive')].numpy() <= 0], axis=1)
+            #                       * 1.).reshape([-1, 1, 2]),
+            #               'std': np.stack([labels[:, :, features_list.index('std_20')],
+            #                                      labels[:, :, features_list.index('std_60')],
+            #                                      labels[:, :, features_list.index('std_120')]], axis=-1),
+            #               'mdd': np.stack([labels[:, :, features_list.index('mdd_20')],
+            #                                      labels[:, :, features_list.index('mdd_60')]], axis=-1)}
+            #
+            # model.train_mtl(features, labels_mtl, print_loss=print_loss)
 
     def get_code_dict(self, codes_list):
         if codes_list is not None:
@@ -208,15 +226,17 @@ class DataScheduler:
         if self.is_infocode is True:
             code_dict = {'infocodes': codes_list}
         else:
-            code_dict = {'bbtickers': codes_list}
+            code_dict = {'infocodes': codes_list}
+            # code_dict = {'bbtickers': codes_list}
 
         return code_dict
 
-    def test(self, model, actor=None):
+    def test(self, model, actor=None, codes_list=None):
         test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
         os.makedirs(test_out_path, exist_ok=True)
         dg = self.data_generator
-        codes_list = list(dg.df_pivoted.columns[~dg.df_pivoted.ix[self.base_idx].isna()])
+        if codes_list is None:
+            codes_list = list(dg.df_pivoted.columns[~dg.df_pivoted.ix[self.base_idx].isna()])
         dataset_list = list()
         features_list = list()
         for code_ in codes_list:
@@ -326,12 +346,12 @@ class DataScheduler:
             return False
 
 
-class DataGenerator_v3:
+class DataGenerator_factor:
     # v3: korea stocks data with fft
     def __init__(self, data_path):
-        data_path = './data/kr_close_.csv'
+        data_path = './data/data_for_metarl.csv'
         data_df = pd.read_csv(data_path, index_col=0)
-        self.df_pivoted = data_df[np.sum(~data_df.isna(), axis=1) >= 10]  # 최소 10종목 이상 존재 하는 날짜만
+        self.df_pivoted = (data_df+1).cumprod(axis=0) # return to price
         self.date_ = list(self.df_pivoted.index)
 
     def get_full_dataset(self, start_d, end_d):
@@ -342,7 +362,8 @@ class DataGenerator_v3:
 
     def sample_inputdata(self, base_idx, infocodes=None, sampling_days=5, m_days=60, k_days=20,
                          max_seq_len_in=12,
-                         max_seq_len_out=4):
+                         max_seq_len_out=4,
+                         balance_class=True):
 
         df_selected = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx-m_days])
                                       & (self.df_pivoted.index <= self.date_[base_idx+k_days])]
@@ -382,8 +403,88 @@ class DataGenerator_v3:
 
         answer_data = features_sampled_data[-(K + 1):]
         answer[:, :len(answer_data), :] = np.transpose(answer_data, [1, 0, 2])
+        if balance_class:
+            num_min_class = np.min([np.sum(answer[:, 1, 0] > 0), np.sum(answer[:, 1, 0] <= 0)])
+            idx_pos = np.random.choice(np.where(answer[:, 1, 0] > 0)[0], num_min_class, replace=False)
+            idx_neg = np.random.choice(np.where(answer[:, 1, 0] <= 0)[0], num_min_class, replace=False)
+            idx_bal = np.concatenate([idx_pos, idx_neg])
+            input_enc, output_dec, target_dec = question[idx_bal], answer[idx_bal, :-1, :], answer[idx_bal, 1:, :]
+        else:
+            input_enc, output_dec, target_dec = question[:], answer[:, :-1, :], answer[:, 1:, :]
 
-        input_enc, output_dec, target_dec = question[:], answer[:, :-1, :], answer[:, 1:, :]
+        assert np.sum(input_enc[:, -1, :] - output_dec[:, 0, :]) == 0
+        return input_enc, output_dec, target_dec, features_list
+
+    @property
+    def max_length(self):
+        return len(self.date_)
+
+
+class DataGenerator_v3:
+    # v3: korea stocks data with fft
+    def __init__(self, data_path):
+        data_path = './data/kr_close_.csv'
+        data_df = pd.read_csv(data_path, index_col=0)
+        self.df_pivoted = data_df[np.sum(~data_df.isna(), axis=1) >= 10]  # 최소 10종목 이상 존재 하는 날짜만
+        self.date_ = list(self.df_pivoted.index)
+
+    def get_full_dataset(self, start_d, end_d):
+        df_selected = self.df_pivoted[(self.df_pivoted.index > start_d) & (self.df_pivoted.index <= end_d)]
+        df_selected = df_selected.ix[:, np.sum(~df_selected.isna(), axis=0) >= len(df_selected.index) * 0.9]  # 90% 이상 데이터 존재
+        df_selected.ffill(axis=0)
+        return df_selected
+
+    def sample_inputdata(self, base_idx, infocodes=None, sampling_days=5, m_days=60, k_days=20,
+                         max_seq_len_in=12,
+                         max_seq_len_out=4,
+                         balance_class=True):
+
+        df_selected = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx-m_days])
+                                      & (self.df_pivoted.index <= self.date_[base_idx+k_days])]
+        df_not_null = df_selected.ix[:, np.sum(~df_selected.isna(), axis=0) >= len(df_selected.index) * 0.9]  # 90% 이상 데이터 존재
+        df_not_null.ffill(axis=0)
+        df_not_null = df_not_null.ix[:, np.sum(df_not_null.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
+
+        if infocodes is not None:
+            assert type(infocodes) == list
+            infocodes_exist = []
+            for infocode in infocodes:
+                if infocode in df_not_null.columns:
+                    infocodes_exist.append(infocode)
+
+            if len(infocodes_exist) >= 1:
+                df_not_null = df_not_null[infocodes_exist]
+            else:
+                return False
+
+        if df_not_null.empty:
+            return False
+
+        features_list, features_data = processing(df_not_null, m_days=m_days)
+
+        assert features_data.shape[0] == m_days + k_days + 1
+
+        M = m_days // sampling_days
+        K = k_days // sampling_days
+
+        features_sampled_data = features_data[::sampling_days][1:]  # 0, 5, 10, ... 데이터 중 0 데이터 제거 (의미없음)
+        assert features_sampled_data.shape[0] == M + K
+        _, n_asset, n_feature = features_sampled_data.shape
+        question = np.zeros([n_asset, max_seq_len_in, n_feature], dtype=np.float32)
+        answer = np.zeros([n_asset, max_seq_len_out+1, n_feature], dtype=np.float32)
+
+        question[:] = np.transpose(features_sampled_data[:M], [1, 0, 2])
+
+        answer_data = features_sampled_data[-(K + 1):]
+        answer[:, :len(answer_data), :] = np.transpose(answer_data, [1, 0, 2])
+        if balance_class:
+            num_min_class = np.min([np.sum(answer[:, 1, 0] > 0), np.sum(answer[:, 1, 0] <= 0)])
+            idx_pos = np.random.choice(np.where(answer[:, 1, 0] > 0)[0], num_min_class, replace=False)
+            idx_neg = np.random.choice(np.where(answer[:, 1, 0] <= 0)[0], num_min_class, replace=False)
+            idx_bal = np.concatenate([idx_pos, idx_neg])
+            input_enc, output_dec, target_dec = question[idx_bal], answer[idx_bal, :-1, :], answer[idx_bal, 1:, :]
+        else:
+            input_enc, output_dec, target_dec = question[:], answer[:, :-1, :], answer[:, 1:, :]
 
         assert np.sum(input_enc[:, -1, :] - output_dec[:, 0, :]) == 0
         return input_enc, output_dec, target_dec, features_list

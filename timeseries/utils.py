@@ -38,7 +38,10 @@ def predict_plot(model, dataset, columns_list, size=250, save_dir='out.png'):
     pred_pos = np.zeros_like(true_y)
     pred_y = np.zeros_like(true_y)
     pred_avg = np.zeros_like(true_y)
+
     pred_chart = np.zeros_like(true_y)
+    pred_pos_val = np.zeros_like(true_y)
+    pred_y_val = np.zeros_like(true_y)
 
     prev_w_both = 0
     prev_w_pos = 0
@@ -47,6 +50,8 @@ def predict_plot(model, dataset, columns_list, size=250, save_dir='out.png'):
         predictions = model.predict(features)
         true_y[j] = labels[0, 0, idx_y]
         pred_chart[j] = predictions[0, 0, idx_y]
+        pred_pos_val[j] = (predictions[0, 0, idx_pos] == labels[0, 0, idx_pos])
+        pred_y_val[j] = (np.sign(predictions[0, 0, idx_pos]) == np.sign(labels[0, 0, idx_pos]))
 
         if predictions[0, 0, idx_y] > 0:
             pred_y[j] = labels[0, 0, idx_y] - cost_rate * (1. - prev_w_y)
@@ -76,6 +81,9 @@ def predict_plot(model, dataset, columns_list, size=250, save_dir='out.png'):
                          'pred_avg': np.cumsum(np.log(1. + pred_avg)),
                          # 'pred_chart': np.cumsum(np.log(1. + pred_chart)),
     })
+
+    print("n_pos: {} / n_neg: {}".format(np.sum(true_y > 0), np.sum(true_y < 0)))
+    print("pos acc: {} / y acc: {}".format(np.sum(pred_pos_val) / len(pred_pos_val), np.sum(pred_pos_val) / len(pred_pos_val)))
 
     # plt.plot(data['true_y'], label='real')
     # plt.plot(data['pred_chart'], label='pred')
