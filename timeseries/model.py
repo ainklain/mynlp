@@ -162,13 +162,16 @@ class TSModel:
                                heads=configs.attention_head_size,
                                num_layers=configs.layer_size)
 
-        self.predictor_ret = FeedForward(4, 64)
-        self.predictor_pos = FeedForward(2, 64, out_activation='softmax')
-        self.predictor_vol = FeedForward(3, 64)
-        self.predictor_mdd = FeedForward(2, 64)
+        self.predictor = dict()
+        self.predictor['ret'] = FeedForward(4, 64)
+        self.predictor['pos'] = FeedForward(2, 64, out_activation='softmax')
+        self.predictor['std'] = FeedForward(3, 64)
+        self.predictor['mdd'] = FeedForward(2, 64)
+        self.predictor['fft'] = FeedForward(2, 64)
 
         self.optim_encoder_w = None
         self.optim_decoder_w = None
+        self.optim_predictor_w = dict()
         self.dropout_train = configs.dropout
 
         self.accuracy = tf.metrics.Accuracy()
@@ -184,7 +187,11 @@ class TSModel:
         feature_temp = tf.zeros([1, configs.max_sequence_length_in, configs.embedding_size], dtype=tf.float32)
         # embed_temp = self.embedding(feature_temp)
         enc_temp = self.encoder(feature_temp)
-        _ = self.decoder(feature_temp, enc_temp)
+        dec_temp = self.decoder(feature_temp, enc_temp)
+
+        for key in self.predictor.keys():
+            _ = self.predictor[key](dec_temp)
+            self.optim_predictor_w[key] = self.predictor[key].get_weights()
 
         self.optim_encoder_w = self.encoder.get_weights()
         self.optim_decoder_w = self.decoder.get_weights()
@@ -194,6 +201,9 @@ class TSModel:
     def weight_to_optim(self):
         self.encoder.set_weights(self.optim_encoder_w)
         self.decoder.set_weights(self.optim_decoder_w)
+        for key in self.predictor.keys():
+            self.predictor[key].set_weights(self.optim_predictor_w[key])
+
         self._reset_eval_param()
 
     def _reset_eval_param(self):
@@ -226,43 +236,93 @@ class TSModel:
             encoder_output = self.encoder(x_embed, dropout=self.dropout_train)
             predict = self.decoder(y_embed, encoder_output, dropout=self.dropout_train)
 
-            pred_ret = self.predictor_ret(predict)
-            pred_pos = self.predictor_pos(predict)
-            pred_vol = self.predictor_vol(predict)
-            pred_mdd = self.predictor_mdd(predict)
+            var_lists = self.encoder.trainable_variables + self.decoder.trainable_variables
 
-            var_lists = self.encoder.trainable_variables + self.decoder.trainable_variables \
-                        + self.predictor_ret.trainable_variables \
-                        + self.predictor_pos.trainable_variables \
-                        + self.predictor_vol.trainable_variables \
-                        + self.predictor_mdd.trainable_variables
+            pred_each = dict()
+            loss_each = dict()
+            loss = None
+            for key in self.predictor.keys():
+                pred_each[key] = self.predictor[key](predict)
+                var_lists += self.predictor[key].trainable_variables
 
-            # loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=labels_))
-            # loss = tf.losses.MSE(labels, predict)
-            loss_ret = tf.losses.MSE(labels_mtl['ret'], pred_ret) * 0.3
-            loss_pos = tf.losses.categorical_crossentropy(labels_mtl['pos'], pred_pos) * 0.4
-            loss_vol = tf.losses.MSE(labels_mtl['std'], pred_vol) * 0.2
-            loss_mdd = tf.losses.MSE(labels_mtl['mdd'], pred_mdd) * 0.1
+                if key == 'pos':
+                    loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key])
+                else:
+                    loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key])
 
-        grad = tape.gradient(loss_ret + loss_pos + loss_vol + loss_mdd, var_lists)
+                if loss is None:
+                    loss = loss_each[key]
+                else:
+                    loss += loss_each[key]
+
+        grad = tape.gradient(loss, var_lists)
         self.optimizer.apply_gradients(zip(grad, var_lists))
-        # grad_ret = tape.gradient(loss_ret, var_lists + self.predictor_ret.trainable_variables)
-        # grad_pos = tape.gradient(loss_pos, var_lists + self.predictor_pos.trainable_variables)
-        # grad_vol = tape.gradient(loss_vol, var_lists + self.predictor_vol.trainable_variables)
-        # grad_mdd = tape.gradient(loss_mdd, var_lists + self.predictor_mdd.trainable_variables)
-        #
-        # self.optimizer.apply_gradients(zip(grad_ret, var_lists + self.predictor_ret.trainable_variables))
-        # self.optimizer.apply_gradients(zip(grad_pos, var_lists + self.predictor_pos.trainable_variables))
-        # self.optimizer.apply_gradients(zip(grad_vol, var_lists + self.predictor_vol.trainable_variables))
-        # self.optimizer.apply_gradients(zip(grad_mdd, var_lists + self.predictor_mdd.trainable_variables))
 
         del tape
 
         if print_loss:
-            print("loss_ret:{} / loss_pos: {} / loss_vol: {} / loss_mdd: {}".format(np.mean(loss_ret.numpy()),
-                                                                                    np.mean(loss_pos.numpy()),
-                                                                                    np.mean(loss_vol.numpy()),
-                                                                                    np.mean(loss_mdd.numpy())))
+            print_str = ""
+            for key in loss_each.keys():
+                print_str += "loss_{}: {:.6f} / ".format(key, np.mean(loss_each[key].numpy()))
+
+            print(print_str)
+
+    def evaluate_mtl(self, datasets, features_list, steps=-1):
+        loss_avg = 0
+        for i, (features, labels) in enumerate(datasets.take(steps)):
+            labels_mtl = {'ret': np.stack([labels[:, :, features_list.index('log_y')],
+                                           labels[:, :, features_list.index('log_20y')],
+                                           labels[:, :, features_list.index('log_60y')],
+                                           labels[:, :, features_list.index('log_120y')]], axis=-1),
+                          'pos': (np.concatenate([labels[:, :, features_list.index('positive')].numpy() > 0,
+                                                  labels[:, :, features_list.index('positive')].numpy() <= 0], axis=1)
+                                  * 1.).reshape([-1, 1, 2]),
+                          'std': np.stack([labels[:, :, features_list.index('std_20')],
+                                           labels[:, :, features_list.index('std_60')],
+                                           labels[:, :, features_list.index('std_120')]], axis=-1),
+                          'mdd': np.stack([labels[:, :, features_list.index('mdd_20')],
+                                           labels[:, :, features_list.index('mdd_60')]], axis=-1),
+                          'fft': np.stack([labels[:, :, features_list.index('fft_3com')],
+                                           labels[:, :, features_list.index('fft_100com')]], axis=-1)}
+
+            x_embed = features['input'] + self.position_encode_in
+            y_embed = features['output'] + self.position_encode_out
+
+            encoder_output = self.encoder(x_embed, dropout=0.)
+            predict = self.decoder(y_embed, encoder_output, dropout=0.)
+
+            var_lists = self.encoder.trainable_variables + self.decoder.trainable_variables
+            pred_each = dict()
+            loss_each = dict()
+            loss = None
+            for key in self.predictor.keys():
+                pred_each[key] = self.predictor[key](predict)
+                var_lists += self.predictor[key].trainable_variables
+
+                if key == 'pos':
+                    loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key])
+                else:
+                    loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key])
+
+                if loss is None:
+                    loss = loss_each[key]
+                else:
+                    loss += loss_each[key]
+
+            loss_avg += np.mean(loss.numpy())
+
+        loss_avg = loss_avg / i
+        print("eval loss:{} (steps:{})".format(loss_avg, i))
+        if loss_avg < self.eval_loss:
+            self.eval_loss = loss_avg
+            self.eval_count = 0
+            self.optim_encoder_w = self.encoder.get_weights()
+            self.optim_decoder_w = self.decoder.get_weights()
+            for key in self.predictor.keys():
+                self.optim_predictor_w[key] = self.predictor[key].get_weights()
+
+        else:
+            self.eval_count += 1
 
     def evaluate(self, datasets, steps=-1):
         loss_avg = 0
@@ -300,10 +360,27 @@ class TSModel:
 
         return predict
 
+    def predict_mtl(self, feature):
+
+        x_embed = feature['input'] + self.position_encode_in
+        y_embed = feature['output'] + self.position_encode_out
+
+        encoder_output = self.encoder(x_embed, dropout=0.)
+        predict = self.decoder(y_embed, encoder_output, dropout=0.)
+
+        pred_each = dict()
+        for key in self.predictor.keys():
+            pred_each[key] = self.predictor[key](predict)
+
+        return pred_each
+        # return pred_ret, pred_pos, pred_vol, pred_mdd
+
+
     def save_model(self, f_name):
         w_dict = {}
         w_dict['encoder'] = self.optim_encoder_w
         w_dict['decoder'] = self.optim_decoder_w
+        w_dict['predictor'] = self.optim_predictor_w
 
         # f_name = os.path.join(model_path, model_name)
         with open(f_name, 'wb') as f:
@@ -318,8 +395,11 @@ class TSModel:
 
         self.optim_encoder_w = w_dict['encoder']
         self.optim_decoder_w = w_dict['decoder']
+        self.optim_predictor_w = w_dict['predictor']
 
         self.encoder.set_weights(self.optim_encoder_w)
         self.decoder.set_weights(self.optim_decoder_w)
+        for key in self.optim_predictor_w.keys():
+            self.predictor[key].set_weights(self.optim_predictor_w[key])
 
         print("model loaded. (path: {})".format(f_name))

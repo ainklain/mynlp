@@ -91,7 +91,7 @@ def main():
         rolling_r = RunningStats()
 
         ppo = PPO(env)
-        f_name = './{}.pkl'.format('actor_v1.0_new2')
+        f_name = './{}.pkl'.format('actor_v1.0_new3')
         if os.path.exists(f_name):
             ppo.load_model(f_name)
 
@@ -99,7 +99,8 @@ def main():
         for episode in range(EP_MAX + 1):
             print("episode:{}".format(episode))
             s_t = time.time()
-            if episode % 1000 == 0:
+            # if episode % 1000 == 0:
+            if episode == 0:
                 new_data = True
             else:
                 new_data = False

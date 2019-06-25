@@ -4,6 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from collections import OrderedDict
 
+
 def normalize(arr_x, eps=1e-6, M=None):
     if M is None:
         return (arr_x - np.mean(arr_x, axis=0)) / (np.std(arr_x, axis=0) + eps)
@@ -42,6 +43,8 @@ def predict_plot(model, dataset, columns_list, size=250, save_dir='out.png'):
     pred_chart = np.zeros_like(true_y)
     pred_pos_val = np.zeros_like(true_y)
     pred_y_val = np.zeros_like(true_y)
+    real_pos_val = np.zeros_like(true_y)
+    real_y_val = np.zeros_like(true_y)
 
     prev_w_both = 0
     prev_w_pos = 0
@@ -50,8 +53,10 @@ def predict_plot(model, dataset, columns_list, size=250, save_dir='out.png'):
         predictions = model.predict(features)
         true_y[j] = labels[0, 0, idx_y]
         pred_chart[j] = predictions[0, 0, idx_y]
-        pred_pos_val[j] = (predictions[0, 0, idx_pos] == labels[0, 0, idx_pos])
-        pred_y_val[j] = (np.sign(predictions[0, 0, idx_pos]) == np.sign(labels[0, 0, idx_pos]))
+        pred_pos_val[j] = predictions[0, 0, idx_pos]
+        pred_y_val[j] = predictions[0, 0, idx_y]
+        real_pos_val[j] = labels[0, 0, idx_pos]
+        real_y_val[j] = labels[0, 0, idx_y]
 
         if predictions[0, 0, idx_y] > 0:
             pred_y[j] = labels[0, 0, idx_y] - cost_rate * (1. - prev_w_y)
@@ -74,16 +79,34 @@ def predict_plot(model, dataset, columns_list, size=250, save_dir='out.png'):
 
         pred_avg[j] = (pred_y[j] + pred_pos[j]) / 2.
 
-    data = pd.DataFrame({'true_y': np.cumsum(np.log(1. + true_y)),
-                         'pred_both': np.cumsum(np.log(1. + pred_both)),
-                         'pred_pos': np.cumsum(np.log(1. + pred_pos)),
-                         'pred_y': np.cumsum(np.log(1. + pred_y)),
-                         'pred_avg': np.cumsum(np.log(1. + pred_avg)),
+    data = pd.DataFrame({'true_y': np.cumsum(np.log(1. + true_y[:(j+1)])),
+                         'pred_both': np.cumsum(np.log(1. + pred_both[:(j+1)])),
+                         'pred_pos': np.cumsum(np.log(1. + pred_pos[:(j+1)])),
+                         'pred_y': np.cumsum(np.log(1. + pred_y[:(j+1)])),
+                         'pred_avg': np.cumsum(np.log(1. + pred_avg[:(j+1)])),
                          # 'pred_chart': np.cumsum(np.log(1. + pred_chart)),
     })
 
+    pos_acc = np.sum((pred_pos_val[:(j+1)] > 0) == (real_pos_val[:(j+1)] > 0)) / (j+1)
+    pos_recall_p = np.sum((pred_pos_val[:(j+1)] > 0) & (real_pos_val[:(j+1)] > 0)) / np.sum(real_pos_val[:(j+1)] > 0)
+    pos_precision_p = np.sum((pred_pos_val[:(j+1)] > 0) & (real_pos_val[:(j+1)] > 0)) / np.sum(pred_pos_val[:(j + 1)] > 0)
+    pos_recall_n = np.sum((pred_pos_val[:(j+1)] < 0) & (real_pos_val[:(j+1)] < 0)) / np.sum(real_pos_val[:(j+1)] < 0)
+    pos_precision_n = np.sum((pred_pos_val[:(j+1)] < 0) & (real_pos_val[:(j+1)] < 0)) / np.sum(pred_pos_val[:(j + 1)] < 0)
+
+    y_acc = np.sum((pred_y_val[:(j+1)] > 0) == (real_y_val[:(j+1)] > 0)) / (j+1)
+    y_recall_p = np.sum((pred_y_val[:(j+1)] > 0) & (real_y_val[:(j+1)] > 0)) / np.sum(real_y_val[:(j+1)] > 0)
+    y_precision_p = np.sum((pred_y_val[:(j+1)] > 0) & (real_y_val[:(j+1)] > 0)) / np.sum(pred_y_val[:(j + 1)] > 0)
+    y_recall_n = np.sum((pred_y_val[:(j+1)] < 0) & (real_y_val[:(j+1)] < 0)) / np.sum(real_y_val[:(j+1)] < 0)
+    y_precision_n = np.sum((pred_y_val[:(j+1)] < 0) & (real_y_val[:(j+1)] < 0)) / np.sum(pred_y_val[:(j + 1)] < 0)
+
     print("n_pos: {} / n_neg: {}".format(np.sum(true_y > 0), np.sum(true_y < 0)))
-    print("pos acc: {} / y acc: {}".format(np.sum(pred_pos_val) / len(pred_pos_val), np.sum(pred_pos_val) / len(pred_pos_val)))
+    print("[[positive]] acc: {:.4f} / [recall] p: {:.4f}, n: {:.4f} / [precision] p: {:.4f}, n: {:.4f}".format(pos_acc,
+                                                                                           pos_recall_p, pos_recall_n,
+                                                                                           pos_precision_p, pos_precision_n))
+
+    print("[[return]] acc: {:.4f} / [recall] p: {:.4f}, n: {:.4f} / [precision] p: {:.4f}, n: {:.4f}".format(y_acc,
+                                                                                           y_recall_p, y_recall_n,
+                                                                                           y_precision_p, y_precision_n))
 
     # plt.plot(data['true_y'], label='real')
     # plt.plot(data['pred_chart'], label='pred')
@@ -105,6 +128,96 @@ def predict_plot(model, dataset, columns_list, size=250, save_dir='out.png'):
     # plt.plot(true_y, label='real')
     # plt.plot(pred_chart, label='pred')
     # plt.legend()
+
+
+
+def predict_plot_mtl(model, dataset, columns_list, size=250, save_dir='out.png'):
+
+    cost_rate = 0.000
+    idx_y = columns_list.index('log_y')
+    idx_pos = columns_list.index('positive')
+
+    true_y = np.zeros(size)
+    pred_both = np.zeros_like(true_y)
+    pred_pos = np.zeros_like(true_y)
+    pred_y = np.zeros_like(true_y)
+    pred_avg = np.zeros_like(true_y)
+
+    pred_chart = np.zeros_like(true_y)
+    pred_pos_val = np.zeros_like(true_y)
+    pred_y_val = np.zeros_like(true_y)
+    real_pos_val = np.zeros_like(true_y)
+    real_y_val = np.zeros_like(true_y)
+
+    prev_w_both = 0
+    prev_w_pos = 0
+    prev_w_y = 0
+    for j, (features, labels) in enumerate(dataset.take(size)):
+        predictions = model.predict_mtl(features)
+        # p_ret, p_pos, p_vol, p_mdd = predictions
+
+        true_y[j] = labels[0, 0, idx_y]
+        pred_chart[j] = predictions['ret'][0, 0, 0]
+        pred_pos_val[j] = predictions['pos'][0, 0, 0] - 0.5
+        pred_y_val[j] = predictions['ret'][0, 0, 0]
+        real_pos_val[j] = labels[0, 0, idx_pos]
+        real_y_val[j] = labels[0, 0, idx_y]
+
+        if predictions['ret'][0, 0, 0] > 0:
+            pred_y[j] = labels[0, 0, idx_y] - cost_rate * (1. - prev_w_y)
+            prev_w_y = 1
+        else:
+            pred_y[j] = - cost_rate * prev_w_y
+            prev_w_y = 0
+        if predictions['pos'][0, 0, 0] > 0.5:
+            pred_pos[j] = labels[0, 0, idx_y] - cost_rate * (1. - prev_w_pos)
+            prev_w_pos = 1
+        else:
+            pred_pos[j] = - cost_rate * prev_w_pos
+            prev_w_pos = 0
+        if (predictions['ret'][0, 0, 0] > 0) and (predictions['pos'][0, 0, 0] > 0.5):
+            pred_both[j] = labels[0, 0, idx_y] - cost_rate * (1. - prev_w_both)
+            prev_w_both = 1
+        else:
+            pred_both[j] = - cost_rate * prev_w_both
+            prev_w_both = 0
+
+        pred_avg[j] = (pred_y[j] + pred_pos[j]) / 2.
+
+    data = pd.DataFrame({'true_y': np.cumsum(np.log(1. + true_y[:(j+1)])),
+                         'pred_both': np.cumsum(np.log(1. + pred_both[:(j+1)])),
+                         'pred_pos': np.cumsum(np.log(1. + pred_pos[:(j+1)])),
+                         'pred_y': np.cumsum(np.log(1. + pred_y[:(j+1)])),
+                         'pred_avg': np.cumsum(np.log(1. + pred_avg[:(j+1)])),
+                         # 'pred_chart': np.cumsum(np.log(1. + pred_chart)),
+    })
+
+    pos_acc = np.sum((pred_pos_val[:(j+1)] > 0) == (real_pos_val[:(j+1)] > 0)) / (j+1)
+    pos_recall_p = np.sum((pred_pos_val[:(j+1)] > 0) & (real_pos_val[:(j+1)] > 0)) / np.sum(real_pos_val[:(j+1)] > 0)
+    pos_precision_p = np.sum((pred_pos_val[:(j+1)] > 0) & (real_pos_val[:(j+1)] > 0)) / np.sum(pred_pos_val[:(j + 1)] > 0)
+    pos_recall_n = np.sum((pred_pos_val[:(j+1)] < 0) & (real_pos_val[:(j+1)] < 0)) / np.sum(real_pos_val[:(j+1)] < 0)
+    pos_precision_n = np.sum((pred_pos_val[:(j+1)] < 0) & (real_pos_val[:(j+1)] < 0)) / np.sum(pred_pos_val[:(j + 1)] < 0)
+
+    y_acc = np.sum((pred_y_val[:(j+1)] > 0) == (real_y_val[:(j+1)] > 0)) / (j+1)
+    y_recall_p = np.sum((pred_y_val[:(j+1)] > 0) & (real_y_val[:(j+1)] > 0)) / np.sum(real_y_val[:(j+1)] > 0)
+    y_precision_p = np.sum((pred_y_val[:(j+1)] > 0) & (real_y_val[:(j+1)] > 0)) / np.sum(pred_y_val[:(j + 1)] > 0)
+    y_recall_n = np.sum((pred_y_val[:(j+1)] < 0) & (real_y_val[:(j+1)] < 0)) / np.sum(real_y_val[:(j+1)] < 0)
+    y_precision_n = np.sum((pred_y_val[:(j+1)] < 0) & (real_y_val[:(j+1)] < 0)) / np.sum(pred_y_val[:(j + 1)] < 0)
+
+    print("n_pos: {} / n_neg: {}".format(np.sum(true_y > 0), np.sum(true_y < 0)))
+    print("[[positive]] acc: {:.4f} / [recall] p: {:.4f}, n: {:.4f} / [precision] p: {:.4f}, n: {:.4f}".format(pos_acc,
+                                                                                           pos_recall_p, pos_recall_n,
+                                                                                           pos_precision_p, pos_precision_n))
+
+    print("[[return]] acc: {:.4f} / [recall] p: {:.4f}, n: {:.4f} / [precision] p: {:.4f}, n: {:.4f}".format(y_acc,
+                                                                                           y_recall_p, y_recall_n,
+                                                                                           y_precision_p, y_precision_n))
+
+    fig = plt.figure()
+    plt.plot(data)
+    plt.legend(data.columns)
+    fig.savefig(save_dir)
+    plt.close(fig)
 
 
 

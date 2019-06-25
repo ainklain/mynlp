@@ -113,7 +113,8 @@ class DataScheduler:
             end_idx = self.test_begin_idx - self.k_days
             data_params['balance_class'] = True
         elif mode == 'test':
-            start_idx = self.test_begin_idx + self.m_days
+            # start_idx = self.test_begin_idx + self.m_days
+            start_idx = self.test_begin_idx
             end_idx = self.test_end_idx
             data_params['balance_class'] = False
         else:
@@ -150,12 +151,13 @@ class DataScheduler:
         return input_enc, output_dec, target_dec, features_list
 
     def train(self,
-            model,
-            train_steps=1,
-            eval_steps=10,
-            save_steps=50,
-            early_stopping_count=10,
-            model_name='ts_model_v1.0'):
+              model,
+              train_steps=1,
+              eval_steps=10,
+              save_steps=50,
+              early_stopping_count=10,
+              model_name='ts_model_v1.0',
+              mtl=True):
 
         # make directories for graph results (both train and test one)
         train_out_path = os.path.join(self.data_out_path, '{}'.format(self.base_idx))
@@ -185,14 +187,23 @@ class DataScheduler:
             print_loss = False
             if i % save_steps == 0:
                 model.save_model(model_name)
-                predict_plot(model, train_dataset_plot, features_list, 250,
-                             save_dir='{}/train_{}.png'.format(train_out_path, i))
-                predict_plot(model, eval_dataset, features_list, 250,
-                             save_dir='{}/eval_{}.png'.format(train_out_path, i))
+                if mtl:
+                    predict_plot_mtl(model, train_dataset_plot, features_list, 250,
+                                 save_dir='{}/train_{}.png'.format(train_out_path, i))
+                    predict_plot_mtl(model, eval_dataset, features_list, 250,
+                                 save_dir='{}/eval_{}.png'.format(train_out_path, i))
+                else:
+                    predict_plot(model, train_dataset_plot, features_list, 250,
+                                 save_dir='{}/train_{}.png'.format(train_out_path, i))
+                    predict_plot(model, eval_dataset, features_list, 250,
+                                 save_dir='{}/eval_{}.png'.format(train_out_path, i))
 
             if i % eval_steps == 0:
                 print_loss = True
-                model.evaluate(eval_dataset, steps=20)
+                if mtl:
+                    model.evaluate_mtl(eval_dataset, features_list, steps=50)
+                else:
+                    model.evaluate(eval_dataset, steps=20)
                 print("[t: {} / i: {}] min_eval_loss:{} / count:{}".format(self.base_idx, i, model.eval_loss, model.eval_count))
                 if model.eval_count >= early_stopping_count:
                     print("[t: {} / i: {}] train finished.".format(self.base_idx, i))
@@ -200,21 +211,25 @@ class DataScheduler:
                     model.save_model(model_name)
                     break
 
-            model.train(features, labels, print_loss=print_loss)
-            # labels_mtl = {'ret': np.stack([labels[:, :, features_list.index('log_y')],
-            #                                      labels[:, :, features_list.index('log_20y')],
-            #                                      labels[:, :, features_list.index('log_60y')],
-            #                                      labels[:, :, features_list.index('log_120y')]], axis=-1),
-            #               'pos': (np.concatenate([labels[:, :, features_list.index('positive')].numpy() > 0,
-            #                                       labels[:, :, features_list.index('positive')].numpy() <= 0], axis=1)
-            #                       * 1.).reshape([-1, 1, 2]),
-            #               'std': np.stack([labels[:, :, features_list.index('std_20')],
-            #                                      labels[:, :, features_list.index('std_60')],
-            #                                      labels[:, :, features_list.index('std_120')]], axis=-1),
-            #               'mdd': np.stack([labels[:, :, features_list.index('mdd_20')],
-            #                                      labels[:, :, features_list.index('mdd_60')]], axis=-1)}
-            #
-            # model.train_mtl(features, labels_mtl, print_loss=print_loss)
+            if mtl is True:
+                labels_mtl = {'ret': np.stack([labels[:, :, features_list.index('log_y')],
+                                                     labels[:, :, features_list.index('log_20y')],
+                                                     labels[:, :, features_list.index('log_60y')],
+                                                     labels[:, :, features_list.index('log_120y')]], axis=-1),
+                              'pos': (np.concatenate([labels[:, :, features_list.index('positive')].numpy() > 0,
+                                                      labels[:, :, features_list.index('positive')].numpy() <= 0], axis=1)
+                                      * 1.).reshape([-1, 1, 2]),
+                              'std': np.stack([labels[:, :, features_list.index('std_20')],
+                                                     labels[:, :, features_list.index('std_60')],
+                                                     labels[:, :, features_list.index('std_120')]], axis=-1),
+                              'mdd': np.stack([labels[:, :, features_list.index('mdd_20')],
+                                                     labels[:, :, features_list.index('mdd_60')]], axis=-1),
+                              'fft': np.stack([labels[:, :, features_list.index('fft_3com')],
+                                               labels[:, :, features_list.index('fft_100com')]], axis=-1)}
+
+                model.train_mtl(features, labels_mtl, print_loss=print_loss)
+            else:
+                model.train(features, labels, print_loss=print_loss)
 
     def get_code_dict(self, codes_list):
         if codes_list is not None:
@@ -231,7 +246,7 @@ class DataScheduler:
 
         return code_dict
 
-    def test(self, model, actor=None, codes_list=None):
+    def test(self, model, actor=None, codes_list=None, mtl=True):
         test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
         os.makedirs(test_out_path, exist_ok=True)
         dg = self.data_generator
@@ -267,9 +282,14 @@ class DataScheduler:
                 test_dataset = dataset_process(input_enc, new_output, target_dec, batch_size=1, mode='test')
                 # test_dataset = dataset_process(input_enc, output_dec, target_dec, batch_size=1, mode='test')
 
-                predict_plot(model, test_dataset, features_list,
-                             size=self.retrain_days // self.sampling_days,
-                             save_dir='{}/{}.png'.format(test_out_path, code_))
+                if mtl:
+                    predict_plot_mtl(model, test_dataset, features_list,
+                                 size=self.retrain_days // self.sampling_days,
+                                 save_dir='{}/{}.png'.format(test_out_path, code_))
+                else:
+                    predict_plot(model, test_dataset, features_list,
+                                 size=self.retrain_days // self.sampling_days,
+                                 save_dir='{}/{}.png'.format(test_out_path, code_))
 
             dataset_list.append(test_dataset)
         return dataset_list, features_list
@@ -351,7 +371,7 @@ class DataGenerator_factor:
     def __init__(self, data_path):
         data_path = './data/data_for_metarl.csv'
         data_df = pd.read_csv(data_path, index_col=0)
-        self.df_pivoted = (data_df+1).cumprod(axis=0) # return to price
+        self.df_pivoted = (data_df[['beme', 'gpa', 'mom', 'mkt_rf']]+1).cumprod(axis=0) # return to price
         self.date_ = list(self.df_pivoted.index)
 
     def get_full_dataset(self, start_d, end_d):

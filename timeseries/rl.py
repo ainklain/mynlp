@@ -216,7 +216,7 @@ class MyEnv(gym.Env):
             task_i = np.random.random_integers(0, n_tasks - 1)
 
         if new_data is True:
-            self.datasets, self.features = self.get_datasets(start_idx, length, step_size, n_tasks)
+            self.datasets, self.features = self.get_datasets(start_idx, length, n_tasks)
             self.datasets_to_env(self.datasets, self.features, length)
 
         self.env_data = self.env_data_list[task_i]
@@ -425,7 +425,7 @@ class MyEnv(gym.Env):
         e_t = time()
         print('dataset_to_env time: {}'.format(e_t - s_t))
 
-    def get_datasets(self, start_idx, length, step_size, n_tasks=1, no_future=True):
+    def get_datasets(self, start_idx, length, n_tasks=1, no_future=True):
         s_t = time()
         ds = self.data_scheduler
 
@@ -434,12 +434,10 @@ class MyEnv(gym.Env):
             e_idx = ds.eval_begin_idx - length
             start_idx = np.random.random_integers(s_idx, e_idx, n_tasks)
 
-        if step_size is None:
-            step_size = self.data_scheduler.sampling_days
 
         datasets = list()
         for idx in start_idx:
-            input_enc, output_dec, target_dec, features_list = self.data_scheduler._dataset_custom(start_idx=idx, end_idx=idx + length, step_size=step_size)
+            input_enc, output_dec, target_dec, features_list = self.data_scheduler._dataset_custom(start_idx=idx, end_idx=idx + length)
 
             if no_future:
                 new_output = np.zeros_like(output_dec)
@@ -472,7 +470,7 @@ class MyEnv(gym.Env):
 
         datasets = list()
         for idx in start_idx:
-            input_enc, output_dec, target_dec, features_list = self.data_scheduler._dataset_custom(start_idx=idx, end_idx=idx + length, step_size=step_size, bbtickers=bbtickers)
+            input_enc, output_dec, target_dec, features_list = self.data_scheduler._dataset_custom(start_idx=idx, end_idx=idx + length, bbtickers=bbtickers)
 
             if no_future:
                 new_output = np.zeros_like(output_dec)

@@ -32,23 +32,26 @@ def deep_update_dict(fr, to):
 def main():
     ts_configs = Config()
     # get data for all assets and dates
-    ds = DataScheduler(ts_configs, is_infocode=False)
+    ds = DataScheduler(ts_configs, is_infocode=True)
     ds.test_end_idx = ds.base_idx + 1000
 
     ii = 0
+    while not ds.done:
+        model = TSModel(ts_configs)
+        ts_configs.f_name = 'ts_model_test_info1.1_mtl'
+        if os.path.exists(ts_configs.f_name):
+            model.load_model(ts_configs.f_name)
 
-    model = TSModel(ts_configs)
-    ts_configs.f_name = 'ts_model_test_factor1.0'
-    if os.path.exists(ts_configs.f_name):
-        model.load_model(ts_configs.f_name)
+        ds.set_idx(6000)
+        ds.train(model,
+                 train_steps=ts_configs.train_steps,
+                 eval_steps=10,
+                 save_steps=200,
+                 early_stopping_count=20,
+                 model_name=ts_configs.f_name)
 
-    # ds.set_idx(6250)
-    ds.train(model,
-             train_steps=ts_configs.train_steps,
-             eval_steps=10,
-             save_steps=200,
-             early_stopping_count=30,
-             model_name=ts_configs.f_name)
+        ds.test(model)
+        ds.next()
 
     # env = MyEnv(model, data_scheduler=ds, configs=ts_configs, trading_costs=0.001)
 
