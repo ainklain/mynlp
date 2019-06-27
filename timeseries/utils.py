@@ -130,6 +130,129 @@ def predict_plot(model, dataset, columns_list, size=250, save_dir='out.png'):
     # plt.legend()
 
 
+def predict_plot_mtl_test(model, dataset_list, save_dir='out.png', ylog=False):
+    if dataset_list is False:
+        return False
+    else:
+        input_enc_list, output_dec_list, target_dec_list, features_list, start_date, end_date = dataset_list
+
+    idx_y = features_list.index('log_y')
+
+    true_y = np.zeros(len(input_enc_list) + 1)
+    pred_pos_ls = np.zeros_like(true_y)
+    pred_pos_ls_wgt_adj = np.zeros_like(true_y)
+
+    pred_pos_l = np.zeros_like(true_y)
+    pred_pos_s = np.zeros_like(true_y)
+
+    pred_pos_l_wgt = np.zeros_like(true_y)
+    pred_pos_l_wgt_adj = np.zeros_like(true_y)
+    pred_pos_s_wgt = np.zeros_like(true_y)
+    pred_pos_s_wgt_adj = np.zeros_like(true_y)
+
+    pred_q1 = np.zeros_like(true_y)
+    pred_q2 = np.zeros_like(true_y)
+    pred_q3 = np.zeros_like(true_y)
+    pred_q4 = np.zeros_like(true_y)
+    pred_q5 = np.zeros_like(true_y)
+
+    for i, (input_enc_t, output_dec_t, target_dec_t) in enumerate(zip(input_enc_list, output_dec_list, target_dec_list)):
+        t = i + 1
+        assert np.sum(input_enc_t[:, -1, :] - output_dec_t[:, 0, :]) == 0
+        new_output_t = np.zeros_like(output_dec_t)
+        new_output_t[:, 0, :] = output_dec_t[:, 0, :]
+
+        features = {'input': input_enc_t, 'output': new_output_t}
+        labels = target_dec_t
+
+        predictions = model.predict_mtl(features)
+        # p_ret, p_pos, p_vol, p_mdd = predictions
+
+        true_y[t] = np.mean(labels[:, 0, idx_y])
+
+        n_assets = len(predictions['pos'][:, 0, 0])
+        is_pos_position = predictions['pos'][:, 0, 0] > 0.5
+        is_neg_position = predictions['pos'][:, 0, 0] < 0.5
+
+        q1_crit, q2_crit, q3_crit, q4_crit = np.percentile(predictions['pos'][:, 0, 0], q=[80, 60, 40, 20])
+        pred_q1[t] = np.mean(labels[predictions['pos'][:, 0, 0] >= q1_crit, 0, idx_y])
+        pred_q2[t] = np.mean(labels[(predictions['pos'][:, 0, 0] >= q2_crit) & (predictions['pos'][:, 0, 0] < q1_crit), 0, idx_y])
+        pred_q3[t] = np.mean(labels[(predictions['pos'][:, 0, 0] >= q3_crit) & (predictions['pos'][:, 0, 0] < q2_crit), 0, idx_y])
+        pred_q4[t] = np.mean(labels[(predictions['pos'][:, 0, 0] >= q4_crit) & (predictions['pos'][:, 0, 0] < q3_crit), 0, idx_y])
+        pred_q5[t] = np.mean(labels[predictions['pos'][:, 0, 0] < q4_crit, 0, idx_y])
+
+        # if predictions['ret'][0, 0, 0] > 0:
+        if np.sum(is_pos_position) > 0:
+            pred_pos_l[t] = np.mean(labels[is_pos_position, 0, idx_y])
+            pred_pos_l_wgt[t] = np.sum(is_pos_position) / n_assets
+            pred_pos_l_wgt_adj[t] = np.sum(labels[is_pos_position, 0, idx_y]) / n_assets
+        else:
+            pred_pos_l[t] = 0
+            pred_pos_l_wgt[t] = 0
+            pred_pos_l_wgt_adj[t] = 0
+
+        if np.sum(is_neg_position) > 0:
+            pred_pos_s[t] = np.mean(labels[is_neg_position, 0, idx_y])
+            pred_pos_s_wgt[t] = np.sum(is_neg_position) / n_assets
+            pred_pos_s_wgt_adj[t] = np.sum(labels[is_neg_position, 0, idx_y]) / n_assets
+        else:
+            pred_pos_s[t] = 0
+            pred_pos_s_wgt[t] = 0
+            pred_pos_s_wgt_adj[t] = 0
+
+        pred_pos_ls[t] = pred_pos_l[t] - pred_pos_s[t]
+        pred_pos_ls_wgt_adj[t] = pred_pos_l_wgt_adj[t] - pred_pos_s_wgt_adj[t]
+
+
+    data = pd.DataFrame({'true_y': np.cumprod(1. + true_y),
+                         'pred_pos_ls': np.cumprod(1. + pred_pos_ls),
+                         'pred_pos_ls_wgt_adj': np.cumprod(1. + pred_pos_ls_wgt_adj),
+                         'pred_pos_l': np.cumprod(1. + pred_pos_l),
+                         'pred_pos_s': np.cumprod(1. + pred_pos_s),
+                         'pred_pos_l_wgt': pred_pos_l_wgt,
+                         'pred_pos_l_wgt_adj': np.cumprod(1. + pred_pos_l_wgt_adj),
+                         'pred_pos_s_wgt': pred_pos_s_wgt,
+                         'pred_pos_s_wgt_adj': np.cumprod(1. + pred_pos_s_wgt_adj),
+                         'pred_q1': np.cumprod(1. + pred_q1),
+                         'pred_q2': np.cumprod(1. + pred_q2),
+                         'pred_q3': np.cumprod(1. + pred_q3),
+                         'pred_q4': np.cumprod(1. + pred_q4),
+                         'pred_q5': np.cumprod(1. + pred_q5)
+    })
+
+    fig = plt.figure()
+    fig.suptitle('{} ~ {}'.format(start_date, end_date))
+    ax1, ax2, ax3, ax4 = fig.subplots(4, 1)
+    ax1.plot(data[['true_y', 'pred_pos_ls', 'pred_pos_l', 'pred_pos_s']])
+    box = ax1.get_position()
+    ax1.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+    ax1.legend(['true_y', 'long-short', 'long', 'short'], loc='center left', bbox_to_anchor=(1, 0.5))
+    if ylog:
+        ax1.set_yscale('log', basey=2)
+
+    ax2.plot(data[['true_y', 'pred_pos_ls_wgt_adj', 'pred_pos_l_wgt_adj', 'pred_pos_s_wgt_adj']])
+    box = ax2.get_position()
+    ax2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+    ax2.legend(['true_y', 'long-short(adj)', 'long(adj)', 'short(adj)'], loc='center left', bbox_to_anchor=(1, 0.5))
+    if ylog:
+        ax2.set_yscale('log', basey=2)
+
+    ax3.plot(data[['true_y', 'pred_q1', 'pred_q2', 'pred_q3', 'pred_q4', 'pred_q5']])
+    box = ax3.get_position()
+    ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+    ax3.legend(['true_y', 'q1', 'q2', 'q3', 'q4', 'q5'], loc='center left', bbox_to_anchor=(1, 0.5))
+    # if ylog:
+    ax3.set_yscale('log', basey=2)
+
+    ax4.plot(data[['pred_pos_l_wgt']])
+    box = ax4.get_position()
+    ax4.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+    ax4.legend(['long_wgt'], loc='center left', bbox_to_anchor=(1, 0.5))
+    ax4.set_ylim([0., 1.])
+
+    fig.savefig(save_dir)
+    plt.close(fig)
+
 
 def predict_plot_mtl(model, dataset, columns_list, size=250, save_dir='out.png'):
 

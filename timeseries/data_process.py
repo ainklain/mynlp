@@ -113,8 +113,8 @@ class DataScheduler:
             end_idx = self.test_begin_idx - self.k_days
             data_params['balance_class'] = True
         elif mode == 'test':
-            # start_idx = self.test_begin_idx + self.m_days
-            start_idx = self.test_begin_idx
+            start_idx = self.test_begin_idx + self.m_days
+            # start_idx = self.test_begin_idx
             end_idx = self.test_end_idx
             data_params['balance_class'] = False
         else:
@@ -144,11 +144,14 @@ class DataScheduler:
         if len(input_enc) == 0:
             return False
 
-        input_enc = np.concatenate(input_enc, axis=0)
-        output_dec = np.concatenate(output_dec, axis=0)
-        target_dec = np.concatenate(target_dec, axis=0)
+        if not (mode == 'test' and codes_list is None):
+            input_enc = np.concatenate(input_enc, axis=0)
+            output_dec = np.concatenate(output_dec, axis=0)
+            target_dec = np.concatenate(target_dec, axis=0)
 
-        return input_enc, output_dec, target_dec, features_list
+        start_date = self.data_generator.date_[start_idx]
+        end_date = self.data_generator.date_[end_idx]
+        return input_enc, output_dec, target_dec, features_list, start_date, end_date
 
     def train(self,
               model,
@@ -169,8 +172,8 @@ class DataScheduler:
             print('no train/eval data')
             return False
 
-        train_input_enc, train_output_dec, train_target_dec, features_list = _train_dataset
-        eval_input_enc, eval_output_dec, eval_target_dec, _ = _eval_dataset
+        train_input_enc, train_output_dec, train_target_dec, features_list, _, _ = _train_dataset
+        eval_input_enc, eval_output_dec, eval_target_dec, _, _, _ = _eval_dataset
 
         assert np.sum(train_input_enc[:, -1, :] - train_output_dec[:, 0, :]) == 0
         assert np.sum(eval_input_enc[:, -1, :] - eval_output_dec[:, 0, :]) == 0
@@ -246,12 +249,27 @@ class DataScheduler:
 
         return code_dict
 
-    def test(self, model, actor=None, codes_list=None, mtl=True):
-        test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
+    def test(self, model, actor=None, codes_list=None, mtl=True, each_plot=True, out_dir=None, file_nm='out.png', ylog=False):
+        if out_dir is None:
+            test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
+        else:
+            test_out_path = out_dir
         os.makedirs(test_out_path, exist_ok=True)
+        if file_nm is None:
+            save_file_name = '{}/{}'.format(test_out_path, '_all.png')
+        else:
+            save_file_name = '{}/{}'.format(test_out_path, file_nm)
         dg = self.data_generator
         if codes_list is None:
             codes_list = list(dg.df_pivoted.columns[~dg.df_pivoted.ix[self.base_idx].isna()])
+
+            _dataset_list = self._dataset('test')
+            predict_plot_mtl_test(model, _dataset_list,  save_dir=save_file_name, ylog=ylog)
+
+            if each_plot is False:
+                print('plot for all done. ')
+                return True
+
         dataset_list = list()
         features_list = list()
         for code_ in codes_list:
@@ -259,7 +277,7 @@ class DataScheduler:
             if _dataset is False:
                 continue
             else:
-                input_enc, output_dec, target_dec, features_list = _dataset
+                input_enc, output_dec, target_dec, features_list, _, _ = _dataset
 
             assert np.sum(input_enc[:, -1, :] - output_dec[:, 0, :]) == 0
             new_output = np.zeros_like(output_dec)
@@ -308,8 +326,8 @@ class DataScheduler:
 
         code_dict = self.get_code_dict(codes_list)
 
-        train_input_enc, train_output_dec, train_target_dec, features_list = self._dataset('train', **code_dict)
-        eval_input_enc, eval_output_dec, eval_target_dec, _ = self._dataset('eval', **code_dict)
+        train_input_enc, train_output_dec, train_target_dec, features_list, _, _ = self._dataset('train', **code_dict)
+        eval_input_enc, eval_output_dec, eval_target_dec, _, _, _ = self._dataset('eval', **code_dict)
 
         train_dataset = dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_size=self.train_batch_size)
         train_dataset_plot = dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_size=1)
@@ -337,7 +355,7 @@ class DataScheduler:
     def test_bbticker(self, model, bbticker):
         test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
         os.makedirs(test_out_path, exist_ok=True)
-        input_enc, output_dec, target_dec, features_list = self._dataset('test', bbtickers=[bbticker])
+        input_enc, output_dec, target_dec, features_list, _, _ = self._dataset('test', bbtickers=[bbticker])
         test_dataset = dataset_process(input_enc, output_dec, target_dec, batch_size=1, mode='test')
         predict_plot(model, test_dataset, features_list, size=self.retrain_days // self.sampling_days,
                      save_dir='{}/{}.png'.format(test_out_path, bbticker))
@@ -348,8 +366,8 @@ class DataScheduler:
         self.base_idx += self.retrain_days
         self.train_begin_idx += self.retrain_days
         self.eval_begin_idx += self.retrain_days
-        self.test_begin_idx = self.base_idx - self.m_days
-        self.test_end_idx = self.base_idx + self.retrain_days
+        self.test_begin_idx += self.retrain_days
+        self.test_end_idx += self.retrain_days
 
     def get_date(self):
         return self.date_[self.base_d]
