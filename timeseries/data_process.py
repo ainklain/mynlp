@@ -384,6 +384,95 @@ class DataScheduler:
             return False
 
 
+class DataGenerator:
+    # v3: korea stocks data with fft
+    def __init__(self, data_type='korea_stock'):
+        if data_type == 'kr_stock':
+            data_path = './data/kr_close_.csv'
+            data_df = pd.read_csv(data_path, index_col=0)
+            self.df_pivoted = data_df[np.sum(~data_df.isna(), axis=1) >= 10]  # 최소 10종목 이상 존재 하는 날짜만
+        elif data_type == 'kr_factor':
+            data_path = './data/data_for_metarl.csv'
+            data_df = pd.read_csv(data_path, index_col=0)
+            self.df_pivoted = (data_df[['beme', 'gpa', 'mom', 'mkt_rf']]+1).cumprod(axis=0) # return to price
+        elif data_type == 'bb_index':
+            data_path = './timeseries/asset_data.csv'
+            data_df = pd.read_csv(data_path)
+            self.df_pivoted = data_df.pivot(index='eval_d', columns='bbticker')
+            self.df_pivoted.columns = self.df_pivoted.columns.droplevel(0)
+        else:
+            print('data_type: [kr_stock, kr_factor, bb_index]')
+            raise NotImplementedError
+
+        self.date_ = list(self.df_pivoted.index)
+
+    def get_full_dataset(self, start_d, end_d):
+        df_selected = self.df_pivoted[(self.df_pivoted.index > start_d) & (self.df_pivoted.index <= end_d)]
+        df_selected = df_selected.ix[:, np.sum(~df_selected.isna(), axis=0) >= len(df_selected.index) * 0.9]  # 90% 이상 데이터 존재
+        df_selected.ffill(axis=0)
+        return df_selected
+
+    def sample_inputdata(self, base_idx, codes_list=None, sampling_days=5, m_days=60, k_days=20,
+                         max_seq_len_in=12,
+                         max_seq_len_out=4,
+                         balance_class=True):
+
+        df_selected = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx-m_days])
+                                      & (self.df_pivoted.index <= self.date_[base_idx+k_days])]
+        df_not_null = df_selected.ix[:, np.sum(~df_selected.isna(), axis=0) >= len(df_selected.index) * 0.9]  # 90% 이상 데이터 존재
+        df_not_null.ffill(axis=0)
+        df_not_null = df_not_null.ix[:, np.sum(df_not_null.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
+
+        if codes_list is not None:
+            assert type(codes_list) == list
+            codes_exist = []
+            for code in codes_list:
+                if code in df_not_null.columns:
+                    codes_exist.append(code)
+
+            if len(codes_exist) >= 1:
+                df_not_null = df_not_null[codes_exist]
+            else:
+                return False
+
+        if df_not_null.empty:
+            return False
+
+        features_list, features_data = processing(df_not_null, m_days=m_days)
+
+        assert features_data.shape[0] == m_days + k_days + 1
+
+        M = m_days // sampling_days
+        K = k_days // sampling_days
+
+        features_sampled_data = features_data[::sampling_days][1:]  # 0, 5, 10, ... 데이터 중 0 데이터 제거 (의미없음)
+        assert features_sampled_data.shape[0] == M + K
+        _, n_asset, n_feature = features_sampled_data.shape
+        question = np.zeros([n_asset, max_seq_len_in, n_feature], dtype=np.float32)
+        answer = np.zeros([n_asset, max_seq_len_out+1, n_feature], dtype=np.float32)
+
+        question[:] = np.transpose(features_sampled_data[:M], [1, 0, 2])
+
+        answer_data = features_sampled_data[-(K + 1):]
+        answer[:, :len(answer_data), :] = np.transpose(answer_data, [1, 0, 2])
+        if balance_class:
+            num_min_class = np.min([np.sum(answer[:, 1, 0] > 0), np.sum(answer[:, 1, 0] <= 0)])
+            idx_pos = np.random.choice(np.where(answer[:, 1, 0] > 0)[0], num_min_class, replace=False)
+            idx_neg = np.random.choice(np.where(answer[:, 1, 0] <= 0)[0], num_min_class, replace=False)
+            idx_bal = np.concatenate([idx_pos, idx_neg])
+            input_enc, output_dec, target_dec = question[idx_bal], answer[idx_bal, :-1, :], answer[idx_bal, 1:, :]
+        else:
+            input_enc, output_dec, target_dec = question[:], answer[:, :-1, :], answer[:, 1:, :]
+
+        assert np.sum(input_enc[:, -1, :] - output_dec[:, 0, :]) == 0
+        return input_enc, output_dec, target_dec, features_list
+
+    @property
+    def max_length(self):
+        return len(self.date_)
+
+
+
 class DataGenerator_factor:
     # v3: korea stocks data with fft
     def __init__(self, data_path):
@@ -398,7 +487,7 @@ class DataGenerator_factor:
         df_selected.ffill(axis=0)
         return df_selected
 
-    def sample_inputdata(self, base_idx, infocodes=None, sampling_days=5, m_days=60, k_days=20,
+    def sample_inputdata(self, base_idx, codes_list=None, sampling_days=5, m_days=60, k_days=20,
                          max_seq_len_in=12,
                          max_seq_len_out=4,
                          balance_class=True):
@@ -409,15 +498,15 @@ class DataGenerator_factor:
         df_not_null.ffill(axis=0)
         df_not_null = df_not_null.ix[:, np.sum(df_not_null.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
 
-        if infocodes is not None:
-            assert type(infocodes) == list
-            infocodes_exist = []
-            for infocode in infocodes:
-                if infocode in df_not_null.columns:
-                    infocodes_exist.append(infocode)
+        if codes_list is not None:
+            assert type(codes_list) == list
+            codes_exist = []
+            for code in codes_list:
+                if code in df_not_null.columns:
+                    codes_exist.append(code)
 
-            if len(infocodes_exist) >= 1:
-                df_not_null = df_not_null[infocodes_exist]
+            if len(codes_exist) >= 1:
+                df_not_null = df_not_null[codes_exist]
             else:
                 return False
 
@@ -472,7 +561,7 @@ class DataGenerator_v3:
         df_selected.ffill(axis=0)
         return df_selected
 
-    def sample_inputdata(self, base_idx, infocodes=None, sampling_days=5, m_days=60, k_days=20,
+    def sample_inputdata(self, base_idx, codes_list=None, sampling_days=5, m_days=60, k_days=20,
                          max_seq_len_in=12,
                          max_seq_len_out=4,
                          balance_class=True):
@@ -483,15 +572,15 @@ class DataGenerator_v3:
         df_not_null.ffill(axis=0)
         df_not_null = df_not_null.ix[:, np.sum(df_not_null.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
 
-        if infocodes is not None:
-            assert type(infocodes) == list
-            infocodes_exist = []
-            for infocode in infocodes:
-                if infocode in df_not_null.columns:
-                    infocodes_exist.append(infocode)
+        if codes_list is not None:
+            assert type(codes_list) == list
+            codes_exist = []
+            for code in codes_list:
+                if code in df_not_null.columns:
+                    codes_exist.append(code)
 
-            if len(infocodes_exist) >= 1:
-                df_not_null = df_not_null[infocodes_exist]
+            if len(codes_exist) >= 1:
+                df_not_null = df_not_null[codes_exist]
             else:
                 return False
 
@@ -545,7 +634,7 @@ class DataGenerator_v2:
         df_selected = self.df_pivoted[(self.df_pivoted.index > start_d) & (self.df_pivoted.index <= end_d)]
         return df_selected.ix[:, np.sum(df_selected.isna(), axis=0) == 0]
 
-    def sample_inputdata(self, base_idx, bbtickers=None, sampling_days=5, m_days=60, k_days=20,
+    def sample_inputdata(self, base_idx, codes_list=None, sampling_days=5, m_days=60, k_days=20,
                          max_seq_len_in=12,
                          max_seq_len_out=4):
         # df_selected = self.df_pivoted[self.df_pivoted.index <= base_d][-(m_days+1):]
@@ -554,14 +643,14 @@ class DataGenerator_v2:
                                       & (self.df_pivoted.index >= self.date_[base_idx-m_days])]
         dataset_df = df_selected.ix[:, np.sum(df_selected.isna(), axis=0) == 0]
 
-        if bbtickers is not None:
-            assert type(bbtickers) == list
-            bbtickers_exist = list()
-            for bbticker in bbtickers:
-                if bbticker in dataset_df.columns:
-                    bbtickers_exist.append(bbticker)
-            if len(bbtickers_exist) >= 1:
-                dataset_df = dataset_df[bbtickers_exist]
+        if codes_list is not None:
+            assert type(codes_list) == list
+            codes_exist = list()
+            for code in codes_list:
+                if code in dataset_df.columns:
+                    codes_exist.append(code)
+            if len(codes_exist) >= 1:
+                dataset_df = dataset_df[codes_exist]
             else:
                 return False
 
@@ -602,7 +691,7 @@ class DataGenerator_v2:
         return len(self.date_)
 
 
-class DataGenerator:
+class DataGenerator_v1:
     def __init__(self, data_path):
         # data_path ='./timeseries/asset_data.csv'
         data_df = pd.read_csv(data_path, index_col=0)
