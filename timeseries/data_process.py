@@ -20,17 +20,12 @@ def data_split():
 
 
 class DataScheduler:
-    def __init__(self, configs, is_infocode=True):
+    def __init__(self, configs, data_type='korea_stock'):
         # make a directory for outputs
         self.data_out_path = os.path.join(os.getcwd(), configs.data_out_path)
         os.makedirs(self.data_out_path, exist_ok=True)
 
-        self.is_infocode = is_infocode
-        if is_infocode:
-            self.data_generator = DataGenerator_v3(configs.data_path)    # infocode
-        else:
-            self.data_generator = DataGenerator_factor(configs.data_path)
-            # self.data_generator = DataGenerator_v2(configs.data_path)  # bbticker
+        self.data_generator = DataGenerator(data_type)    # infocode
 
         self.train_set_length = configs.train_set_length
         self.retrain_days = configs.retrain_days
@@ -241,11 +236,7 @@ class DataScheduler:
             if type(codes_list) != list:
                 codes_list = [codes_list]
 
-        if self.is_infocode is True:
-            code_dict = {'infocodes': codes_list}
-        else:
-            code_dict = {'infocodes': codes_list}
-            # code_dict = {'bbtickers': codes_list}
+        code_dict = {'codes_list': codes_list}
 
         return code_dict
 
@@ -394,7 +385,7 @@ class DataGenerator:
         elif data_type == 'kr_factor':
             data_path = './data/data_for_metarl.csv'
             data_df = pd.read_csv(data_path, index_col=0)
-            self.df_pivoted = (data_df[['beme', 'gpa', 'mom', 'mkt_rf']]+1).cumprod(axis=0) # return to price
+            self.df_pivoted = (data_df[['beme', 'gpa', 'mom', 'mkt_rf']]+1).cumprod(axis=0)  # return to price
         elif data_type == 'bb_index':
             data_path = './timeseries/asset_data.csv'
             data_df = pd.read_csv(data_path)
@@ -478,7 +469,7 @@ class DataGenerator_factor:
     def __init__(self, data_path):
         data_path = './data/data_for_metarl.csv'
         data_df = pd.read_csv(data_path, index_col=0)
-        self.df_pivoted = (data_df[['beme', 'gpa', 'mom', 'mkt_rf']]+1).cumprod(axis=0) # return to price
+        self.df_pivoted = (data_df[['beme', 'gpa', 'mom', 'mkt_rf']]+1).cumprod(axis=0)  # return to price
         self.date_ = list(self.df_pivoted.index)
 
     def get_full_dataset(self, start_d, end_d):
