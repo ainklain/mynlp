@@ -20,7 +20,7 @@ def data_split():
 
 
 class DataScheduler:
-    def __init__(self, configs, data_type='korea_stock'):
+    def __init__(self, configs, data_type='kr_stock'):
         # make a directory for outputs
         self.data_out_path = os.path.join(os.getcwd(), configs.data_out_path)
         os.makedirs(self.data_out_path, exist_ok=True)
@@ -158,7 +158,7 @@ class DataScheduler:
               mtl=True):
 
         # make directories for graph results (both train and test one)
-        train_out_path = os.path.join(self.data_out_path, '{}'.format(self.base_idx))
+        train_out_path = os.path.join(self.data_out_path, model_name, '{}'.format(self.base_idx))
         os.makedirs(train_out_path, exist_ok=True)
 
         _train_dataset = self._dataset('train')
@@ -248,14 +248,23 @@ class DataScheduler:
         os.makedirs(test_out_path, exist_ok=True)
         if file_nm is None:
             save_file_name = '{}/{}'.format(test_out_path, '_all.png')
+            save_file_name_ret = '{}/{}'.format(test_out_path, 'ret_all.png')
+            save_file_name_ir = '{}/{}'.format(test_out_path, 'ir_all.png')
         else:
             save_file_name = '{}/{}'.format(test_out_path, file_nm)
+            save_file_name_ret = '{}/{}'.format(test_out_path, "ret_" + file_nm)
+            save_file_name_ir = '{}/{}'.format(test_out_path, "ir_" + file_nm)
         dg = self.data_generator
         if codes_list is None:
             codes_list = list(dg.df_pivoted.columns[~dg.df_pivoted.ix[self.base_idx].isna()])
 
             _dataset_list = self._dataset('test')
-            predict_plot_mtl_test(model, _dataset_list,  save_dir=save_file_name, ylog=ylog)
+            # predict_plot_mtl_test(model, _dataset_list,  save_dir=save_file_name, ylog=ylog, eval_type='pos')
+            # predict_plot_mtl_test(model, _dataset_list,  save_dir=save_file_name_ret, ylog=ylog, eval_type='ret')
+            # predict_plot_mtl_test(model, _dataset_list,  save_dir=save_file_name_ir, ylog=ylog, eval_type='ir')
+            predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=save_file_name, ylog=ylog, eval_type='pos')
+            predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=save_file_name_ret, ylog=ylog, eval_type='ret')
+            predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=save_file_name_ir, ylog=ylog, eval_type='ir')
 
             if each_plot is False:
                 print('plot for all done. ')
@@ -377,11 +386,24 @@ class DataScheduler:
 
 class DataGenerator:
     # v3: korea stocks data with fft
-    def __init__(self, data_type='korea_stock'):
+    def __init__(self, data_type='kr_stock'):
         if data_type == 'kr_stock':
-            data_path = './data/kr_close_.csv'
-            data_df = pd.read_csv(data_path, index_col=0)
-            self.df_pivoted = data_df[np.sum(~data_df.isna(), axis=1) >= 10]  # 최소 10종목 이상 존재 하는 날짜만
+            # data_path = './data/kr_close_.csv'
+            # data_df = pd.read_csv(data_path, index_col=0)
+            # self.df_pivoted = data_df[np.sum(~data_df.isna(), axis=1) >= 10]  # 최소 10종목 이상 존재 하는 날짜만
+
+            data_path = './data/kr_close_y.csv'
+            data_df = pd.read_csv(data_path)
+            data_df = data_df[data_df.infocode > 0]
+            data_df['y'] = data_df['y'] + 1
+            data_df['cum_y'] = data_df[['date_', 'infocode', 'y']].groupby('infocode').cumprod(axis=0)
+
+            data_kr_code = pd.read_csv('./data/kr_sizeinfo.csv')
+            kr_codes = list(data_kr_code[data_kr_code.eval_d == '2005-12-31']['infocode'].to_numpy(dtype=np.int32))
+
+            df_pivoted = data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
+            df_pivoted.columns = df_pivoted.columns.droplevel(0).to_numpy(dtype=np.int32)
+            self.df_pivoted = df_pivoted[np.sum(~df_pivoted.isna(), axis=1) >= 10][kr_codes]  # 최소 10종목 이상 존재 하는 날짜만
         elif data_type == 'kr_factor':
             data_path = './data/data_for_metarl.csv'
             data_df = pd.read_csv(data_path, index_col=0)
@@ -391,6 +413,19 @@ class DataGenerator:
             data_df = pd.read_csv(data_path)
             self.df_pivoted = data_df.pivot(index='eval_d', columns='bbticker')
             self.df_pivoted.columns = self.df_pivoted.columns.droplevel(0)
+        elif data_type == 'us_stock':
+            data_path = './data/us_close_y.csv'
+            data_df = pd.read_csv(data_path)
+            data_df = data_df[data_df.infocode > 0]
+            data_df['y'] = data_df['y'] + 1
+            data_df['cum_y'] = data_df[['date_', 'infocode', 'y']].groupby('infocode').cumprod(axis=0)
+
+            data_us_code = pd.read_csv('./data/us_sizeinfo.csv')
+            us_codes = list(data_us_code[data_us_code.eval_d == '1999-12-31']['infocode'].to_numpy(dtype=np.int32))
+
+            df_pivoted = data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
+            df_pivoted.columns = df_pivoted.columns.droplevel(0).to_numpy(dtype=np.int32)
+            self.df_pivoted = df_pivoted[np.sum(~df_pivoted.isna(), axis=1) >= 10][us_codes]  # 최소 10종목 이상 존재 하는 날짜만
         else:
             print('data_type: [kr_stock, kr_factor, bb_index]')
             raise NotImplementedError

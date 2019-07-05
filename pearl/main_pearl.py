@@ -32,22 +32,27 @@ def deep_update_dict(fr, to):
 def main():
     ts_configs = Config()
     # get data for all assets and dates
-    ds = DataScheduler(ts_configs, data_type='bb_index')
+    ds = DataScheduler(ts_configs, data_type='kr_stock')
 
     model = TSModel(ts_configs)
     # ts_configs.f_name = 'ts_model_test_info1.1_mtl' #: ds.set_idx(6000)
     # ts_configs.f_name = 'ts_model_test_info1.2_mtl' #: not ds.set_idx()
-    ts_configs.f_name = 'ts_model_test_info1.3_mtl'         #: bbticker test with ds.set_idx(6000)
+    # ts_configs.f_name = 'ts_model_test_info1.3_mtl'         #: bbticker test with ds.set_idx(6000)
+    # ts_configs.f_name = 'ts_model_test_info_mtl_us_1_1'  #: us 2500
+    # ts_configs.f_name = 'ts_model_test_info_mtl_us_1_2'  #: us every
+    ts_configs.f_name = 'ts_model_test_info_mtl_kr_pos_scaled_1'  #: kr every
+
     if os.path.exists(ts_configs.f_name):
         model.load_model(ts_configs.f_name)
 
-    ds.set_idx(6000)
-    # ds.test_end_idx = ds.base_idx + 1000
+    ds.set_idx(4000)
+    ds.test_end_idx = ds.base_idx + 1000
     ii = 0
     while not ds.done:
-        if ii == 0:
+        if ii % 5 == 0:
+        # if ii == 0:
             ds.train(model,
-                     train_steps=ts_configs.train_steps,
+                     train_steps=1000,
                      eval_steps=10,
                      save_steps=200,
                      early_stopping_count=20,
@@ -55,7 +60,7 @@ def main():
 
         ds.test(model,
                 each_plot=False,
-                out_dir=os.path.join(ds.data_out_path, 'test_linear_train_1.3'),
+                out_dir=os.path.join(ds.data_out_path, ts_configs.f_name, 'test_linear_train_1'),
                 file_nm='test_{}.png'.format(ii),
                 ylog=False)
         ds.next()

@@ -246,7 +246,7 @@ class TSModel:
                 var_lists += self.predictor[key].trainable_variables
 
                 if key == 'pos':
-                    loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key])
+                    loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) * 0.1
                 else:
                     loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key])
 
@@ -377,6 +377,9 @@ class TSModel:
 
 
     def save_model(self, f_name):
+        if f_name[-4:] != '.pkl':
+            f_name = f_name + ".pkl"
+
         w_dict = {}
         w_dict['encoder'] = self.optim_encoder_w
         w_dict['decoder'] = self.optim_decoder_w
@@ -389,6 +392,9 @@ class TSModel:
         print("model saved. (path: {})".format(f_name))
 
     def load_model(self, f_name):
+        if f_name[-4:] != '.pkl':
+            f_name = f_name + ".pkl"
+
         # f_name = os.path.join(model_path, model_name)
         with open(f_name, 'rb') as f:
             w_dict = pickle.load(f)
