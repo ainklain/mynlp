@@ -246,7 +246,7 @@ class TSModel:
                 var_lists += self.predictor[key].trainable_variables
 
                 if key == 'pos':
-                    loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) * 0.1
+                    loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) * tf.abs(labels_mtl['ret'][:, :, 0])
                 else:
                     loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key])
 
@@ -300,7 +300,7 @@ class TSModel:
                 var_lists += self.predictor[key].trainable_variables
 
                 if key == 'pos':
-                    loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key])
+                    loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) * tf.abs(labels_mtl['ret'][:, :, 0])
                 else:
                     loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key])
 
