@@ -8,9 +8,11 @@ from pearl.agent import PEARLAgent
 from pearl.launcher import setup_logger
 from pearl.configs.default import default_config
 
+
 from timeseries.config import Config
 from timeseries.model import TSModel
-from timeseries.data_process import DataScheduler
+# from timeseries.data_process import DataScheduler
+from timeseries.data_process_v2_0 import DataScheduler
 from timeseries.rl import MyEnv
 
 import os
@@ -40,29 +42,34 @@ def main():
     # ts_configs.f_name = 'ts_model_test_info1.3_mtl'         #: bbticker test with ds.set_idx(6000)
     # ts_configs.f_name = 'ts_model_test_info_mtl_us_1_1'  #: us 2500
     # ts_configs.f_name = 'ts_model_test_info_mtl_us_1_2'  #: us every
-    ts_configs.f_name = 'kr_mtl_1_1'  #: kr every
+    ts_configs.f_name = 'kr_mtl_dg_dynamic_1_0_mlarge4'  #: kr every
 
-    # if os.path.exists(ts_configs.f_name):
-    #     model.load_model(ts_configs.f_name)
+    if os.path.exists(ts_configs.f_name + '.pkl'):
+        model.load_model(ts_configs.f_name)
 
     ds.set_idx(4000)
-    ds.test_end_idx = ds.base_idx + 250
+    ds.test_end_idx = ds.base_idx + 1000
     ii = 0
     while not ds.done:
-        if ii % 2 == 0:
+        if ii % 1 == 0:
         # if ii == 0:
             ds.train(model,
-                     train_steps=3000,
+                     train_steps=1,
                      eval_steps=10,
                      save_steps=200,
                      early_stopping_count=10,
-                     model_name=ts_configs.f_name)
+                     model_name=ts_configs.f_name,
+                     plot_train=False)
 
+            model.save_model("./out/{}/{}/{}".format(ts_configs.f_name, ds.base_idx, ts_configs.f_name))
             ds.test(model,
                     each_plot=False,
-                    out_dir=os.path.join(ds.data_out_path, ts_configs.f_name, 'test_linear_train_1'),
+                    out_dir=os.path.join(ds.data_out_path, ts_configs.f_name, 'test_linear_train'),
                     file_nm='test_{}.png'.format(ii),
                     ylog=False)
+
+            # ds.finetune(model, train_steps=10)
+
         ds.next()
         ii += 1
 

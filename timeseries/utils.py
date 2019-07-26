@@ -1,4 +1,6 @@
 
+from dbmanager import SqlManager
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -135,7 +137,7 @@ def predict_plot_mtl_cross_section_test(model, dataset_list, save_dir='out.png',
     if dataset_list is False:
         return False
     else:
-        input_enc_list, output_dec_list, target_dec_list, features_list, start_date, end_date = dataset_list
+        input_enc_list, output_dec_list, target_dec_list, features_list, additional_infos, start_date, end_date = dataset_list
 
     idx_y = features_list.index('log_y')
 
@@ -148,6 +150,7 @@ def predict_plot_mtl_cross_section_test(model, dataset_list, save_dir='out.png',
     pred_q4 = np.zeros_like(true_y)
     pred_q5 = np.zeros_like(true_y)
 
+    # df_infos = pd.DataFrame(columns={'start_d', 'base_d', 'infocode', 'score'})
     for i, (input_enc_t, output_dec_t, target_dec_t) in enumerate(zip(input_enc_list, output_dec_list, target_dec_list)):
         t = i + 1
         assert np.sum(input_enc_t[:, -1, :] - output_dec_t[:, 0, :]) == 0
@@ -161,14 +164,23 @@ def predict_plot_mtl_cross_section_test(model, dataset_list, save_dir='out.png',
         # p_ret, p_pos, p_vol, p_mdd = predictions
 
         true_y[t] = np.mean(labels[:, 0, idx_y])
-
+        # additional_infos[i]['score'] = predictions['pos'][:, 0, 0]
+        # df_infos = pd.concat([df_infos, pd.DataFrame({'start_d': start_date,
+        #                                    'base_d': additional_infos[i]['date'],
+        #                                    'infocode': additional_infos[i]['assets_list'],
+        #                                    'score': predictions['pos'][:, 0, 0]})], ignore_index=True)
         if eval_type == 'pos':
             value_ = predictions['pos'][:, 0, 0]
+        elif eval_type == 'pos20':
+            value_ = predictions['pos20'][:, 0, 0]
         elif eval_type == 'ret':
             value_ = predictions['ret'][:, 0, 0]
-        elif eval_type == 'ir':
-            value_ = predictions['ret'][:, 0, 1] / predictions['std'][:, 0, 0]
-
+        elif eval_type == 'ir20':
+            value_ = predictions['ret'][:, 0, 1] / np.abs(predictions['std'][:, 0, 0])
+        elif eval_type == 'ir60':
+            value_ = predictions['ret'][:, 0, 2] / np.abs(predictions['std'][:, 0, 1])
+        elif eval_type == 'ir120':
+            value_ = predictions['ret'][:, 0, 3] / np.abs(predictions['std'][:, 0, 2])
 
         q1_crit, q2_crit, q3_crit, q4_crit = np.percentile(value_, q=[80, 60, 40, 20])
         pred_q1[t] = np.mean(labels[value_ >= q1_crit, 0, idx_y])
@@ -176,6 +188,10 @@ def predict_plot_mtl_cross_section_test(model, dataset_list, save_dir='out.png',
         pred_q3[t] = np.mean(labels[(value_ >= q3_crit) & (value_ < q2_crit), 0, idx_y])
         pred_q4[t] = np.mean(labels[(value_ >= q4_crit) & (value_ < q3_crit), 0, idx_y])
         pred_q5[t] = np.mean(labels[(value_ < q4_crit), 0, idx_y])
+
+    # # db insert
+    # sqlm = SqlManager()
+    # sqlm.db_insert(df_infos[['start_d', 'base_d', 'infocode', 'score']], 'kr_weekly_score_temp', fast_executemany=True)
 
     data = pd.DataFrame({'true_y': np.cumprod(1. + true_y),
                          'pred_ls': np.cumprod(1. + pred_q1 - pred_q5),
@@ -255,7 +271,7 @@ def predict_plot_mtl_test(model, dataset_list, save_dir='out.png', ylog=False, e
             value_ = predictions['ret'][:, 0, 0]
         elif eval_type == 'ir':
             crit = 0
-            value_ = predictions['ret'][:, 0, 1] / predictions['std'][:, 0, 0]
+            value_ = predictions['ret'][:, 0, 1] / np.abs(predictions['std'][:, 0, 0])
 
 
         n_assets = len(value_)

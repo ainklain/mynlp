@@ -27,6 +27,7 @@ class DataScheduler:
         os.makedirs(self.data_out_path, exist_ok=True)
 
         self.data_generator = DataGenerator(data_type)    # infocode
+        # self.data_generator = DataGeneratorDynamic(data_type)    # infocode
 
         self.train_set_length = configs.train_set_length
         self.retrain_days = configs.retrain_days
@@ -37,7 +38,7 @@ class DataScheduler:
         self.max_seq_len_out = configs.max_sequence_length_out
 
         self.train_batch_size = configs.batch_size
-        self.train_rate = configs.train_rate
+        self.trainset_rate = configs.trainset_rate
 
         self._initialize()
 
@@ -45,7 +46,7 @@ class DataScheduler:
         self.base_idx = self.train_set_length
 
         self.train_begin_idx = 0
-        self.eval_begin_idx = int(self.base_idx * self.train_rate)
+        self.eval_begin_idx = int(self.base_idx * self.trainset_rate)
         self.test_begin_idx = self.base_idx - self.m_days
         self.test_end_idx = self.base_idx + self.retrain_days
 
@@ -53,7 +54,7 @@ class DataScheduler:
         self.base_idx = base_idx
 
         self.train_begin_idx = np.max([0, base_idx - self.train_set_length])
-        self.eval_begin_idx = int(self.train_set_length * self.train_rate) + self.train_begin_idx
+        self.eval_begin_idx = int(self.train_set_length * self.trainset_rate) + self.train_begin_idx
         self.test_begin_idx = self.base_idx - self.m_days
         self.test_end_idx = self.base_idx + self.retrain_days
 
@@ -99,20 +100,22 @@ class DataScheduler:
         data_params['k_days'] = self.k_days
         data_params['max_seq_len_in'] = self.max_seq_len_in
         data_params['max_seq_len_out'] = self.max_seq_len_out
-
         if mode == 'train':
             start_idx = self.train_begin_idx + self.m_days
             end_idx = self.eval_begin_idx - self.k_days
             data_params['balance_class'] = True
+            data_params['base_univ_idx'] = self.train_begin_idx
         elif mode == 'eval':
             start_idx = self.eval_begin_idx + self.m_days
             end_idx = self.test_begin_idx - self.k_days
             data_params['balance_class'] = True
+            data_params['base_univ_idx'] = self.eval_begin_idx
         elif mode == 'test':
             start_idx = self.test_begin_idx + self.m_days
             # start_idx = self.test_begin_idx
             end_idx = self.test_end_idx
             data_params['balance_class'] = False
+            data_params['base_univ_idx'] = self.test_begin_idx
         else:
             raise NotImplementedError
 
@@ -149,6 +152,45 @@ class DataScheduler:
         end_date = self.data_generator.date_[end_idx]
         return input_enc, output_dec, target_dec, features_list, start_date, end_date
 
+    def finetune(self,
+                 model,
+                 train_steps=1
+                 ):
+
+        _train_dataset = self._dataset('train')
+        if _train_dataset is False:
+            print('[finetune] no train/eval data')
+            return False
+
+        train_input_enc, train_output_dec, train_target_dec, features_list, _, _ = _train_dataset
+        assert np.sum(train_input_enc[:, -1, :] - train_output_dec[:, 0, :]) == 0
+        train_new_output = np.zeros_like(train_output_dec)
+        train_new_output[:, 0, :] = train_output_dec[:, 0, :]
+        train_dataset = dataset_process(train_input_enc, train_new_output, train_target_dec, batch_size=self.train_batch_size)
+
+        for i, (features, labels) in enumerate(train_dataset.take(train_steps)):
+            print_loss = True
+
+            labels_mtl = {'ret': np.stack([labels[:, :, features_list.index('log_y')],
+                                                 labels[:, :, features_list.index('log_20y')],
+                                                 labels[:, :, features_list.index('log_60y')],
+                                                 labels[:, :, features_list.index('log_120y')]], axis=-1),
+                          'pos': (np.concatenate([labels[:, :, features_list.index('positive')].numpy() > 0,
+                                                  labels[:, :, features_list.index('positive')].numpy() <= 0], axis=1)
+                                  * 1.).reshape([-1, 1, 2]),
+                          'pos20': (np.concatenate([labels[:, :, features_list.index('positive20')].numpy() > 0,
+                                                  labels[:, :, features_list.index('positive20')].numpy() <= 0], axis=1)
+                                  * 1.).reshape([-1, 1, 2]),
+                          'std': np.stack([labels[:, :, features_list.index('std_20')],
+                                                 labels[:, :, features_list.index('std_60')],
+                                                 labels[:, :, features_list.index('std_120')]], axis=-1),
+                          'mdd': np.stack([labels[:, :, features_list.index('mdd_20')],
+                                                 labels[:, :, features_list.index('mdd_60')]], axis=-1),
+                          'fft': np.stack([labels[:, :, features_list.index('fft_3com')],
+                                           labels[:, :, features_list.index('fft_100com')]], axis=-1)}
+
+            model.finetune_mtl(features, labels_mtl, print_loss=print_loss)
+
     def train(self,
               model,
               train_steps=1,
@@ -156,7 +198,8 @@ class DataScheduler:
               save_steps=50,
               early_stopping_count=10,
               model_name='ts_model_v1.0',
-              mtl=True):
+              mtl=True,
+              plot_train=True):
 
         # make directories for graph results (both train and test one)
         train_out_path = os.path.join(self.data_out_path, model_name, '{}'.format(self.base_idx))
@@ -165,7 +208,7 @@ class DataScheduler:
         _train_dataset = self._dataset('train')
         _eval_dataset = self._dataset('eval')
         if _train_dataset is False or _eval_dataset is False:
-            print('no train/eval data')
+            print('[train] no train/eval data')
             return False
 
         train_input_enc, train_output_dec, train_target_dec, features_list, _, _ = _train_dataset
@@ -181,21 +224,23 @@ class DataScheduler:
 
         train_dataset = dataset_process(train_input_enc, train_new_output, train_target_dec, batch_size=self.train_batch_size)
         train_dataset_plot = dataset_process(train_input_enc, train_new_output, train_target_dec, batch_size=1)
-        eval_dataset = dataset_process(eval_input_enc, eval_new_output, eval_target_dec, batch_size=1)
+        eval_dataset = dataset_process(eval_input_enc, eval_new_output, eval_target_dec, batch_size=self.train_batch_size)
+        eval_dataset_plot = dataset_process(eval_input_enc, eval_new_output, eval_target_dec, batch_size=1)
         for i, (features, labels) in enumerate(train_dataset.take(train_steps)):
             print_loss = False
             if i % save_steps == 0:
                 model.save_model(model_name)
-                if mtl:
-                    predict_plot_mtl(model, train_dataset_plot, features_list, 250,
-                                 save_dir='{}/train_{}.png'.format(train_out_path, i))
-                    predict_plot_mtl(model, eval_dataset, features_list, 250,
-                                 save_dir='{}/eval_{}.png'.format(train_out_path, i))
-                else:
-                    predict_plot(model, train_dataset_plot, features_list, 250,
-                                 save_dir='{}/train_{}.png'.format(train_out_path, i))
-                    predict_plot(model, eval_dataset, features_list, 250,
-                                 save_dir='{}/eval_{}.png'.format(train_out_path, i))
+                if plot_train:
+                    if mtl:
+                        predict_plot_mtl(model, train_dataset_plot, features_list, 250,
+                                     save_dir='{}/train_{}.png'.format(train_out_path, i))
+                        predict_plot_mtl(model, eval_dataset_plot, features_list, 250,
+                                     save_dir='{}/eval_{}.png'.format(train_out_path, i))
+                    else:
+                        predict_plot(model, train_dataset_plot, features_list, 250,
+                                     save_dir='{}/train_{}.png'.format(train_out_path, i))
+                        predict_plot(model, eval_dataset_plot, features_list, 250,
+                                     save_dir='{}/eval_{}.png'.format(train_out_path, i))
 
             if i % eval_steps == 0:
                 print_loss = True
@@ -217,6 +262,9 @@ class DataScheduler:
                                                      labels[:, :, features_list.index('log_120y')]], axis=-1),
                               'pos': (np.concatenate([labels[:, :, features_list.index('positive')].numpy() > 0,
                                                       labels[:, :, features_list.index('positive')].numpy() <= 0], axis=1)
+                                      * 1.).reshape([-1, 1, 2]),
+                              'pos20': (np.concatenate([labels[:, :, features_list.index('positive20')].numpy() > 0,
+                                                      labels[:, :, features_list.index('positive20')].numpy() <= 0], axis=1)
                                       * 1.).reshape([-1, 1, 2]),
                               'std': np.stack([labels[:, :, features_list.index('std_20')],
                                                      labels[:, :, features_list.index('std_60')],
@@ -249,10 +297,12 @@ class DataScheduler:
         os.makedirs(test_out_path, exist_ok=True)
         if file_nm is None:
             save_file_name = '{}/{}'.format(test_out_path, '_all.png')
+            save_file_name_pos20 = '{}/{}'.format(test_out_path, 'pos20_all.png')
             save_file_name_ret = '{}/{}'.format(test_out_path, 'ret_all.png')
             save_file_name_ir = '{}/{}'.format(test_out_path, 'ir_all.png')
         else:
             save_file_name = '{}/{}'.format(test_out_path, file_nm)
+            save_file_name_pos20 = '{}/{}'.format(test_out_path, "pos20_" + file_nm)
             save_file_name_ret = '{}/{}'.format(test_out_path, "ret_" + file_nm)
             save_file_name_ir = '{}/{}'.format(test_out_path, "ir_" + file_nm)
         dg = self.data_generator
@@ -264,8 +314,9 @@ class DataScheduler:
             # predict_plot_mtl_test(model, _dataset_list,  save_dir=save_file_name_ret, ylog=ylog, eval_type='ret')
             # predict_plot_mtl_test(model, _dataset_list,  save_dir=save_file_name_ir, ylog=ylog, eval_type='ir')
             predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=save_file_name, ylog=ylog, eval_type='pos')
-            predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=save_file_name_ret, ylog=ylog, eval_type='ret')
-            predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=save_file_name_ir, ylog=ylog, eval_type='ir')
+            predict_plot_mtl_cross_section_test(model, _dataset_list, save_dir=save_file_name_pos20, ylog=ylog, eval_type='pos20')
+            # predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=save_file_name_ret, ylog=ylog, eval_type='ret')
+            # predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=save_file_name_ir, ylog=ylog, eval_type='ir20')
 
             if each_plot is False:
                 print('plot for all done. ')
@@ -385,6 +436,95 @@ class DataScheduler:
             return False
 
 
+class DataGeneratorDynamic:
+    def __init__(self, data_type='kr_stock'):
+        if data_type == 'kr_stock':
+            data_path = './data/kr_close_y.csv'
+            data_df = pd.read_csv(data_path)
+            self.data_df = data_df[data_df.infocode > 0]  # null 제거
+            self.data_df['y'] = self.data_df['y'] + 1
+            self.data_df['cum_y'] = self.data_df[['date_', 'infocode', 'y']].groupby('infocode').cumprod(axis=0)
+
+            self.data_code = pd.read_csv('./data/kr_sizeinfo.csv')
+
+            self.univ_idx = -1
+
+        self.date_ = list(self.data_df['date_'].unique())
+
+    def _set_df_pivoted(self, univ_idx):
+        if self.univ_idx != univ_idx:
+            print('univ_idx changed {} -> {}'.format(self.univ_idx, univ_idx))
+            self.univ_idx = univ_idx
+
+            kr_codes = list(self.data_code[self.data_code.eval_d == self.date_[univ_idx]]['infocode'].to_numpy(dtype=np.int32))
+
+            df_pivoted = self.data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
+            df_pivoted.columns = df_pivoted.columns.droplevel(0).to_numpy(dtype=np.int32)
+            self.df_pivoted = df_pivoted[np.sum(~df_pivoted.isna(), axis=1) >= 10][kr_codes]  # 최소 10종목 이상 존재 하는 날짜만
+
+    def sample_inputdata(self, base_idx, codes_list=None, sampling_days=5, m_days=60, k_days=20,
+                         max_seq_len_in=12,
+                         max_seq_len_out=4,
+                         balance_class=True,
+                         **kwargs):
+
+        self._set_df_pivoted(kwargs['base_univ_idx'])
+        df_selected = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx-m_days])
+                                      & (self.df_pivoted.index <= self.date_[base_idx+k_days])]
+        df_not_null = df_selected.ix[:, np.sum(~df_selected.isna(), axis=0) >= len(df_selected.index) * 0.9]  # 90% 이상 데이터 존재
+        df_not_null.ffill(axis=0, inplace=True)
+        df_not_null.bfill(axis=0, inplace=True)
+        df_not_null = df_not_null.ix[:, np.sum(df_not_null.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
+
+        if codes_list is not None:
+            assert type(codes_list) == list
+            codes_exist = []
+            for code in codes_list:
+                if code in df_not_null.columns:
+                    codes_exist.append(code)
+
+            if len(codes_exist) >= 1:
+                df_not_null = df_not_null[codes_exist]
+            else:
+                return False
+
+        if df_not_null.empty:
+            return False
+
+        features_list, features_data = processing(df_not_null, m_days=m_days)
+
+        assert features_data.shape[0] == m_days + k_days + 1
+
+        M = m_days // sampling_days
+        K = k_days // sampling_days
+
+        features_sampled_data = features_data[::sampling_days][1:]  # 0, 5, 10, ... 데이터 중 0 데이터 제거 (의미없음)
+        assert features_sampled_data.shape[0] == M + K
+        _, n_asset, n_feature = features_sampled_data.shape
+        question = np.zeros([n_asset, max_seq_len_in, n_feature], dtype=np.float32)
+        answer = np.zeros([n_asset, max_seq_len_out+1, n_feature], dtype=np.float32)
+
+        question[:] = np.transpose(features_sampled_data[:M], [1, 0, 2])
+
+        answer_data = features_sampled_data[-(K + 1):]
+        answer[:, :len(answer_data), :] = np.transpose(answer_data, [1, 0, 2])
+        if balance_class:
+            num_min_class = np.min([np.sum(answer[:, 1, 0] > 0), np.sum(answer[:, 1, 0] <= 0)])
+            idx_pos = np.random.choice(np.where(answer[:, 1, 0] > 0)[0], num_min_class, replace=False)
+            idx_neg = np.random.choice(np.where(answer[:, 1, 0] <= 0)[0], num_min_class, replace=False)
+            idx_bal = np.concatenate([idx_pos, idx_neg])
+            input_enc, output_dec, target_dec = question[idx_bal], answer[idx_bal, :-1, :], answer[idx_bal, 1:, :]
+        else:
+            input_enc, output_dec, target_dec = question[:], answer[:, :-1, :], answer[:, 1:, :]
+
+        assert np.sum(input_enc[:, -1, :] - output_dec[:, 0, :]) == 0
+        return input_enc, output_dec, target_dec, features_list
+
+    @property
+    def max_length(self):
+        return len(self.date_)
+
+
 class DataGenerator:
     # v3: korea stocks data with fft
     def __init__(self, data_type='kr_stock'):
@@ -436,18 +576,21 @@ class DataGenerator:
     def get_full_dataset(self, start_d, end_d):
         df_selected = self.df_pivoted[(self.df_pivoted.index > start_d) & (self.df_pivoted.index <= end_d)]
         df_selected = df_selected.ix[:, np.sum(~df_selected.isna(), axis=0) >= len(df_selected.index) * 0.9]  # 90% 이상 데이터 존재
-        df_selected.ffill(axis=0)
+        df_selected.ffill(axis=0, inplace=True)   # 먼저 중간 na 처리
+        df_selected.bfill(axis=0, inplace=True)   # 이후 맨 앞의 NA 처리
         return df_selected
 
     def sample_inputdata(self, base_idx, codes_list=None, sampling_days=5, m_days=60, k_days=20,
                          max_seq_len_in=12,
                          max_seq_len_out=4,
-                         balance_class=True):
+                         balance_class=True,
+                         **kwargs):
 
         df_selected = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx-m_days])
                                       & (self.df_pivoted.index <= self.date_[base_idx+k_days])]
         df_not_null = df_selected.ix[:, np.sum(~df_selected.isna(), axis=0) >= len(df_selected.index) * 0.9]  # 90% 이상 데이터 존재
-        df_not_null.ffill(axis=0)
+        df_not_null.ffill(axis=0, inplace=True)
+        df_not_null.bfill(axis=0, inplace=True)
         df_not_null = df_not_null.ix[:, np.sum(df_not_null.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
 
         if codes_list is not None:
@@ -497,6 +640,17 @@ class DataGenerator:
     @property
     def max_length(self):
         return len(self.date_)
+
+
+
+
+
+
+
+
+
+
+
 
 
 

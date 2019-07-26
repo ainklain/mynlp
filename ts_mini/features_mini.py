@@ -14,11 +14,12 @@ def log_y_nd(log_p, n):
     return np.r_[log_p[:n, :] - log_p[:1, :], log_p[n:, :] - log_p[:-n, :]]
 
 
-def fft(log_p, n, m_days):
-    n_size = len(log_p)
+def fft(log_p, n, m_days, k_days):
+    assert (len(log_p) == (m_days + k_days + 1)) or (len(log_p) == (m_days + 1))
+
     log_p_fft = np.fft.fft(log_p[:(m_days+1)], axis=0)
     log_p_fft[n:-n] = 0
-    return np.real(np.fft.ifft(log_p_fft, n_size, axis=0))
+    return np.real(np.fft.ifft(log_p_fft, m_days + k_days + 1, axis=0))[:len(log_p)]
 
 
 def std_nd(log_p, n):
@@ -36,6 +37,72 @@ def mdd_nd(log_p, n):
         mddarr[t, :] = log_p[t, :] - np.max(log_p[max(0, t - n):(t + 1), :])
 
     return mddarr
+
+
+def labels_for_mtl(features_list, labels):
+    labels_mtl = {'ret': np.stack([labels[:, :, features_list.index('log_y')],
+                                   labels[:, :, features_list.index('log_20y')],
+                                   labels[:, :, features_list.index('log_60y')],
+                                   labels[:, :, features_list.index('log_120y')]], axis=-1),
+                  'pos': (np.concatenate([labels[:, :, features_list.index('positive')].numpy() > 0,
+                                          labels[:, :, features_list.index('positive')].numpy() <= 0], axis=1)
+                          * 1.).reshape([-1, 1, 2]),
+                  'pos20': (np.concatenate([labels[:, :, features_list.index('positive20')].numpy() > 0,
+                                            labels[:, :, features_list.index('positive20')].numpy() <= 0], axis=1)
+                            * 1.).reshape([-1, 1, 2]),
+                  'std': np.stack([labels[:, :, features_list.index('std_20')],
+                                   labels[:, :, features_list.index('std_60')],
+                                   labels[:, :, features_list.index('std_120')]], axis=-1),
+                  'mdd': np.stack([labels[:, :, features_list.index('mdd_20')],
+                                   labels[:, :, features_list.index('mdd_60')]], axis=-1),
+                  'fft': np.stack([labels[:, :, features_list.index('fft_3com')],
+                                   labels[:, :, features_list.index('fft_100com')]], axis=-1)}
+
+    return labels_mtl
+
+
+def processing_split(df_not_null, m_days, k_days):
+    # if type(df.columns) == pd.MultiIndex:
+    #     df.columns = df.columns.droplevel(0)
+
+    log_p = np.log(df_not_null.values, dtype=np.float32)
+    log_p = log_p - log_p[0, :]
+
+    log_5y = log_y_nd(log_p, 5)
+    log_20y = log_y_nd(log_p, 20)
+    log_60y = log_y_nd(log_p, 60)
+    log_120y = log_y_nd(log_p, 120)
+    # log_240y = log_y_nd(log_p, 240)
+
+    fft_3com = fft(log_p, 3, m_days, k_days)
+    fft_6com = fft(log_p, 6, m_days, k_days)
+    fft_100com = fft(log_p, 100, m_days, k_days)
+
+    std_20 = std_nd(log_p, 20)
+    std_60 = std_nd(log_p, 60)
+    std_120 = std_nd(log_p, 120)
+
+    mdd_20 = mdd_nd(log_p, 20)
+    mdd_60 = mdd_nd(log_p, 60)
+    mdd_120 = mdd_nd(log_p, 120)
+
+    pos = np.sign(log_5y)
+    pos20 = np.sign(log_20y)
+    pos60 = np.sign(log_60y)
+    cum_log_y = np.cumsum(log_5y, axis=0)
+
+    features_list = ['log_y', 'log_20y', 'log_60y', 'log_120y',
+                'fft_3com', 'fft_100com', 'std_20', 'std_60', 'std_120',
+                'mdd_20', 'mdd_60', 'positive', 'positive20', 'positive60']
+
+    features_data = np.stack([log_5y, log_20y, log_60y, log_120y,
+                              fft_3com, fft_100com, std_20, std_60, std_120,
+                              mdd_20, mdd_60, pos, pos20, pos60], axis=-1)
+
+    assert len(features_list) == features_data.shape[-1]
+    # feature_df = pd.DataFrame(np.transpose(features_data[:, :, 0]), columns=features_list)
+    return features_list, features_data
+
 
 
 def processing(df_not_null, m_days):

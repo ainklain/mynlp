@@ -1,4 +1,6 @@
 
+from ts_mini.features_mini import labels_for_mtl
+
 import pickle
 import numpy as np
 import tensorflow as tf
@@ -146,8 +148,10 @@ class Decoder(Model):
 class TSModel:
     """omit embedding time series. just 1-D data used"""
     def __init__(self, configs):
-        self.position_encode_in = positional_encoding(configs.embedding_size, configs.max_sequence_length_in)
-        self.position_encode_out = positional_encoding(configs.embedding_size, configs.max_sequence_length_out)
+        self.input_seq_size = configs.m_days // configs.sampling_days
+        self.output_seq_size = configs.k_days // configs.sampling_days
+        self.position_encode_in = positional_encoding(configs.embedding_size, self.input_seq_size)
+        self.position_encode_out = positional_encoding(configs.embedding_size, self.output_seq_size)
 
         self.encoder = Encoder(dim_input=configs.embedding_size,
                                model_hidden_size=configs.model_hidden_size,
@@ -180,12 +184,12 @@ class TSModel:
         # decayed_learning_rate = learning_rate * decay_rate ^ (global_step / decay_steps)
         # lr = tf.optimizers.schedules.PolynomialDecay(1e-3, 2000, 5e-4)
         # lr = tf.optimizers.schedules.PiecewiseConstantDecay([50, 150, 300], [1e-2, 1e-3, 1e-4, 1e-5])
-        self.optimizer = tf.optimizers.Adam(1e-4)
+        self.optimizer = tf.optimizers.Adam(configs.learning_rate)
 
         self._initialize(configs)
 
     def _initialize(self, configs):
-        feature_temp = tf.zeros([1, configs.max_sequence_length_in, configs.embedding_size], dtype=tf.float32)
+        feature_temp = tf.zeros([1, self.input_seq_size, configs.embedding_size], dtype=tf.float32)
         # embed_temp = self.embedding(feature_temp)
         enc_temp = self.encoder(feature_temp)
         dec_temp = self.decoder(feature_temp, enc_temp)
@@ -300,23 +304,7 @@ class TSModel:
     def evaluate_mtl(self, datasets, features_list, steps=-1):
         loss_avg = 0
         for i, (features, labels) in enumerate(datasets.take(steps)):
-            labels_mtl = {'ret': np.stack([labels[:, :, features_list.index('log_y')],
-                                           labels[:, :, features_list.index('log_20y')],
-                                           labels[:, :, features_list.index('log_60y')],
-                                           labels[:, :, features_list.index('log_120y')]], axis=-1),
-                          'pos': (np.concatenate([labels[:, :, features_list.index('positive')].numpy() > 0,
-                                                  labels[:, :, features_list.index('positive')].numpy() <= 0], axis=1)
-                                  * 1.).reshape([-1, 1, 2]),
-                          'pos20': (np.concatenate([labels[:, :, features_list.index('positive20')].numpy() > 0,
-                                                  labels[:, :, features_list.index('positive20')].numpy() <= 0], axis=1)
-                                  * 1.).reshape([-1, 1, 2]),
-                          'std': np.stack([labels[:, :, features_list.index('std_20')],
-                                           labels[:, :, features_list.index('std_60')],
-                                           labels[:, :, features_list.index('std_120')]], axis=-1),
-                          'mdd': np.stack([labels[:, :, features_list.index('mdd_20')],
-                                           labels[:, :, features_list.index('mdd_60')]], axis=-1),
-                          'fft': np.stack([labels[:, :, features_list.index('fft_3com')],
-                                           labels[:, :, features_list.index('fft_100com')]], axis=-1)}
+            labels_mtl = labels_for_mtl(features_list, labels)
 
             x_embed = features['input'] + self.position_encode_in
             y_embed = features['output'] + self.position_encode_out
@@ -410,7 +398,6 @@ class TSModel:
 
         return pred_each
         # return pred_ret, pred_pos, pred_vol, pred_mdd
-
 
     def save_model(self, f_name):
         if f_name[-4:] != '.pkl':
