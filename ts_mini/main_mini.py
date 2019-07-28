@@ -11,7 +11,7 @@ def main():
     ds = DataScheduler(ts_configs, data_type='kr_stock')
 
     model = TSModel(ts_configs)
-    ts_configs.f_name = 'kr_mtl_dg_dynamic_2_0'  #: kr every
+    ts_configs.f_name = 'kr_mtl_dg_dynamic_2_1_large_250'  #: kr every
 
     if os.path.exists(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name + '.pkl')):
         model.load_model(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name))
@@ -21,19 +21,19 @@ def main():
     ii = 0
     while not ds.done:
         ds.train(model,
-                 train_steps=5000,
+                 train_steps=10000,
                  eval_steps=10,
                  save_steps=200,
-                 early_stopping_count=10,
+                 early_stopping_count=20,
                  model_name=os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name))
 
-        model.save_model(os.path.join(ds.data_out_path, ts_configs.f_name, str(ds.base_idx), ts_configs.f_name))
+        model.save_model(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name, str(ds.base_idx), ts_configs.f_name))
         ds.test(model,
                 use_label=True,
                 out_dir=os.path.join(ds.data_out_path, ts_configs.f_name, 'test'),
                 file_nm='test_{}.png'.format(ii),
                 ylog=False,
-                save_db=True,
+                save_type='csv',
                 table_nm='kr_weekly_score_temp')
 
         ds.next()

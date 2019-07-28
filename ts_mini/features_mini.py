@@ -95,7 +95,7 @@ def processing_split(df_not_null, m_days, k_days):
                 'fft_3com', 'fft_100com', 'std_20', 'std_60', 'std_120',
                 'mdd_20', 'mdd_60', 'positive', 'positive20', 'positive60']
 
-    features_data = np.stack([log_5y, log_20y, log_60y, log_120y,
+    features_data = np.stack([log_20y, log_5y, log_60y, log_120y,
                               fft_3com, fft_100com, std_20, std_60, std_120,
                               mdd_20, mdd_60, pos, pos20, pos60], axis=-1)
 

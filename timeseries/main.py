@@ -34,7 +34,7 @@ def main_all_asset_dataprocess_modified():
         ii = 0
         while not ds.done:
             model = TSModel(configs)
-            # configs.f_name = 'ts_model_test1.0'
+            configs.f_name = 'ts_model_test1.4'
             if os.path.exists(configs.f_name):
                 model.load_model(configs.f_name)
 
@@ -42,8 +42,8 @@ def main_all_asset_dataprocess_modified():
             ds.train(model,
                    train_steps=configs.train_steps,
                    eval_steps=10,
-                   save_steps=200,
-                   early_stopping_count=20,
+                   save_steps=50,
+                   early_stopping_count=5,
                    model_name=configs.f_name)
 
             # env = MyEnv(model, data_scheduler=ds, configs=configs, trading_costs=0.001)

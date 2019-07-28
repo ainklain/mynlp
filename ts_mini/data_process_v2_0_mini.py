@@ -1,5 +1,5 @@
 
-from dbmanager import SqlManager
+# from dbmanager import SqlManager
 from ts_mini.utils_mini import *
 from ts_mini.features_mini import processing, processing_split, labels_for_mtl
 
@@ -27,7 +27,6 @@ class DataScheduler:
 
         self.train_batch_size = configs.batch_size
         self.trainset_rate = configs.trainset_rate
-
         self._initialize()
 
     def _initialize(self):
@@ -161,7 +160,7 @@ class DataScheduler:
             labels_mtl = labels_for_mtl(features_list, labels)
             model.train_mtl(features, labels_mtl, print_loss=print_loss)
 
-    def test(self, model, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_db=True, table_nm=None):
+    def test(self, model, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None):
         if out_dir is None:
             test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
         else:
@@ -177,10 +176,28 @@ class DataScheduler:
             _dataset_list = self._dataset('test')
             predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=save_file_name, ylog=ylog, eval_type='pos')
 
-        if save_db:
+        if save_type is not None:
             _dataset_list = self._dataset('predict')
-            self.save_score_to_db(model, _dataset_list, table_nm=table_nm)
-            pass
+            if save_type == 'db':
+                self.save_score_to_db(model, _dataset_list, table_nm=table_nm)
+            elif save_type == 'csv':
+                self.save_score_to_csv(model, _dataset_list, out_dir=test_out_path)
+
+
+    def save_score_to_csv(self, model, dataset_list, out_dir=None):
+        input_enc_list, output_dec_list, _, _, additional_infos, start_date, _ = dataset_list
+        df_infos = pd.DataFrame(columns={'start_d', 'base_d', 'infocode', 'score'})
+        for i, (input_enc_t, output_dec_t) in enumerate(zip(input_enc_list, output_dec_list)):
+            assert np.sum(input_enc_t[:, -1, :] - output_dec_t[:, 0, :]) == 0
+            assert np.sum(output_dec_t[:, 1:, :]) == 0
+            features = {'input': input_enc_t, 'output': output_dec_t}
+            predictions = model.predict_mtl(features)
+            df_infos = pd.concat([df_infos, pd.DataFrame({
+                'start_d': start_date,
+                'base_d': additional_infos[i]['date'],
+                'infocode': additional_infos[i]['assets_list'],
+                'score': predictions['pos'][:, 0, 0]})], ignore_index=True)
+        df_infos.to_csv(os.path.join(out_dir, 'out_{}.csv'.format(str(start_date))))
 
     def save_score_to_db(self, model, dataset_list, table_nm='kr_weekly_score_temp'):
         if table_nm is None:
@@ -200,16 +217,16 @@ class DataScheduler:
                 'score': predictions['pos'][:, 0, 0]})], ignore_index=True)
 
             # db insert
-            sqlm = SqlManager()
-            sqlm.set_db_name('passive')
-            sqlm.db_insert(df_infos[['start_d', 'base_d', 'infocode', 'score']], table_nm, fast_executemany=True)
+            # sqlm = SqlManager()
+            # sqlm.set_db_name('passive')
+            # sqlm.db_insert(df_infos[['start_d', 'base_d', 'infocode', 'score']], table_nm, fast_executemany=True)
 
     def next(self):
         self.base_idx += self.retrain_days
         self.train_begin_idx += self.retrain_days
         self.eval_begin_idx += self.retrain_days
         self.test_begin_idx += self.retrain_days
-        self.test_end_idx = min(self.test_end_idx + self.retrain_days, self.data_generator.max_length - 1)
+        self.test_end_idx = min(self.test_end_idx + self.retrain_days, self.data_generator.max_length - self.k_days - 1)
 
     def get_date(self):
         return self.date_[self.base_d]
@@ -322,11 +339,22 @@ class DataGeneratorDynamic:
             answer[:, 0, :] = question[:, -1, :]
 
         if balance_class:
-            num_min_class = np.min([np.sum(answer[:, 1, 0] > 0), np.sum(answer[:, 1, 0] <= 0)])
-            idx_pos = np.random.choice(np.where(answer[:, 1, 0] > 0)[0], num_min_class, replace=False)
-            idx_neg = np.random.choice(np.where(answer[:, 1, 0] <= 0)[0], num_min_class, replace=False)
+            idx_y = features_list.index('log_y')
+            where_p = (answer[:, 1, idx_y] > 0)
+            where_n = (answer[:, 1, idx_y] <= 0)
+            n_max = np.max([np.sum(where_p), np.sum(where_n)])
+            idx_pos = np.concatenate([np.random.choice(np.where(where_p)[0], np.sum(where_p), replace=False),
+                                      np.random.choice(np.where(where_p)[0], n_max - np.sum(where_p), replace=True)])
+            idx_neg = np.concatenate([np.random.choice(np.where(where_n)[0], np.sum(where_n), replace=False),
+                                      np.random.choice(np.where(where_n)[0], n_max - np.sum(where_n), replace=True)])
+
             idx_bal = np.concatenate([idx_pos, idx_neg])
             input_enc, output_dec, target_dec = question[idx_bal], answer[idx_bal, :-1, :], answer[idx_bal, 1:, :]
+            # num_min_class = np.min([np.sum(answer[:, 1, idx_y] > 0), np.sum(answer[:, 1, idx_y] <= 0)])
+            # idx_pos = np.random.choice(np.where(answer[:, 1, 0] > 0)[0], num_min_class, replace=False)
+            # idx_neg = np.random.choice(np.where(answer[:, 1, 0] <= 0)[0], num_min_class, replace=False)
+            # idx_bal = np.concatenate([idx_pos, idx_neg])
+            # input_enc, output_dec, target_dec = question[idx_bal], answer[idx_bal, :-1, :], answer[idx_bal, 1:, :]
         else:
             input_enc, output_dec, target_dec = question[:], answer[:, :-1, :], answer[:, 1:, :]
             assert len(additional_info['assets_list']) == len(input_enc)
