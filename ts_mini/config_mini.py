@@ -12,6 +12,8 @@ class Config:
 
         self.batch_size = 64
         self.train_steps = 200000
+        self.eval_steps = 200
+        self.early_stopping_count = 10
         self.dropout = 0.5
         self.embedding_size = 14
         self.learning_rate = 1e-4
@@ -30,19 +32,8 @@ class Config:
         self.tokenize_as_morph = False
 
     def export(self):
-        return_str = """
-        train_set_length={}
-        retrain_days={}
-        m_days={}
-        k_days={}
-        sampling_days={}
-        trainset_rate={}
-        batch_size={}
-        train_steps={}
-        dropout={}
-        embedding_size={}
-        learning_rate={}
-        """.format(self.train_set_length, self.retrain_days, self.m_days,
-                   self.k_days, self.sampling_days, self.trainset_rate,
-                   self.batch_size, self.train_steps, self.dropout, self.embedding_size, self.learning_rate)
+        return_str = ""
+        for key in self.__dict__.keys():
+            return_str += "{}: {}\n".format(key, self.__dict__[key])
+
         return return_str

@@ -18,6 +18,9 @@ def main():
 
     config_str = ts_configs.export()
 
+    with open(os.path.join(ds.data_out_path, ts_configs.f_name, 'config.txt'), 'w') as f:
+        f.write(config_str)
+
     if os.path.exists(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name + '.pkl')):
         model.load_model(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name))
 
@@ -32,13 +35,8 @@ def main():
                  early_stopping_count=5,
                  model_name=os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name))
 
-        config_str += """
-        set_idx=4000
-        train_steps={}
-        eval_steps={}
-        save_steps={}
-        early_stopping_count={}""".format(10000, 200, 200, 5)
         model.save_model(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name, str(ds.base_idx), ts_configs.f_name))
+
         ds.test(model,
                 use_label=True,
                 out_dir=os.path.join(ds.data_out_path, ts_configs.f_name, 'test'),
