@@ -1,7 +1,7 @@
 
 # from dbmanager import SqlManager
 from ts_mini.utils_mini import *
-from ts_mini.features_mini import processing, processing_split, labels_for_mtl
+# from ts_mini.features_mini import processing # processing_split, labels_for_mtl
 
 import pandas as pd
 import tensorflow as tf
@@ -11,13 +11,13 @@ from sklearn.model_selection import train_test_split
 
 
 class DataScheduler:
-    def __init__(self, configs, data_type='kr_stock'):
+    def __init__(self, configs, features_cls, data_type='kr_stock'):
         # make a directory for outputs
         self.data_out_path = os.path.join(os.getcwd(), configs.data_out_path)
         os.makedirs(self.data_out_path, exist_ok=True)
 
         # self.data_generator = DataGenerator(data_type)    # infocode
-        self.data_generator = DataGeneratorDynamic(data_type)    # infocode
+        self.data_generator = DataGeneratorDynamic(features_cls, data_type)    # infocode
 
         self.train_set_length = configs.train_set_length
         self.retrain_days = configs.retrain_days
@@ -26,7 +26,10 @@ class DataScheduler:
         self.sampling_days = configs.sampling_days
 
         self.train_batch_size = configs.batch_size
+        self.eval_batch_size = 256
         self.trainset_rate = configs.trainset_rate
+
+        self.features_cls = features_cls
         self._initialize()
 
     def _initialize(self):
@@ -140,7 +143,243 @@ class DataScheduler:
         eval_new_output[:, 0, :] = eval_output_dec[:, 0, :]
 
         train_dataset = dataset_process(train_input_enc, train_new_output, train_target_dec, batch_size=self.train_batch_size)
-        eval_dataset = dataset_process(eval_input_enc, eval_new_output, eval_target_dec, batch_size=self.train_batch_size)
+        eval_dataset = dataset_process(eval_input_enc, eval_new_output, eval_target_dec, batch_size=self.eval_batch_size, iter_num=1)
+        print("train step: {}  eval step: {}".format(len(train_input_enc) // self.train_batch_size,
+                                                     len(eval_input_enc) // self.eval_batch_size))
+        for i, (features, labels) in enumerate(train_dataset.take(train_steps)):
+            print_loss = False
+            if i % save_steps == 0:
+                model.save_model(model_name)
+
+            if i % eval_steps == 0:
+                print_loss = True
+                model.evaluate_mtl(eval_dataset, features_list, steps=len(eval_input_enc) // self.eval_batch_size)
+
+                print("[t: {} / i: {}] min_eval_loss:{} / count:{}".format(self.base_idx, i, model.eval_loss, model.eval_count))
+                if model.eval_count >= early_stopping_count:
+                    print("[t: {} / i: {}] train finished.".format(self.base_idx, i))
+                    model.weight_to_optim()
+                    model.save_model(model_name)
+                    break
+
+            labels_mtl = self.features_cls.labels_for_mtl(features_list, labels)
+            model.train_mtl(features, labels_mtl, print_loss=print_loss)
+
+    def test(self, model, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None):
+        if out_dir is None:
+            test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
+        else:
+            test_out_path = out_dir
+
+        os.makedirs(test_out_path, exist_ok=True)
+        if file_nm is None:
+            save_file_name = '{}/{}'.format(test_out_path, '_all.png')
+        else:
+            save_file_name = '{}/{}'.format(test_out_path, file_nm)
+
+        if use_label:
+            _dataset_list = self._dataset('test')
+            predict_plot_mtl_cross_section_test2(model, _dataset_list,  save_dir=save_file_name, ylog=ylog, eval_type='pos_5d')
+
+        if save_type is not None:
+            _dataset_list = self._dataset('predict')
+            if save_type == 'db':
+                self.save_score_to_db(model, _dataset_list, table_nm=table_nm)
+            elif save_type == 'csv':
+                self.save_score_to_csv(model, _dataset_list, out_dir=test_out_path)
+
+
+    def save_score_to_csv(self, model, dataset_list, out_dir=None):
+        input_enc_list, output_dec_list, _, _, additional_infos, start_date, _ = dataset_list
+        df_infos = pd.DataFrame(columns={'start_d', 'base_d', 'infocode', 'score'})
+        for i, (input_enc_t, output_dec_t) in enumerate(zip(input_enc_list, output_dec_list)):
+            assert np.sum(input_enc_t[:, -1, :] - output_dec_t[:, 0, :]) == 0
+            assert np.sum(output_dec_t[:, 1:, :]) == 0
+            features = {'input': input_enc_t, 'output': output_dec_t}
+            predictions = model.predict_mtl(features)
+            df_infos = pd.concat([df_infos, pd.DataFrame({
+                'start_d': start_date,
+                'base_d': additional_infos[i]['date'],
+                'infocode': additional_infos[i]['assets_list'],
+                'score': predictions['pos_5d'][:, 0, 0]})], ignore_index=True, sort=True)
+        df_infos.to_csv(os.path.join(out_dir, 'out_{}.csv'.format(str(start_date))))
+
+    def save_score_to_db(self, model, dataset_list, table_nm='kr_weekly_score_temp'):
+        if table_nm is None:
+            table_nm = 'kr_weekly_score_temp'
+
+        input_enc_list, output_dec_list, _, _, additional_infos, start_date, _ = dataset_list
+        df_infos = pd.DataFrame(columns={'start_d', 'base_d', 'infocode', 'score'})
+        for i, (input_enc_t, output_dec_t) in enumerate(zip(input_enc_list, output_dec_list)):
+            assert np.sum(input_enc_t[:, -1, :] - output_dec_t[:, 0, :]) == 0
+            assert np.sum(output_dec_t[:, 1:, :]) == 0
+            features = {'input': input_enc_t, 'output': output_dec_t}
+            predictions = model.predict_mtl(features)
+            df_infos = pd.concat([df_infos, pd.DataFrame({
+                'start_d': start_date,
+                'base_d': additional_infos[i]['date'],
+                'infocode': additional_infos[i]['assets_list'],
+                'score': predictions['pos'][:, 0, 0]})], ignore_index=True, sort=True)
+
+            # db insert
+            # sqlm = SqlManager()
+            # sqlm.set_db_name('passive')
+            # sqlm.db_insert(df_infos[['start_d', 'base_d', 'infocode', 'score']], table_nm, fast_executemany=True)
+
+    def next(self):
+        self.base_idx += self.retrain_days
+        self.train_begin_idx += self.retrain_days
+        self.eval_begin_idx += self.retrain_days
+        self.test_begin_idx += self.retrain_days
+        self.test_end_idx = min(self.test_end_idx + self.retrain_days, self.data_generator.max_length - self.k_days - 1)
+
+    def get_date(self):
+        return self.date_[self.base_d]
+
+    @property
+    def date_(self):
+        return self.data_generator.date_
+
+    @property
+    def done(self):
+        # if self.test_end_idx > self.data_generator.max_length:
+        if self.test_end_idx <= self.test_begin_idx:
+            return True
+        else:
+            return False
+
+
+class DataSchedulerCrossSection:
+    def __init__(self, configs, data_type='kr_stock'):
+        # make a directory for outputs
+        self.data_out_path = os.path.join(os.getcwd(), configs.data_out_path)
+        os.makedirs(self.data_out_path, exist_ok=True)
+
+        # self.data_generator = DataGenerator(data_type)    # infocode
+        self.data_generator = DataGeneratorDynamic(data_type)    # infocode
+
+        self.train_set_length = configs.train_set_length
+        self.retrain_days = configs.retrain_days
+        self.m_days = configs.m_days
+        self.k_days = configs.k_days
+        self.sampling_days = configs.sampling_days
+
+        self.train_batch_size = configs.batch_size
+        self.trainset_rate = configs.trainset_rate
+        self._initialize()
+
+    def _initialize(self):
+        self.base_idx = self.train_set_length
+
+        self.train_begin_idx = 0
+        # self.eval_begin_idx = int(self.base_idx * self.trainset_rate)
+        self.test_begin_idx = self.base_idx - self.m_days
+        self.test_end_idx = self.base_idx + self.retrain_days
+
+    def set_idx(self, base_idx):
+        self.base_idx = base_idx
+
+        self.train_begin_idx = np.max([0, base_idx - self.train_set_length])
+        # self.eval_begin_idx = int(self.train_set_length * self.trainset_rate) + self.train_begin_idx
+        self.test_begin_idx = self.base_idx - self.m_days
+        self.test_end_idx = self.base_idx + self.retrain_days
+
+    def get_data_params(self, mode='train'):
+        dg = self.data_generator
+        data_params = dict()
+        data_params['sampling_days'] = self.sampling_days
+        data_params['m_days'] = self.m_days
+        data_params['k_days'] = self.k_days
+        if mode == 'train':
+            start_idx = self.train_begin_idx + self.m_days
+            end_idx = self.test_begin_idx - self.k_days
+            data_params['balance_class'] = True
+            data_params['use_label'] = True
+        elif mode == 'eval':
+            start_idx = self.eval_begin_idx + self.m_days
+            end_idx = self.test_begin_idx - self.k_days
+            data_params['balance_class'] = True
+            data_params['use_label'] = True
+        elif mode == 'test':
+            start_idx = self.test_begin_idx + self.m_days
+            # start_idx = self.test_begin_idx
+            end_idx = self.test_end_idx
+            data_params['balance_class'] = False
+            data_params['use_label'] = True
+        elif mode == 'predict':
+            start_idx = self.test_begin_idx + self.m_days
+            # start_idx = self.test_begin_idx
+            end_idx = self.test_end_idx
+            data_params['balance_class'] = False
+            data_params['use_label'] = False
+        else:
+            raise NotImplementedError
+
+        print("start idx:{} ({}) / end idx: {} ({})".format(start_idx, dg.date_[start_idx], end_idx, dg.date_[end_idx]))
+
+        return start_idx, end_idx, data_params
+
+    def _dataset(self, mode='train'):
+        input_enc, output_dec, target_dec = [], [], []
+        features_list = []
+        additional_infos = []
+        start_idx, end_idx, data_params = self.get_data_params(mode)
+
+        for i, d in enumerate(range(start_idx, end_idx, self.sampling_days)):
+            _sampled_data = self.data_generator.sample_inputdata_split(d, **data_params)
+            if _sampled_data is False:
+                continue
+            else:
+                tmp_ie, tmp_od, tmp_td, features_list, additional_info = _sampled_data
+            input_enc.append(tmp_ie)
+            output_dec.append(tmp_od)
+            target_dec.append(tmp_td)
+            additional_infos.append(additional_info)
+
+        if len(input_enc) == 0:
+            return False
+
+        if not mode in ['test', 'predict']:
+            input_enc = np.concatenate(input_enc, axis=0)
+            output_dec = np.concatenate(output_dec, axis=0)
+            target_dec = np.concatenate(target_dec, axis=0)
+
+        start_date = self.data_generator.date_[start_idx]
+        end_date = self.data_generator.date_[end_idx]
+        return input_enc, output_dec, target_dec, features_list, additional_infos, start_date, end_date
+
+    def train(self,
+              model,
+              train_steps=1,
+              eval_steps=10,
+              save_steps=50,
+              early_stopping_count=10,
+              model_name='ts_model_v1.0'):
+
+        # make directories for graph results (both train and test one)
+        train_out_path = os.path.join(self.data_out_path, model_name, '{}'.format(self.base_idx))
+        os.makedirs(train_out_path, exist_ok=True)
+
+        _train_dataset = self._dataset('train')
+        _eval_dataset = self._dataset('eval')
+        if _train_dataset is False or _eval_dataset is False:
+            print('[train] no train/eval data')
+            return False
+
+        train_input_enc, train_output_dec, train_target_dec, features_list, _, _, _ = _train_dataset
+        eval_input_enc, eval_output_dec, eval_target_dec, _, _, _, _ = _eval_dataset
+
+        assert np.sum(train_input_enc[:, -1, :] - train_output_dec[:, 0, :]) == 0
+        assert np.sum(eval_input_enc[:, -1, :] - eval_output_dec[:, 0, :]) == 0
+
+        # K > 1인 경우 미래데이터 안 땡겨쓰게.
+        train_new_output = np.zeros_like(train_output_dec)
+        train_new_output[:, 0, :] = train_output_dec[:, 0, :]
+        eval_new_output = np.zeros_like(eval_output_dec)
+        eval_new_output[:, 0, :] = eval_output_dec[:, 0, :]
+
+        train_dataset = dataset_process(train_input_enc, train_new_output, train_target_dec, batch_size=self.train_batch_size)
+        eval_dataset = dataset_process(eval_input_enc, eval_new_output, eval_target_dec, batch_size=self.train_batch_size, iter_num=1)
         for i, (features, labels) in enumerate(train_dataset.take(train_steps)):
             print_loss = False
             if i % save_steps == 0:
@@ -157,7 +396,7 @@ class DataScheduler:
                     model.save_model(model_name)
                     break
 
-            labels_mtl = labels_for_mtl(features_list, labels)
+            labels_mtl = self.features_cls.labels_for_mtl(features_list, labels)
             model.train_mtl(features, labels_mtl, print_loss=print_loss)
 
     def test(self, model, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None):
@@ -196,7 +435,7 @@ class DataScheduler:
                 'start_d': start_date,
                 'base_d': additional_infos[i]['date'],
                 'infocode': additional_infos[i]['assets_list'],
-                'score': predictions['pos'][:, 0, 0]})], ignore_index=True)
+                'score': predictions['pos'][:, 0, 0]})], ignore_index=True, sort=True)
         df_infos.to_csv(os.path.join(out_dir, 'out_{}.csv'.format(str(start_date))))
 
     def save_score_to_db(self, model, dataset_list, table_nm='kr_weekly_score_temp'):
@@ -214,7 +453,7 @@ class DataScheduler:
                 'start_d': start_date,
                 'base_d': additional_infos[i]['date'],
                 'infocode': additional_infos[i]['assets_list'],
-                'score': predictions['pos'][:, 0, 0]})], ignore_index=True)
+                'score': predictions['pos'][:, 0, 0]})], ignore_index=True, sort=True)
 
             # db insert
             # sqlm = SqlManager()
@@ -244,10 +483,11 @@ class DataScheduler:
             return False
 
 
+
 class DataGeneratorDynamic:
-    def __init__(self, data_type='kr_stock'):
+    def __init__(self, features_cls, data_type='kr_stock'):
         if data_type == 'kr_stock':
-            data_path = './data/kr_close_y.csv'
+            data_path = './data/kr_close_y_90.csv'
             data_df_temp = pd.read_csv(data_path)
             data_df_temp = data_df_temp[data_df_temp.infocode > 0]
 
@@ -260,9 +500,11 @@ class DataGeneratorDynamic:
             self.data_df['y'] = self.data_df['y'] + 1
             self.data_df['cum_y'] = self.data_df[['date_', 'infocode', 'y']].groupby('infocode').cumprod(axis=0)
 
-            self.data_code = pd.read_csv('./data/kr_sizeinfo.csv')
+            self.data_code = pd.read_csv('./data/kr_sizeinfo_90.csv')
             self.data_code = self.data_code[self.data_code.infocode > 0]
             self.base_d = None
+
+            self.features_cls = features_cls
 
     def _set_df_pivoted(self, univ_idx):
         date_arr = self.data_code.eval_d.unique()
@@ -277,7 +519,6 @@ class DataGeneratorDynamic:
             df_pivoted = self.data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
             df_pivoted.columns = df_pivoted.columns.droplevel(0).to_numpy(dtype=np.int32)
             self.df_pivoted = df_pivoted[univ_list]
-
 
     def sample_inputdata_split(self, base_idx, sampling_days=5, m_days=60, k_days=20, balance_class=True,use_label=True):
         if use_label is False:
@@ -298,7 +539,7 @@ class DataGeneratorDynamic:
             return False
 
         additional_info = {'date': self.date_[base_idx], 'assets_list': list(df_for_data.columns)}
-        features_list, features_for_data = processing_split(df_for_data, m_days=m_days, k_days=k_days)
+        features_list, features_for_data = self.features_cls.processing_split(df_for_data, m_days=m_days, k_days=k_days)
         assert features_for_data.shape[0] == m_days + 1
 
         M = m_days // sampling_days
@@ -318,7 +559,7 @@ class DataGeneratorDynamic:
             df_for_label.bfill(axis=0, inplace=True)
             df_for_label = df_for_label.ix[:, np.sum(df_for_label.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
 
-            _, features_for_label = processing_split(df_for_label, m_days=m_days, k_days=k_days)
+            _, features_for_label = self.features_cls.processing_split(df_for_label, m_days=m_days, k_days=k_days)
 
             assert features_for_label.shape[0] == m_days + k_days + 1
             assert np.sum(features_for_data - features_for_label[:(m_days + 1), :, :]) == 0
@@ -339,7 +580,7 @@ class DataGeneratorDynamic:
             answer[:, 0, :] = question[:, -1, :]
 
         if balance_class:
-            idx_y = features_list.index('log_y')
+            idx_y = features_list.index('logy_5d')
             where_p = (answer[:, 1, idx_y] > 0)
             where_n = (answer[:, 1, idx_y] <= 0)
             n_max = np.max([np.sum(where_p), np.sum(where_n)])
@@ -432,14 +673,14 @@ def rearrange(input, output, target):
 
 
 # 학습에 들어가 배치 데이터를 만드는 함수이다.
-def dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_size, mode='train'):
+def dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_size, shuffle=True, iter_num=None):
     # Dataset을 생성하는 부분으로써 from_tensor_slices부분은
     # 각각 한 문장으로 자른다고 보면 된다.
     # train_input_enc, train_output_dec, train_target_dec
     # 3개를 각각 한문장으로 나눈다.
     dataset = tf.data.Dataset.from_tensor_slices((train_input_enc, train_output_dec, train_target_dec))
     # 전체 데이터를 섞는다.
-    if mode == 'train':
+    if shuffle is True:
         dataset = dataset.shuffle(buffer_size=len(train_input_enc))
     # 배치 인자 값이 없다면  에러를 발생 시킨다.
     assert batch_size is not None, "train batchSize must not be None"
@@ -451,10 +692,10 @@ def dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_s
     dataset = dataset.map(rearrange)
     # repeat()함수에 원하는 에포크 수를 넣을수 있으면
     # 아무 인자도 없다면 무한으로 이터레이터 된다.
-    if batch_size == 1:
-        dataset = dataset.repeat(1)
-    else:
+    if iter_num is None:
         dataset = dataset.repeat()
+    else:
+        dataset = dataset.repeat(iter_num)
     # make_one_shot_iterator를 통해 이터레이터를
     # 만들어 준다.
     # 이터레이터를 통해 다음 항목의 텐서

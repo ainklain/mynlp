@@ -1,5 +1,5 @@
 
-from ts_mini.features_mini import labels_for_mtl
+# from ts_mini.features_mini import labels_for_mtl
 
 import pickle
 import numpy as np
@@ -147,7 +147,7 @@ class Decoder(Model):
 
 class TSModel:
     """omit embedding time series. just 1-D data used"""
-    def __init__(self, configs):
+    def __init__(self, configs, feature_cls):
         self.input_seq_size = configs.m_days // configs.sampling_days
         self.output_seq_size = configs.k_days // configs.sampling_days
         self.position_encode_in = positional_encoding(configs.embedding_size, self.input_seq_size)
@@ -167,12 +167,22 @@ class TSModel:
                                num_layers=configs.layer_size)
 
         self.predictor = dict()
-        self.predictor['ret'] = FeedForward(4, 64)
-        self.predictor['pos'] = FeedForward(2, 64, out_activation='softmax')
-        self.predictor['pos20'] = FeedForward(2, 64, out_activation='softmax')
-        self.predictor['std'] = FeedForward(3, 64)
-        self.predictor['mdd'] = FeedForward(2, 64)
-        self.predictor['fft'] = FeedForward(2, 64)
+        self.predictor_helper = dict()
+        for key in feature_cls.model_predictor_list:
+            if isinstance(feature_cls.structure[key], list):
+                self.predictor[key] = FeedForward(len(feature_cls.structure[key]), 64)
+            elif isinstance(feature_cls.structure[key], str):
+                self.predictor[key] = FeedForward(2, 64, out_activation='softmax')
+                self.predictor_helper[key] = feature_cls.structure['logy'].index(feature_cls.structure[key])
+
+        self.feature_cls = feature_cls
+                # self.predictor = dict()
+        # self.predictor['ret'] = FeedForward(4, 64)
+        # self.predictor['pos'] = FeedForward(2, 64, out_activation='softmax')
+        # self.predictor['pos20'] = FeedForward(2, 64, out_activation='softmax')
+        # self.predictor['std'] = FeedForward(3, 64)
+        # self.predictor['mdd'] = FeedForward(2, 64)
+        # self.predictor['fft'] = FeedForward(2, 64)
 
         self.optim_encoder_w = None
         self.optim_decoder_w = None
@@ -250,13 +260,19 @@ class TSModel:
                 pred_each[key] = self.predictor[key](predict)
                 var_lists += self.predictor[key].trainable_variables
 
-                if key == 'pos':
-                    loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) * tf.abs(labels_mtl['ret'][:, :, 0])
-                elif key == 'pos20':
-                    loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) * tf.abs(
-                        labels_mtl['ret'][:, :, 1])
+                if key[:3] == 'pos':
+                    loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) \
+                                     * tf.abs(labels_mtl['logy'][:, :, self.predictor_helper[key]])
                 else:
                     loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key])
+
+                # if key == 'pos':
+                #     loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) * tf.abs(labels_mtl['ret'][:, :, 0])
+                # elif key == 'pos20':
+                #     loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) * tf.abs(
+                #         labels_mtl['ret'][:, :, 1])
+                # else:
+                #     loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key])
 
                 if loss is None:
                     loss = loss_each[key]
@@ -304,7 +320,7 @@ class TSModel:
     def evaluate_mtl(self, datasets, features_list, steps=-1):
         loss_avg = 0
         for i, (features, labels) in enumerate(datasets.take(steps)):
-            labels_mtl = labels_for_mtl(features_list, labels)
+            labels_mtl = self.feature_cls.labels_for_mtl(features_list, labels)
 
             x_embed = features['input'] + self.position_encode_in
             y_embed = features['output'] + self.position_encode_out
@@ -320,13 +336,19 @@ class TSModel:
                 pred_each[key] = self.predictor[key](predict)
                 var_lists += self.predictor[key].trainable_variables
 
-                if key == 'pos':
-                    loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) * tf.abs(labels_mtl['ret'][:, :, 0])
-                elif key == 'pos20':
-                    loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) * tf.abs(
-                        labels_mtl['ret'][:, :, 1])
+                if key[:3] == 'pos':
+                    loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) \
+                                     * tf.abs(labels_mtl['logy'][:, :, self.predictor_helper[key]])
                 else:
                     loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key])
+
+                # if key == 'pos':
+                #     loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) * tf.abs(labels_mtl['ret'][:, :, 0])
+                # elif key == 'pos20':
+                #     loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) * tf.abs(
+                #         labels_mtl['ret'][:, :, 1])
+                # else:
+                #     loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key])
 
                 if loss is None:
                     loss = loss_each[key]
@@ -348,41 +370,6 @@ class TSModel:
         else:
             self.eval_count += 1
 
-    def evaluate(self, datasets, steps=-1):
-        loss_avg = 0
-        for i, (features, labels) in enumerate(datasets.take(steps)):
-            x_embed = features['input'] + self.position_encode_in
-            y_embed = features['output'] + self.position_encode_out
-
-            encoder_output = self.encoder(x_embed, dropout=0.)
-            predict = self.decoder(y_embed, encoder_output, dropout=0.)
-
-            var_lists = self.encoder.trainable_variables + self.decoder.trainable_variables
-        # loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=labels_))
-            loss = tf.losses.MSE(labels, predict)
-            loss_avg += np.mean(loss.numpy())
-
-        loss_avg = loss_avg / i
-        print("eval loss:{} (steps:{})".format(loss_avg, i))
-        if loss_avg < self.eval_loss:
-            self.eval_loss = loss_avg
-            self.eval_count = 0
-            self.optim_encoder_w = self.encoder.get_weights()
-            self.optim_decoder_w = self.decoder.get_weights()
-        else:
-            self.eval_count += 1
-
-    def predict(self, feature):
-
-        x_embed = feature['input'] + self.position_encode_in
-        y_embed = feature['output'] + self.position_encode_out
-
-        encoder_output = self.encoder(x_embed, dropout=0.)
-        predict = self.decoder(y_embed, encoder_output, dropout=0.)
-
-        # predict = tf.argmax(logits, 2)
-
-        return predict
 
     def predict_mtl(self, feature):
 

@@ -39,6 +39,87 @@ def mdd_nd(log_p, n):
     return mddarr
 
 
+class Feature:
+    def __init__(self):
+        self._init_features()
+
+    def _init_features(self):
+        # dict: classification
+        self.structure = {
+            'logy': ['5d', '20d', '60d', '120d'],
+            'pos_5d': '5d',
+            'pos_20d': '20d',
+            'pos_60d': '60d',
+            'std': ['20d', '60d', '120d'],
+            'mdd': ['20d', '60d'],
+            'fft': ['3com', '100com']
+        }
+        self.model_predictor_list = ['logy', 'pos_5d', 'pos_20d', 'std', 'mdd', 'fft']
+
+    def labels_for_mtl(self, features_list, labels):
+        labels_mtl = dict()
+        for key in self.structure.keys():
+            if isinstance(self.structure[key], str):    # classification
+                labels_mtl[key] = (np.concatenate([labels[:, :, features_list.index(key)].numpy() > 0,
+                                                   labels[:, :, features_list.index(key)].numpy() <= 0], axis=1)
+                                   * 1.).reshape([-1, 1, 2])
+            else:
+                labels_mtl[key] = np.stack([labels[:, :, features_list.index(key + '_' + item)] for item in self.structure[key]],
+                                           axis=-1)
+
+        return labels_mtl
+
+    def processing_split(self, df_not_null, m_days, k_days):
+        # if type(df.columns) == pd.MultiIndex:
+        #     df.columns = df.columns.droplevel(0)
+        features_dict = dict()
+        log_p = np.log(df_not_null.values, dtype=np.float32)
+        log_p = log_p - log_p[0, :]
+
+        features_dict['logy'] = {'5d': log_y_nd(log_p, 5),
+                                '20d': log_y_nd(log_p, 20),
+                                '60d': log_y_nd(log_p, 60),
+                                '120d': log_y_nd(log_p, 120)}
+
+        features_dict['fft'] = {'3com': fft(log_p, 3, m_days, k_days),
+                                '6com': fft(log_p, 6, m_days, k_days),
+                                '100com': fft(log_p, 100, m_days, k_days)}
+
+        features_dict['std'] = {'20d': std_nd(log_p, 20),
+                                '60d': std_nd(log_p, 60),
+                                '120d': std_nd(log_p, 120)}
+
+        features_dict['mdd'] = {'20d': mdd_nd(log_p, 20),
+                                '60d': mdd_nd(log_p, 60),
+                                '120d': mdd_nd(log_p, 120)}
+
+        features_dict['pos'] = {'5d': np.sign(features_dict['logy']['5d']),
+                                '20d': np.sign(features_dict['logy']['20d']),
+                                '60d': np.sign(features_dict['logy']['60d'])}
+
+        features_dict['cum_log'] = {'5d': np.cumsum(features_dict['logy']['5d'], axis=0)}
+
+        features_list = list()
+        features_data = list()
+        for key in self.structure.keys():
+            if isinstance(self.structure[key], list):
+                f_list_temp = list()
+                for item in self.structure[key]:
+                    f_list_temp.append(key + '_' + item)
+                    features_data.append(features_dict[key][item])
+                features_list = features_list + f_list_temp
+            elif isinstance(self.structure[key], str):
+                k, v = key.split('_')
+                features_data.append(features_dict[k][v])
+                features_list = features_list + [key]
+
+        features_data = np.stack(features_data, axis=-1)
+
+        assert len(features_list) == features_data.shape[-1]
+        # feature_df = pd.DataFrame(np.transpose(features_data[:, :, 0]), columns=features_list)
+        return features_list, features_data
+
+
 def labels_for_mtl(features_list, labels):
     labels_mtl = {'ret': np.stack([labels[:, :, features_list.index('log_y')],
                                    labels[:, :, features_list.index('log_20y')],
@@ -95,7 +176,7 @@ def processing_split(df_not_null, m_days, k_days):
                 'fft_3com', 'fft_100com', 'std_20', 'std_60', 'std_120',
                 'mdd_20', 'mdd_60', 'positive', 'positive20', 'positive60']
 
-    features_data = np.stack([log_20y, log_5y, log_60y, log_120y,
+    features_data = np.stack([log_5y, log_20y, log_60y, log_120y,
                               fft_3com, fft_100com, std_20, std_60, std_120,
                               mdd_20, mdd_60, pos, pos20, pos60], axis=-1)
 
