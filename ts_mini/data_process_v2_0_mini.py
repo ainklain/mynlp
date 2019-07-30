@@ -179,7 +179,7 @@ class DataScheduler:
 
         if use_label:
             _dataset_list = self._dataset('test')
-            predict_plot_mtl_cross_section_test2(model, _dataset_list,  save_dir=save_file_name, ylog=ylog, eval_type='pos_5d')
+            self.features_cls.predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=save_file_name, ylog=ylog)
 
         if save_type is not None:
             _dataset_list = self._dataset('predict')
@@ -201,7 +201,7 @@ class DataScheduler:
                 'start_d': start_date,
                 'base_d': additional_infos[i]['date'],
                 'infocode': additional_infos[i]['assets_list'],
-                'score': predictions['pos_5d'][:, 0, 0]})], ignore_index=True, sort=True)
+                'score': predictions[self.features_cls.label_feature][:, 0, 0]})], ignore_index=True, sort=True)
         df_infos.to_csv(os.path.join(out_dir, 'out_{}.csv'.format(str(start_date))))
 
     def save_score_to_db(self, model, dataset_list, table_nm='kr_weekly_score_temp'):
@@ -219,7 +219,7 @@ class DataScheduler:
                 'start_d': start_date,
                 'base_d': additional_infos[i]['date'],
                 'infocode': additional_infos[i]['assets_list'],
-                'score': predictions['pos'][:, 0, 0]})], ignore_index=True, sort=True)
+                'score': predictions[self.features_cls.label_feature][:, 0, 0]})], ignore_index=True, sort=True)
 
             # db insert
             # sqlm = SqlManager()
@@ -580,9 +580,9 @@ class DataGeneratorDynamic:
             answer[:, 0, :] = question[:, -1, :]
 
         if balance_class:
-            idx_y = features_list.index('logy_5d')
-            where_p = (answer[:, 1, idx_y] > 0)
-            where_n = (answer[:, 1, idx_y] <= 0)
+            idx_label = features_list.index(self.features_cls.label_feature)
+            where_p = (answer[:, 1, idx_label] > 0)
+            where_n = (answer[:, 1, idx_label] <= 0)
             n_max = np.max([np.sum(where_p), np.sum(where_n)])
             idx_pos = np.concatenate([np.random.choice(np.where(where_p)[0], np.sum(where_p), replace=False),
                                       np.random.choice(np.where(where_p)[0], n_max - np.sum(where_p), replace=True)])

@@ -8,16 +8,22 @@ import os
 
 def main():
     ts_configs = Config()
+    ts_configs.label_feature = 'pos_5d'
+    # ts_configs.k_days = 5
+
+    ts_configs.f_name = 'kr_model_2_60_3'  #: kr every
+    ts_configs.train_steps = 10000
+    ts_configs.eval_steps = 200
+    ts_configs.early_stopping_count = 5
+    config_str = ts_configs.export()
     # get data for all assets and dates
-    features_cls = Feature()
+    features_cls = Feature(ts_configs.label_feature)
 
     ds = DataScheduler(ts_configs, features_cls, data_type='kr_stock')
     model = TSModel(ts_configs, features_cls)
     # ts_configs.f_name = 'kr_mtl_dg_dynamic_2_0_90'  #: kr every
-    ts_configs.f_name = 'kr_test_feature_1'  #: kr every
 
-    config_str = ts_configs.export()
-
+    os.makedirs(os.path.join(ds.data_out_path, ts_configs.f_name), exist_ok=True)
     with open(os.path.join(ds.data_out_path, ts_configs.f_name, 'config.txt'), 'w') as f:
         f.write(config_str)
 
@@ -29,10 +35,10 @@ def main():
     ii = 0
     while not ds.done:
         ds.train(model,
-                 train_steps=10000,
-                 eval_steps=200,
+                 train_steps=ts_configs.train_steps,
+                 eval_steps=ts_configs.eval_steps,
                  save_steps=200,
-                 early_stopping_count=5,
+                 early_stopping_count=ts_configs.early_stopping_count,
                  model_name=os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name))
 
         model.save_model(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name, str(ds.base_idx), ts_configs.f_name))
