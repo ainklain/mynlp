@@ -14,12 +14,12 @@ def log_y_nd(log_p, n):
     return np.r_[log_p[:n, :] - log_p[:1, :], log_p[n:, :] - log_p[:-n, :]]
 
 
-def fft(log_p, n, m_days, k_days, calc_length=0):
-    assert (len(log_p) == (calc_length + m_days + k_days + 1)) or (len(log_p) == (calc_length + m_days + 1))
+def fft(log_p, n, m_days, k_days):
+    assert (len(log_p) == (m_days + k_days + 1)) or (len(log_p) == (m_days + 1))
 
-    log_p_fft = np.fft.fft(log_p[:(calc_length + m_days + 1)], axis=0)
+    log_p_fft = np.fft.fft(log_p[:(m_days + 1)], axis=0)
     log_p_fft[n:-n] = 0
-    return np.real(np.fft.ifft(log_p_fft, calc_length + m_days + k_days + 1, axis=0))[:len(log_p)]
+    return np.real(np.fft.ifft(log_p_fft, m_days + k_days + 1, axis=0))[:len(log_p)]
 
 
 def std_nd(log_p, n):
@@ -103,9 +103,9 @@ class Feature:
                                     '60d': mdd_nd(log_p_wo_calc, 60),
                                     '120d': mdd_nd(log_p_wo_calc, 120)}
 
-            features_data_dict['fft'] = {'3com': fft(log_p_wo_calc, 3, m_days, k_days, 0),
-                                    '6com': fft(log_p_wo_calc, 6, m_days, k_days, 0),
-                                    '100com': fft(log_p_wo_calc, 100, m_days, k_days, 0)}
+            features_data_dict['fft'] = {'3com': fft(log_p_wo_calc, 3, m_days, k_days),
+                                    '6com': fft(log_p_wo_calc, 6, m_days, k_days),
+                                    '100com': fft(log_p_wo_calc, 100, m_days, k_days)}
         else:
             assert len(log_p) == ((calc_length + m_days) + (calc_length + k_days) + 1)
 
@@ -150,13 +150,13 @@ class Feature:
                                     '60d':  mdd_nd(log_p_wo_calc, 60)[m_days:][::k_days],
                                     '120d':  mdd_nd(log_p_wo_calc, 120)[m_days:][::k_days]}
 
-            features_data_dict['fft'] = {'3com': fft(log_p_wo_calc, 3, m_days, k_days, 0)[:(m_days + 1)],
-                                    '6com': fft(log_p_wo_calc, 6, m_days, k_days, 0)[:(m_days + 1)],
-                                    '100com': fft(log_p_wo_calc, 100, m_days, k_days, 0)[:(m_days + 1)]}
+            features_data_dict['fft'] = {'3com': fft(log_p_wo_calc, 3, m_days, k_days)[:(m_days + 1)],
+                                    '6com': fft(log_p_wo_calc, 6, m_days, k_days)[:(m_days + 1)],
+                                    '100com': fft(log_p_wo_calc, 100, m_days, k_days)[:(m_days + 1)]}
 
-            features_label_dict['fft'] = {'3com': fft(log_p_wo_calc, 3, m_days, k_days, 0)[m_days:][::k_days],
-                                    '6com': fft(log_p_wo_calc, 6, m_days, k_days, 0)[m_days:][::k_days],
-                                    '100com': fft(log_p_wo_calc, 100, m_days, k_days, 0)[m_days:][::k_days]}
+            features_label_dict['fft'] = {'3com': fft(log_p_wo_calc, 3, m_days, k_days)[m_days:][::k_days],
+                                    '6com': fft(log_p_wo_calc, 6, m_days, k_days)[m_days:][::k_days],
+                                    '100com': fft(log_p_wo_calc, 100, m_days, k_days)[m_days:][::k_days]}
 
         features_list = list()
         features_data = list()
@@ -213,9 +213,9 @@ class Feature:
                                 '60d': mdd_nd(log_p_wo_calc, 60),
                                 '120d': mdd_nd(log_p_wo_calc, 120)}
 
-        features_dict['fft'] = {'3com': fft(log_p_wo_calc, 3, m_days, k_days, 0),
-                                '6com': fft(log_p_wo_calc, 6, m_days, k_days, 0),
-                                '100com': fft(log_p_wo_calc, 100, m_days, k_days, 0)}
+        features_dict['fft'] = {'3com': fft(log_p_wo_calc, 3, m_days, k_days),
+                                '6com': fft(log_p_wo_calc, 6, m_days, k_days),
+                                '100com': fft(log_p_wo_calc, 100, m_days, k_days)}
         # features_dict['fft'] = {'3com': fft(log_p, 3, m_days, k_days, calc_length),
         #                         '6com': fft(log_p, 6, m_days, k_days, calc_length),
         #                         '100com': fft(log_p, 100, m_days, k_days, calc_length)}

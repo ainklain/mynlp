@@ -90,7 +90,7 @@ class DataScheduler:
         start_idx, end_idx, data_params = self.get_data_params(mode)
 
         for i, d in enumerate(range(start_idx, end_idx, self.sampling_days)):
-            _sampled_data = self.data_generator.sample_inputdata_split(d, **data_params)
+            _sampled_data = self.data_generator.sample_inputdata_split_new(d, **data_params)
             if _sampled_data is False:
                 continue
             else:
@@ -544,7 +544,6 @@ class DataGeneratorDynamic:
         # features_for_data = features_for_data[calc_length:]
 
         M = m_days // sampling_days
-        K = k_days // sampling_days
 
         assert features_sampled_data.shape[0] == M
 
@@ -611,7 +610,7 @@ class DataGeneratorDynamic:
         assert np.sum(input_enc[:, -1, :] - output_dec[:, 0, :]) == 0
         return input_enc, output_dec, target_dec, features_list, additional_info
 
-    def sample_inputdata_split(self, base_idx, sampling_days=5, m_days=60, k_days=20, balance_class=True,use_label=True):
+    def sample_inputdata_split(self, base_idx, sampling_days=5, m_days=60, k_days=20, balance_class=True, use_label=True):
         if use_label is False:
             balance_class = False
 
