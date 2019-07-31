@@ -165,7 +165,7 @@ class DataScheduler:
             labels_mtl = self.features_cls.labels_for_mtl(features_list, labels)
             model.train_mtl(features, labels_mtl, print_loss=print_loss)
 
-    def test(self, model, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None):
+    def test(self, model, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None, time_step=1):
         if out_dir is None:
             test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
         else:
@@ -179,7 +179,7 @@ class DataScheduler:
 
         if use_label:
             _dataset_list = self._dataset('test')
-            self.features_cls.predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=save_file_name, ylog=ylog)
+            self.features_cls.predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=save_file_name, ylog=ylog, time_step=time_step)
 
         if save_type is not None:
             _dataset_list = self._dataset('predict')
@@ -187,7 +187,6 @@ class DataScheduler:
                 self.save_score_to_db(model, _dataset_list, table_nm=table_nm)
             elif save_type == 'csv':
                 self.save_score_to_csv(model, _dataset_list, out_dir=test_out_path)
-
 
     def save_score_to_csv(self, model, dataset_list, out_dir=None):
         input_enc_list, output_dec_list, _, _, additional_infos, start_date, _ = dataset_list
@@ -201,7 +200,7 @@ class DataScheduler:
                 'start_d': start_date,
                 'base_d': additional_infos[i]['date'],
                 'infocode': additional_infos[i]['assets_list'],
-                'score': predictions[self.features_cls.label_feature][:, 0, 0]})], ignore_index=True, sort=True)
+                'score': predictions[self.features_cls.pred_feature][:, 0, 0]})], ignore_index=True, sort=True)
         df_infos.to_csv(os.path.join(out_dir, 'out_{}.csv'.format(str(start_date))))
 
     def save_score_to_db(self, model, dataset_list, table_nm='kr_weekly_score_temp'):
@@ -219,7 +218,7 @@ class DataScheduler:
                 'start_d': start_date,
                 'base_d': additional_infos[i]['date'],
                 'infocode': additional_infos[i]['assets_list'],
-                'score': predictions[self.features_cls.label_feature][:, 0, 0]})], ignore_index=True, sort=True)
+                'score': predictions[self.features_cls.pred_feature][:, 0, 0]})], ignore_index=True, sort=True)
 
             # db insert
             # sqlm = SqlManager()
@@ -520,6 +519,98 @@ class DataGeneratorDynamic:
             df_pivoted.columns = df_pivoted.columns.droplevel(0).to_numpy(dtype=np.int32)
             self.df_pivoted = df_pivoted[univ_list]
 
+
+    def sample_inputdata_split_new(self, base_idx, sampling_days=5, m_days=60, k_days=20, balance_class=True,use_label=True):
+        if use_label is False:
+            balance_class = False
+
+        self._set_df_pivoted(base_idx)
+        # 미래데이터 원천 제거
+        calc_length = 250
+        df_selected_data = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx - m_days - calc_length])
+                                           & (self.df_pivoted.index <= self.date_[base_idx])]
+
+        # 현재기준 데이터 정제
+        df_for_data = df_selected_data.ix[:, np.sum(~df_selected_data.isna(), axis=0) >= len(df_selected_data.index) * 0.9]  # 90% 이상 데이터 존재
+        df_for_data.ffill(axis=0, inplace=True)
+        df_for_data.bfill(axis=0, inplace=True)
+        df_for_data = df_for_data.ix[:, np.sum(df_for_data.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
+
+        if df_for_data.empty:
+            return False
+
+        additional_info = {'date': self.date_[base_idx], 'assets_list': list(df_for_data.columns)}
+        features_list, features_sampled_data, _ = self.features_cls.processing_split_new(df_for_data, m_days=m_days, k_days=k_days, sampling_days=sampling_days, calc_length=calc_length, use_label=False)
+        # features_for_data = features_for_data[calc_length:]
+
+        M = m_days // sampling_days
+        K = k_days // sampling_days
+
+        assert features_sampled_data.shape[0] == M
+
+        if use_label:
+            # 미래데이터 포함 라벨 생성
+            df_selected_label = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx - m_days - calc_length])
+                                                & (self.df_pivoted.index <= self.date_[base_idx + k_days + calc_length])]
+
+            # 현재기준으로 정제된 종목 기준 라벨 데이터 생성 및 정제
+            df_for_label = df_selected_label.loc[:, df_for_data.columns]
+            df_for_label.ffill(axis=0, inplace=True)
+            df_for_label.bfill(axis=0, inplace=True)
+            df_for_label = df_for_label.ix[:, np.sum(df_for_label.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
+
+            _, features_data_for_label, features_sampled_label = self.features_cls.processing_split_new(df_for_label, m_days=m_days, k_days=k_days, sampling_days=sampling_days, calc_length=calc_length, use_label=True)
+            # features_for_label = features_for_label[calc_length:]
+
+            assert np.sum(features_sampled_data - features_data_for_label) == 0
+
+        _, n_asset, n_feature = features_sampled_data.shape
+        question = np.zeros([n_asset, M, n_feature], dtype=np.float32)
+        answer = np.zeros([n_asset, 2, n_feature], dtype=np.float32)
+
+        question[:] = np.transpose(features_sampled_data, [1, 0, 2])
+        if use_label:
+            answer[:, :2, :] = np.transpose(features_sampled_label, [1, 0, 2])
+            assert np.sum(answer[:, 0, :] - question[:, -1, :]) == 0
+        else:
+            answer[:, 0, :] = question[:, -1, :]
+
+        # _, n_asset, n_feature = features_sampled_data.shape
+        # question = np.zeros([n_asset, M, n_feature], dtype=np.float32)
+        # answer = np.zeros([n_asset, K+1, n_feature], dtype=np.float32)
+        #
+        # question[:] = np.transpose(features_sampled_data[:M], [1, 0, 2])
+        # if use_label:
+        #     answer_data = features_sampled_label[-(K + 1):]
+        #     answer[:, :len(answer_data), :] = np.transpose(answer_data, [1, 0, 2])
+        #     assert np.sum(answer[:, 0, :] - question[:, -1, :]) == 0
+        # else:
+        #     answer[:, 0, :] = question[:, -1, :]
+
+        if balance_class:
+            idx_label = features_list.index(self.features_cls.label_feature)
+            where_p = (answer[:, 1, idx_label] > 0)
+            where_n = (answer[:, 1, idx_label] <= 0)
+            n_max = np.max([np.sum(where_p), np.sum(where_n)])
+            idx_pos = np.concatenate([np.random.choice(np.where(where_p)[0], np.sum(where_p), replace=False),
+                                      np.random.choice(np.where(where_p)[0], n_max - np.sum(where_p), replace=True)])
+            idx_neg = np.concatenate([np.random.choice(np.where(where_n)[0], np.sum(where_n), replace=False),
+                                      np.random.choice(np.where(where_n)[0], n_max - np.sum(where_n), replace=True)])
+
+            idx_bal = np.concatenate([idx_pos, idx_neg])
+            input_enc, output_dec, target_dec = question[idx_bal], answer[idx_bal, :-1, :], answer[idx_bal, 1:, :]
+            # num_min_class = np.min([np.sum(answer[:, 1, idx_y] > 0), np.sum(answer[:, 1, idx_y] <= 0)])
+            # idx_pos = np.random.choice(np.where(answer[:, 1, 0] > 0)[0], num_min_class, replace=False)
+            # idx_neg = np.random.choice(np.where(answer[:, 1, 0] <= 0)[0], num_min_class, replace=False)
+            # idx_bal = np.concatenate([idx_pos, idx_neg])
+            # input_enc, output_dec, target_dec = question[idx_bal], answer[idx_bal, :-1, :], answer[idx_bal, 1:, :]
+        else:
+            input_enc, output_dec, target_dec = question[:], answer[:, :-1, :], answer[:, 1:, :]
+            assert len(additional_info['assets_list']) == len(input_enc)
+
+        assert np.sum(input_enc[:, -1, :] - output_dec[:, 0, :]) == 0
+        return input_enc, output_dec, target_dec, features_list, additional_info
+
     def sample_inputdata_split(self, base_idx, sampling_days=5, m_days=60, k_days=20, balance_class=True,use_label=True):
         if use_label is False:
             balance_class = False
@@ -541,7 +632,7 @@ class DataGeneratorDynamic:
 
         additional_info = {'date': self.date_[base_idx], 'assets_list': list(df_for_data.columns)}
         features_list, features_for_data = self.features_cls.processing_split(df_for_data, m_days=m_days, k_days=k_days, calc_length=calc_length)
-        features_for_data = features_for_data[calc_length:]
+        # features_for_data = features_for_data[calc_length:]
 
         assert features_for_data.shape[0] == m_days + 1
 
@@ -563,7 +654,7 @@ class DataGeneratorDynamic:
             df_for_label = df_for_label.ix[:, np.sum(df_for_label.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
 
             _, features_for_label = self.features_cls.processing_split(df_for_label, m_days=m_days, k_days=k_days, calc_length=calc_length)
-            features_for_label = features_for_label[calc_length:]
+            # features_for_label = features_for_label[calc_length:]
 
             assert features_for_label.shape[0] == m_days + k_days + 1
             assert np.sum(features_for_data - features_for_label[:(m_days + 1), :, :]) == 0

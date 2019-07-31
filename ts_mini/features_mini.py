@@ -40,10 +40,10 @@ def mdd_nd(log_p, n):
 
 
 class Feature:
-    def __init__(self, label_feature='pos_5d'):
-        self._init_features(label_feature)
+    def __init__(self, label_feature='logy_5d', pred_feature='pos_5d'):
+        self._init_features(label_feature, pred_feature)
 
-    def _init_features(self, label_feature):
+    def _init_features(self, label_feature, pred_feature):
         # dict: classification
         self.structure = {
             'logy': ['5d', '20d', '60d', '120d'],
@@ -56,49 +56,171 @@ class Feature:
         }
         self.model_predictor_list = ['logy', 'pos_5d', 'pos_20d', 'std', 'mdd', 'fft']
         self.label_feature = label_feature
+        self.pred_feature = pred_feature
 
     def labels_for_mtl(self, features_list, labels):
         labels_mtl = dict()
         for key in self.structure.keys():
             if isinstance(self.structure[key], str):    # classification
-                labels_mtl[key] = (np.concatenate([labels[:, :, features_list.index(key)].numpy() > 0,
-                                                   labels[:, :, features_list.index(key)].numpy() <= 0], axis=1)
-                                   * 1.).reshape([-1, 1, 2])
+                labels_mtl[key] = np.stack([labels[:, :, features_list.index(key)] > 0, labels[:, :, features_list.index(key)] <= 0],
+                                           axis=-1) * 1.
             else:
                 labels_mtl[key] = np.stack([labels[:, :, features_list.index(key + '_' + item)] for item in self.structure[key]],
                                            axis=-1)
 
         return labels_mtl
 
+    def processing_split_new(self, df_not_null, m_days, k_days, sampling_days, calc_length=0, use_label=False):
+        # if type(df.columns) == pd.MultiIndex:
+        #     df.columns = df.columns.droplevel(0)
+        features_data_dict = dict()
+        features_label_dict = dict()
+        log_p = np.log(df_not_null.values, dtype=np.float32)
+
+        if use_label is False:
+            assert len(log_p) == ((calc_length + m_days) + 1)
+
+            log_p_wo_calc = log_p[calc_length:]
+            assert len(log_p_wo_calc) == (m_days + 1)
+
+            log_p = log_p - log_p[0, :]
+            log_p_wo_calc = log_p_wo_calc - log_p_wo_calc[0, :]
+
+            features_data_dict['logy'] = {'5d': log_y_nd(log_p, 5)[calc_length:],
+                                    '20d': log_y_nd(log_p, 20)[calc_length:],
+                                    '60d': log_y_nd(log_p, 60)[calc_length:],
+                                    '120d': log_y_nd(log_p, 120)[calc_length:]}
+
+            features_data_dict['std'] = {'20d': std_nd(log_p, 20)[calc_length:],
+                                    '60d': std_nd(log_p, 60)[calc_length:],
+                                    '120d': std_nd(log_p, 120)[calc_length:]}
+
+            features_data_dict['pos'] = {'5d': np.sign(features_data_dict['logy']['5d']),
+                                    '20d': np.sign(features_data_dict['logy']['20d']),
+                                    '60d': np.sign(features_data_dict['logy']['60d'])}
+
+            features_data_dict['mdd'] = {'20d': mdd_nd(log_p_wo_calc, 20),
+                                    '60d': mdd_nd(log_p_wo_calc, 60),
+                                    '120d': mdd_nd(log_p_wo_calc, 120)}
+
+            features_data_dict['fft'] = {'3com': fft(log_p_wo_calc, 3, m_days, k_days, 0),
+                                    '6com': fft(log_p_wo_calc, 6, m_days, k_days, 0),
+                                    '100com': fft(log_p_wo_calc, 100, m_days, k_days, 0)}
+        else:
+            assert len(log_p) == ((calc_length + m_days) + (calc_length + k_days) + 1)
+
+            log_p_wo_calc = log_p[calc_length:(-calc_length)]
+            assert len(log_p_wo_calc) == (k_days + m_days + 1)
+
+            log_p = log_p - log_p[0, :]
+            log_p_wo_calc = log_p_wo_calc - log_p_wo_calc[0, :]
+
+            features_data_dict['logy'] = {'5d': log_y_nd(log_p, 5)[calc_length:(calc_length + m_days + 1)],
+                                    '20d': log_y_nd(log_p, 20)[calc_length:(calc_length + m_days + 1)],
+                                    '60d': log_y_nd(log_p, 60)[calc_length:(calc_length + m_days + 1)],
+                                    '120d': log_y_nd(log_p, 120)[calc_length:(calc_length + m_days + 1)]}
+
+            features_label_dict['logy'] = {'5d': log_y_nd(log_p, 5)[calc_length:][m_days:(m_days + 5 + 1)][::5],
+                                    '20d': log_y_nd(log_p, 20)[calc_length:][m_days:(m_days + 20 + 1)][::20],
+                                    '60d': log_y_nd(log_p, 60)[calc_length:][m_days:(m_days + 60 + 1)][::60],
+                                    '120d': log_y_nd(log_p, 120)[calc_length:][m_days:(m_days + 120 + 1)][::120]}
+
+            features_data_dict['std'] = {'20d': std_nd(log_p, 20)[calc_length:(calc_length + m_days + 1)],
+                                    '60d': std_nd(log_p, 60)[calc_length:(calc_length + m_days + 1)],
+                                    '120d': std_nd(log_p, 120)[calc_length:(calc_length + m_days + 1)]}
+
+            features_label_dict['std'] = {'5d': std_nd(log_p, 5)[calc_length:][m_days:(m_days + 5 + 1)][::5],
+                                    '20d': std_nd(log_p, 20)[calc_length:][m_days:(m_days + 20 + 1)][::20],
+                                    '60d': std_nd(log_p, 60)[calc_length:][m_days:(m_days + 60 + 1)][::60],
+                                    '120d': std_nd(log_p, 120)[calc_length:][m_days:(m_days + 120 + 1)][::120]}
+
+            features_data_dict['pos'] = {'5d': np.sign(features_data_dict['logy']['5d']),
+                                    '20d': np.sign(features_data_dict['logy']['20d']),
+                                    '60d': np.sign(features_data_dict['logy']['60d'])}
+
+            features_label_dict['pos'] = {'5d': np.sign(features_label_dict['logy']['5d']),
+                                    '20d': np.sign(features_label_dict['logy']['20d']),
+                                    '60d': np.sign(features_label_dict['logy']['60d'])}
+
+            features_data_dict['mdd'] = {'20d': mdd_nd(log_p_wo_calc, 20)[:(m_days + 1)],
+                                    '60d': mdd_nd(log_p_wo_calc, 60)[:(m_days + 1)],
+                                    '120d': mdd_nd(log_p_wo_calc, 120)[:(m_days + 1)]}
+
+            features_label_dict['mdd'] = {'20d': mdd_nd(log_p_wo_calc, 20)[m_days:][::k_days],
+                                    '60d':  mdd_nd(log_p_wo_calc, 60)[m_days:][::k_days],
+                                    '120d':  mdd_nd(log_p_wo_calc, 120)[m_days:][::k_days]}
+
+            features_data_dict['fft'] = {'3com': fft(log_p_wo_calc, 3, m_days, k_days, 0)[:(m_days + 1)],
+                                    '6com': fft(log_p_wo_calc, 6, m_days, k_days, 0)[:(m_days + 1)],
+                                    '100com': fft(log_p_wo_calc, 100, m_days, k_days, 0)[:(m_days + 1)]}
+
+            features_label_dict['fft'] = {'3com': fft(log_p_wo_calc, 3, m_days, k_days, 0)[m_days:][::k_days],
+                                    '6com': fft(log_p_wo_calc, 6, m_days, k_days, 0)[m_days:][::k_days],
+                                    '100com': fft(log_p_wo_calc, 100, m_days, k_days, 0)[m_days:][::k_days]}
+
+        features_list = list()
+        features_data = list()
+        features_label = list()
+        for key in self.structure.keys():
+            if isinstance(self.structure[key], list):
+                f_list_temp = list()
+                for item in self.structure[key]:
+                    f_list_temp.append(key + '_' + item)
+                    features_data.append(features_data_dict[key][item])
+                    if use_label:
+                        features_label.append(features_label_dict[key][item])
+                features_list = features_list + f_list_temp
+            elif isinstance(self.structure[key], str):
+                k, v = key.split('_')
+                features_data.append(features_data_dict[k][v])
+                if use_label:
+                    features_label.append(features_label_dict[k][v])
+                features_list = features_list + [key]
+
+        features_data = np.stack(features_data, axis=-1)[::sampling_days][1:]
+
+        if use_label:
+            features_label = np.stack(features_label, axis=-1)
+
+        assert len(features_list) == features_data.shape[-1]
+        # feature_df = pd.DataFrame(np.transpose(features_data[:, :, 0]), columns=features_list)
+        return features_list, features_data, features_label
+
     def processing_split(self, df_not_null, m_days, k_days, calc_length=0):
         # if type(df.columns) == pd.MultiIndex:
         #     df.columns = df.columns.droplevel(0)
         features_dict = dict()
         log_p = np.log(df_not_null.values, dtype=np.float32)
+        log_p_wo_calc = log_p[calc_length:]
+
         log_p = log_p - log_p[0, :]
+        log_p_wo_calc = log_p_wo_calc - log_p_wo_calc[0, :]
 
-        features_dict['logy'] = {'5d': log_y_nd(log_p, 5),
-                                '20d': log_y_nd(log_p, 20),
-                                '60d': log_y_nd(log_p, 60),
-                                '120d': log_y_nd(log_p, 120)}
+        features_dict['logy'] = {'5d': log_y_nd(log_p, 5)[calc_length:],
+                                '20d': log_y_nd(log_p, 20)[calc_length:],
+                                '60d': log_y_nd(log_p, 60)[calc_length:],
+                                '120d': log_y_nd(log_p, 120)[calc_length:]}
 
-        features_dict['fft'] = {'3com': fft(log_p, 3, m_days, k_days, calc_length),
-                                '6com': fft(log_p, 6, m_days, k_days, calc_length),
-                                '100com': fft(log_p, 100, m_days, k_days, calc_length)}
-
-        features_dict['std'] = {'20d': std_nd(log_p, 20),
-                                '60d': std_nd(log_p, 60),
-                                '120d': std_nd(log_p, 120)}
-
-        features_dict['mdd'] = {'20d': mdd_nd(log_p, 20),
-                                '60d': mdd_nd(log_p, 60),
-                                '120d': mdd_nd(log_p, 120)}
+        features_dict['std'] = {'20d': std_nd(log_p, 20)[calc_length:],
+                                '60d': std_nd(log_p, 60)[calc_length:],
+                                '120d': std_nd(log_p, 120)[calc_length:]}
 
         features_dict['pos'] = {'5d': np.sign(features_dict['logy']['5d']),
                                 '20d': np.sign(features_dict['logy']['20d']),
                                 '60d': np.sign(features_dict['logy']['60d'])}
 
-        features_dict['cum_log'] = {'5d': np.cumsum(features_dict['logy']['5d'], axis=0)}
+        features_dict['mdd'] = {'20d': mdd_nd(log_p_wo_calc, 20),
+                                '60d': mdd_nd(log_p_wo_calc, 60),
+                                '120d': mdd_nd(log_p_wo_calc, 120)}
+
+        features_dict['fft'] = {'3com': fft(log_p_wo_calc, 3, m_days, k_days, 0),
+                                '6com': fft(log_p_wo_calc, 6, m_days, k_days, 0),
+                                '100com': fft(log_p_wo_calc, 100, m_days, k_days, 0)}
+        # features_dict['fft'] = {'3com': fft(log_p, 3, m_days, k_days, calc_length),
+        #                         '6com': fft(log_p, 6, m_days, k_days, calc_length),
+        #                         '100com': fft(log_p, 100, m_days, k_days, calc_length)}
+
+        # features_dict['cum_log'] = {'5d': np.cumsum(features_dict['logy']['5d'], axis=0)}
 
         features_list = list()
         features_data = list()
@@ -120,7 +242,7 @@ class Feature:
         # feature_df = pd.DataFrame(np.transpose(features_data[:, :, 0]), columns=features_list)
         return features_list, features_data
 
-    def predict_plot_mtl_cross_section_test(self, model, dataset_list, save_dir='out.png', ylog=False):
+    def predict_plot_mtl_cross_section_test(self, model, dataset_list, save_dir='out.png', ylog=False, time_step=1):
         if dataset_list is False:
             return False
         else:
@@ -128,9 +250,11 @@ class Feature:
 
         if self.label_feature[:3] == 'pos':
             idx_y_nm = 'logy_' + self.structure[self.label_feature]
+        else:
+            idx_y_nm = self.label_feature
         idx_y = features_list.index(idx_y_nm)
 
-        true_y = np.zeros(len(input_enc_list) + 1)
+        true_y = np.zeros(len(input_enc_list) // time_step + 1)
 
         pred_q1 = np.zeros_like(true_y)
         pred_q2 = np.zeros_like(true_y)
@@ -139,7 +263,9 @@ class Feature:
         pred_q5 = np.zeros_like(true_y)
 
         for i, (input_enc_t, output_dec_t, target_dec_t) in enumerate(zip(input_enc_list, output_dec_list, target_dec_list)):
-            t = i + 1
+            if i % time_step != 0:
+                continue
+            t = i // time_step + 1
             assert np.sum(input_enc_t[:, -1, :] - output_dec_t[:, 0, :]) == 0
             new_output_t = np.zeros_like(output_dec_t)
             new_output_t[:, 0, :] = output_dec_t[:, 0, :]
@@ -151,7 +277,7 @@ class Feature:
             # p_ret, p_pos, p_vol, p_mdd = predictions
 
             true_y[t] = np.mean(labels[:, 0, idx_y])
-            value_ = predictions[self.label_feature][:, 0, 0]
+            value_ = predictions[self.pred_feature][:, 0, 0]
 
             q1_crit, q2_crit, q3_crit, q4_crit = np.percentile(value_, q=[80, 60, 40, 20])
             pred_q1[t] = np.mean(labels[value_ >= q1_crit, 0, idx_y])

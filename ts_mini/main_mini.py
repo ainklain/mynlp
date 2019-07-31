@@ -8,16 +8,17 @@ import os
 
 def main():
     ts_configs = Config()
-    ts_configs.label_feature = 'pos_5d'
+    ts_configs.label_feature = 'logy_20d'
+    ts_configs.pred_feature = 'pos_20d'
     # ts_configs.k_days = 5
-
-    ts_configs.f_name = 'kr_model_2_1_60_4'  #: kr every
+    ts_configs.f_name = 'kr_model_20_0'  #: kr every
     ts_configs.train_steps = 10000
-    ts_configs.eval_steps = 200
+    ts_configs.eval_steps = 500
     ts_configs.early_stopping_count = 5
+    ts_configs.k_days = 20
     config_str = ts_configs.export()
     # get data for all assets and dates
-    features_cls = Feature(ts_configs.label_feature)
+    features_cls = Feature(ts_configs.label_feature, ts_configs.pred_feature)
 
     ds = DataScheduler(ts_configs, features_cls, data_type='kr_stock')
     model = TSModel(ts_configs, features_cls)
@@ -49,7 +50,8 @@ def main():
                 file_nm='test_{}.png'.format(ii),
                 ylog=False,
                 save_type='csv',
-                table_nm='kr_weekly_score_temp')
+                table_nm='kr_weekly_score_temp',
+                time_step=4)
 
         ds.next()
         ii += 1
