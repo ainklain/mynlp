@@ -11,7 +11,7 @@ def main():
     ts_configs.label_feature = 'pos_5d'
     # ts_configs.k_days = 5
 
-    ts_configs.f_name = 'kr_model_2_60_3'  #: kr every
+    ts_configs.f_name = 'kr_model_2_1_60_4'  #: kr every
     ts_configs.train_steps = 10000
     ts_configs.eval_steps = 200
     ts_configs.early_stopping_count = 5

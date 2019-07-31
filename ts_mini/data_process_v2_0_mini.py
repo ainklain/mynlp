@@ -526,7 +526,8 @@ class DataGeneratorDynamic:
 
         self._set_df_pivoted(base_idx)
         # 미래데이터 원천 제거
-        df_selected_data = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx - m_days])
+        calc_length = 250
+        df_selected_data = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx - m_days - calc_length])
                                            & (self.df_pivoted.index <= self.date_[base_idx])]
 
         # 현재기준 데이터 정제
@@ -539,7 +540,9 @@ class DataGeneratorDynamic:
             return False
 
         additional_info = {'date': self.date_[base_idx], 'assets_list': list(df_for_data.columns)}
-        features_list, features_for_data = self.features_cls.processing_split(df_for_data, m_days=m_days, k_days=k_days)
+        features_list, features_for_data = self.features_cls.processing_split(df_for_data, m_days=m_days, k_days=k_days, calc_length=calc_length)
+        features_for_data = features_for_data[calc_length:]
+
         assert features_for_data.shape[0] == m_days + 1
 
         M = m_days // sampling_days
@@ -550,7 +553,7 @@ class DataGeneratorDynamic:
 
         if use_label:
             # 미래데이터 포함 라벨 생성
-            df_selected_label = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx-m_days])
+            df_selected_label = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx-m_days - calc_length])
                                                 & (self.df_pivoted.index <= self.date_[base_idx+k_days])]
 
             # 현재기준으로 정제된 종목 기준 라벨 데이터 생성 및 정제
@@ -559,7 +562,8 @@ class DataGeneratorDynamic:
             df_for_label.bfill(axis=0, inplace=True)
             df_for_label = df_for_label.ix[:, np.sum(df_for_label.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
 
-            _, features_for_label = self.features_cls.processing_split(df_for_label, m_days=m_days, k_days=k_days)
+            _, features_for_label = self.features_cls.processing_split(df_for_label, m_days=m_days, k_days=k_days, calc_length=calc_length)
+            features_for_label = features_for_label[calc_length:]
 
             assert features_for_label.shape[0] == m_days + k_days + 1
             assert np.sum(features_for_data - features_for_label[:(m_days + 1), :, :]) == 0
@@ -608,7 +612,8 @@ class DataGeneratorDynamic:
                          **kwargs):
 
         self._set_df_pivoted(base_idx)
-        df_selected = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx-m_days])
+        calc_length = 250
+        df_selected = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx-m_days-calc_length])
                                       & (self.df_pivoted.index <= self.date_[base_idx+k_days])]
         df_not_null = df_selected.ix[:, np.sum(~df_selected.isna(), axis=0) >= len(df_selected.index) * 0.9]  # 90% 이상 데이터 존재
         df_not_null.ffill(axis=0, inplace=True)
@@ -632,7 +637,8 @@ class DataGeneratorDynamic:
 
         additional_info = {'date': self.date_[base_idx], 'assets_list': list(df_not_null.columns)}
 
-        features_list, features_data = processing(df_not_null, m_days=m_days)
+        features_list, features_data = processing(df_not_null, m_days=m_days, calc_length=calc_length)
+        features_data = features_data[calc_length:]
 
         assert features_data.shape[0] == m_days + k_days + 1
 
