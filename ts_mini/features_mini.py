@@ -272,6 +272,7 @@ class Feature:
         #     idx_y_nm = self.label_feature
         #
         # idx_y = features_list.index(idx_y_nm)
+        input_idx_y = features_list.index(self.label_feature)
         idx_y = 0
 
         true_y = np.zeros(len(input_enc_list) // time_step + 1)
@@ -289,7 +290,7 @@ class Feature:
             if i % time_step != 0:
                 continue
             t = i // time_step + 1
-            assert np.sum(input_enc_t[:, -1, :] - output_dec_t[:, 0, :]) == 0
+            assert np.sum(input_enc_t[:, -1, input_idx_y] - output_dec_t[:, 0, idx_y]) == 0
             new_output_t = np.zeros_like(output_dec_t)
             new_output_t[:, 0, :] = output_dec_t[:, 0, :]
 

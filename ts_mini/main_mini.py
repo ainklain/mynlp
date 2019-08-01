@@ -12,7 +12,7 @@ def main():
     ts_configs.label_feature = 'logy_{}d'.format(ts_configs.k_days)
     ts_configs.pred_feature = 'pos_{}d'.format(ts_configs.k_days)
     # ts_configs.k_days = 5
-    ts_configs.f_name = 'kr_model_20_3'  #: kr every
+    ts_configs.f_name = 'kr_model_20_7'  #: kr every
     ts_configs.train_steps = 10000
     ts_configs.eval_steps = 500
     ts_configs.early_stopping_count = 5

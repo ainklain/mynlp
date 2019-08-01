@@ -585,9 +585,11 @@ class DataGeneratorDynamic:
             answer[:, :2, :] = np.transpose(features_sampled_label, [1, 0, 2])
             assert np.sum(answer[:, 0, :] - question[:, -1, :]) == 0
         elif label_type == 'test_label':
+            label_idx = features_list.index(self.features_cls.label_feature)
+
             answer = np.zeros([n_asset, 2, 1], dtype=np.float32)
             answer[:, :2, :] = np.transpose(features_sampled_label, [1, 0, 2])
-            assert np.sum(answer[:, 0, :] - question[:, -1, :]) == 0
+            assert np.sum(answer[:, 0, 0] - question[:, -1, label_idx]) == 0
         else:
             answer = np.zeros([n_asset, 2, n_feature], dtype=np.float32)
             answer[:, 0, :] = question[:, -1, :]
@@ -625,7 +627,11 @@ class DataGeneratorDynamic:
             input_enc, output_dec, target_dec = question[:], answer[:, :-1, :], answer[:, 1:, :]
             assert len(additional_info['assets_list']) == len(input_enc)
 
-        assert np.sum(input_enc[:, -1, :] - output_dec[:, 0, :]) == 0
+        if label_type == 'test_label':
+            label_idx = features_list.index(self.features_cls.label_feature)
+            assert np.sum(input_enc[:, -1, label_idx] - output_dec[:, 0, 0]) == 0
+        else:
+            assert np.sum(input_enc[:, -1, :] - output_dec[:, 0, :]) == 0
         return input_enc, output_dec, target_dec, features_list, additional_info
 
     def sample_inputdata_split(self, base_idx, sampling_days=5, m_days=60, k_days=20, balance_class=True, use_label=True):
