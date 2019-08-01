@@ -8,14 +8,14 @@ import os
 
 def main():
     ts_configs = Config()
-    ts_configs.label_feature = 'logy_20d'
-    ts_configs.pred_feature = 'pos_20d'
+    ts_configs.k_days = 20
+    ts_configs.label_feature = 'logy_{}d'.format(ts_configs.k_days)
+    ts_configs.pred_feature = 'pos_{}d'.format(ts_configs.k_days)
     # ts_configs.k_days = 5
-    ts_configs.f_name = 'kr_model_20_0'  #: kr every
+    ts_configs.f_name = 'kr_model_20_3'  #: kr every
     ts_configs.train_steps = 10000
     ts_configs.eval_steps = 500
     ts_configs.early_stopping_count = 5
-    ts_configs.k_days = 20
     config_str = ts_configs.export()
     # get data for all assets and dates
     features_cls = Feature(ts_configs.label_feature, ts_configs.pred_feature)
@@ -31,7 +31,7 @@ def main():
     if os.path.exists(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name + '.pkl')):
         model.load_model(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name))
 
-    ds.set_idx(4000)
+    ds.set_idx(4010)
     ds.test_end_idx = ds.base_idx + 1000
     ii = 0
     while not ds.done:

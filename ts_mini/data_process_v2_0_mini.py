@@ -54,28 +54,29 @@ class DataScheduler:
         data_params['sampling_days'] = self.sampling_days
         data_params['m_days'] = self.m_days
         data_params['k_days'] = self.k_days
+        data_params['calc_length'] = 250
         if mode == 'train':
             start_idx = self.train_begin_idx + self.m_days
             end_idx = self.eval_begin_idx - self.k_days
             data_params['balance_class'] = True
-            data_params['use_label'] = True
+            data_params['label_type'] = 'trainable_label'   # trainable: calc_length 반영
         elif mode == 'eval':
             start_idx = self.eval_begin_idx + self.m_days
             end_idx = self.test_begin_idx - self.k_days
             data_params['balance_class'] = True
-            data_params['use_label'] = True
+            data_params['label_type'] = 'trainable_label'   # trainable: calc_length 반영
         elif mode == 'test':
             start_idx = self.test_begin_idx + self.m_days
             # start_idx = self.test_begin_idx
             end_idx = self.test_end_idx
             data_params['balance_class'] = False
-            data_params['use_label'] = True
+            data_params['label_type'] = 'test_label'        # test: 예측하고자 하는 것만 반영 (k_days)
         elif mode == 'predict':
             start_idx = self.test_begin_idx + self.m_days
             # start_idx = self.test_begin_idx
             end_idx = self.test_end_idx
             data_params['balance_class'] = False
-            data_params['use_label'] = False
+            data_params['label_type'] = None            # label 없이 과거데이터만으로 스코어 산출
         else:
             raise NotImplementedError
 
@@ -520,13 +521,13 @@ class DataGeneratorDynamic:
             self.df_pivoted = df_pivoted[univ_list]
 
 
-    def sample_inputdata_split_new(self, base_idx, sampling_days=5, m_days=60, k_days=20, balance_class=True,use_label=True):
-        if use_label is False:
+    def sample_inputdata_split_new(self, base_idx, sampling_days=5, m_days=60, k_days=20, calc_length=250, balance_class=True,label_type='trainable_label'):
+        if label_type != 'trainable_label':
             balance_class = False
 
         self._set_df_pivoted(base_idx)
         # 미래데이터 원천 제거
-        calc_length = 250
+
         df_selected_data = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx - m_days - calc_length])
                                            & (self.df_pivoted.index <= self.date_[base_idx])]
 
@@ -540,14 +541,14 @@ class DataGeneratorDynamic:
             return False
 
         additional_info = {'date': self.date_[base_idx], 'assets_list': list(df_for_data.columns)}
-        features_list, features_sampled_data, _ = self.features_cls.processing_split_new(df_for_data, m_days=m_days, k_days=k_days, sampling_days=sampling_days, calc_length=calc_length, use_label=False)
+        features_list, features_sampled_data, _ = self.features_cls.processing_split_new(df_for_data, m_days=m_days, k_days=k_days, sampling_days=sampling_days, calc_length=calc_length, label_type=None)
         # features_for_data = features_for_data[calc_length:]
 
         M = m_days // sampling_days
 
         assert features_sampled_data.shape[0] == M
 
-        if use_label:
+        if label_type == 'trainable_label':
             # 미래데이터 포함 라벨 생성
             df_selected_label = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx - m_days - calc_length])
                                                 & (self.df_pivoted.index <= self.date_[base_idx + k_days + calc_length])]
@@ -558,20 +559,37 @@ class DataGeneratorDynamic:
             df_for_label.bfill(axis=0, inplace=True)
             df_for_label = df_for_label.ix[:, np.sum(df_for_label.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
 
-            _, features_data_for_label, features_sampled_label = self.features_cls.processing_split_new(df_for_label, m_days=m_days, k_days=k_days, sampling_days=sampling_days, calc_length=calc_length, use_label=True)
+            _, features_data_for_label, features_sampled_label = self.features_cls.processing_split_new(df_for_label, m_days=m_days, k_days=k_days, sampling_days=sampling_days, calc_length=calc_length, label_type='trainable_label')
             # features_for_label = features_for_label[calc_length:]
 
             assert np.sum(features_sampled_data - features_data_for_label) == 0
+        elif label_type == 'test_label':
+            df_selected_label = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx - m_days - calc_length])
+                                                & (self.df_pivoted.index <= self.date_[base_idx + k_days])]
+
+            # 현재기준으로 정제된 종목 기준 라벨 데이터 생성 및 정제
+            df_for_label = df_selected_label.loc[:, df_for_data.columns]
+            df_for_label.ffill(axis=0, inplace=True)
+            df_for_label.bfill(axis=0, inplace=True)
+            df_for_label = df_for_label.ix[:, np.sum(df_for_label.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
+
+            _, features_data_for_label, features_sampled_label = self.features_cls.processing_split_new(df_for_label, m_days=m_days, k_days=k_days, sampling_days=sampling_days, calc_length=calc_length, label_type='test_label')
+            # features_for_label = features_for_label[calc_length:]
 
         _, n_asset, n_feature = features_sampled_data.shape
         question = np.zeros([n_asset, M, n_feature], dtype=np.float32)
-        answer = np.zeros([n_asset, 2, n_feature], dtype=np.float32)
 
         question[:] = np.transpose(features_sampled_data, [1, 0, 2])
-        if use_label:
+        if label_type == 'trainable_label':
+            answer = np.zeros([n_asset, 2, n_feature], dtype=np.float32)
+            answer[:, :2, :] = np.transpose(features_sampled_label, [1, 0, 2])
+            assert np.sum(answer[:, 0, :] - question[:, -1, :]) == 0
+        elif label_type == 'test_label':
+            answer = np.zeros([n_asset, 2, 1], dtype=np.float32)
             answer[:, :2, :] = np.transpose(features_sampled_label, [1, 0, 2])
             assert np.sum(answer[:, 0, :] - question[:, -1, :]) == 0
         else:
+            answer = np.zeros([n_asset, 2, n_feature], dtype=np.float32)
             answer[:, 0, :] = question[:, -1, :]
 
         # _, n_asset, n_feature = features_sampled_data.shape
