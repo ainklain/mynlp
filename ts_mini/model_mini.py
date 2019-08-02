@@ -59,7 +59,7 @@ class MultiHeadAttention(Model):
         key_dim_size = float(key.get_shape().as_list()[-1])
         key = tf.transpose(key, perm=[0, 2, 1])
         outputs = tf.matmul(query, key) / tf.sqrt(key_dim_size)
-
+        print("MHA: matmul_size {} (q: {}, k: {})".format(tf.matmul(query, key).shape, query.shape, key.shape))
         if masked:
             diag_vals = tf.ones_like(outputs[0, :, :])
             tril = tf.linalg.LinearOperatorLowerTriangular(diag_vals).to_dense()
@@ -85,10 +85,13 @@ class MultiHeadAttention(Model):
             plt.show()
 
     def call(self, query, key, value, masked=False):
+
+        print("before: [q: {}, k: {}, v:{}]".format(query.shape, key.shape, value.shape))
         query = tf.concat(tf.split(self.q_layer(query), self.heads, axis=-1), axis=0)
         key = tf.concat(tf.split(self.k_layer(key), self.heads, axis=-1), axis=0)
         value = tf.concat(tf.split(self.v_layer(value), self.heads, axis=-1), axis=0)
 
+        print("after: [q: {}, k: {}, v:{}]".format(query.shape, key.shape, value.shape))
         attention_map = self.scaled_dot_product_attention(query, key, value, masked=masked)
 
         attn_outputs = tf.concat(tf.split(attention_map, self.heads, axis=0), axis=-1)

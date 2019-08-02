@@ -275,7 +275,7 @@ class Feature:
         input_idx_y = features_list.index(self.label_feature)
         idx_y = 0
 
-        true_y = np.zeros(len(input_enc_list) // time_step + 1)
+        true_y = np.zeros(int(np.ceil(len(input_enc_list) / time_step)) + 1)
 
         pred_q1 = np.zeros_like(true_y)
         pred_q2 = np.zeros_like(true_y)
@@ -283,8 +283,6 @@ class Feature:
         pred_q4 = np.zeros_like(true_y)
         pred_q5 = np.zeros_like(true_y)
         pos_wgt = np.zeros_like(true_y)
-        mkt_timing_p = np.zeros_like(true_y)
-        mkt_timing_n = np.zeros_like(true_y)
 
         for i, (input_enc_t, output_dec_t, target_dec_t) in enumerate(zip(input_enc_list, output_dec_list, target_dec_list)):
             if i % time_step != 0:
@@ -310,9 +308,6 @@ class Feature:
             pred_q4[t] = np.mean(labels[(value_ >= q4_crit) & (value_ < q3_crit), 0, idx_y])
             pred_q5[t] = np.mean(labels[(value_ < q4_crit), 0, idx_y])
             pos_wgt[t] = np.sum(value_ > 0.5) / len(value_)
-            mkt_timing_p[t] = true_y[t] * (pos_wgt[t] >= 0.6)
-            mkt_timing_n[t] = -true_y[t] * (pos_wgt[t] <= 0.4)
-
 
         data = pd.DataFrame({'true_y': np.cumprod(1. + true_y),
                              'pred_ls': np.cumprod(1. + pred_q1 - pred_q5),
@@ -322,13 +317,11 @@ class Feature:
                              'pred_q4': np.cumprod(1. + pred_q4),
                              'pred_q5': np.cumprod(1. + pred_q5),
                              'pos_wgt': pos_wgt,
-                             'mkt_timing_p': np.cumprod(1. + mkt_timing_p),
-                             'mkt_timing_n': np.cumprod(1. + mkt_timing_n),
         })
 
         fig = plt.figure()
         fig.suptitle('{} ~ {}'.format(start_date, end_date))
-        ax1, ax2, ax3, ax4 = fig.subplots(4, 1)
+        ax1, ax2, ax3 = fig.subplots(3, 1)
         ax1.plot(data[['true_y', 'pred_ls', 'pred_q1', 'pred_q5']])
         box = ax1.get_position()
         ax1.set_position([box.x0, box.y0, box.width * 0.8, box.height])
@@ -346,11 +339,6 @@ class Feature:
         box = ax3.get_position()
         ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
         ax3.legend(['positive wgt'], loc='center left', bbox_to_anchor=(1, 0.5))
-
-        ax4.plot(data[['mkt_timing_p', 'mkt_timing_n']])
-        box = ax3.get_position()
-        ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-        ax3.legend(['long mkt', 'short mkt'], loc='center left', bbox_to_anchor=(1, 0.5))
 
         fig.savefig(save_dir)
         print("figure saved. (dir: {})".format(save_dir))

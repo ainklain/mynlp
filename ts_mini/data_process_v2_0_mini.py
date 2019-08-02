@@ -11,13 +11,13 @@ from sklearn.model_selection import train_test_split
 
 
 class DataScheduler:
-    def __init__(self, configs, features_cls, data_type='kr_stock'):
+    def __init__(self, configs, features_cls, data_type='kr_stock', univ_type='all'):
         # make a directory for outputs
         self.data_out_path = os.path.join(os.getcwd(), configs.data_out_path)
         os.makedirs(self.data_out_path, exist_ok=True)
 
         # self.data_generator = DataGenerator(data_type)    # infocode
-        self.data_generator = DataGeneratorDynamic(features_cls, data_type)    # infocode
+        self.data_generator = DataGeneratorDynamic(features_cls, data_type, univ_type)    # infocode
 
         self.train_set_length = configs.train_set_length
         self.retrain_days = configs.retrain_days
@@ -55,6 +55,7 @@ class DataScheduler:
         data_params['m_days'] = self.m_days
         data_params['k_days'] = self.k_days
         data_params['calc_length'] = 250
+        data_params['univ_idx'] = self.test_begin_idx
         if mode == 'train':
             start_idx = self.train_begin_idx + self.m_days
             end_idx = self.eval_begin_idx - self.k_days
@@ -180,10 +181,17 @@ class DataScheduler:
 
         if use_label:
             _dataset_list = self._dataset('test')
+            if _dataset_list is False:
+                print('[test] no test data')
+                return False
             self.features_cls.predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=save_file_name, ylog=ylog, time_step=time_step)
 
         if save_type is not None:
             _dataset_list = self._dataset('predict')
+            if _dataset_list is False:
+                print('[predict] no test data')
+                return False
+
             if save_type == 'db':
                 self.save_score_to_db(model, _dataset_list, table_nm=table_nm)
             elif save_type == 'csv':
@@ -290,6 +298,8 @@ class DataSchedulerCrossSection:
         data_params['sampling_days'] = self.sampling_days
         data_params['m_days'] = self.m_days
         data_params['k_days'] = self.k_days
+        data_params['univ_idx'] = self.test_begin_idx
+        # data_params['univ_idx'] = None
         if mode == 'train':
             start_idx = self.train_begin_idx + self.m_days
             end_idx = self.test_begin_idx - self.k_days
@@ -485,7 +495,7 @@ class DataSchedulerCrossSection:
 
 
 class DataGeneratorDynamic:
-    def __init__(self, features_cls, data_type='kr_stock'):
+    def __init__(self, features_cls, data_type='kr_stock', univ_type='all'):
         if data_type == 'kr_stock':
             data_path = './data/kr_close_y_90.csv'
             data_df_temp = pd.read_csv(data_path)
@@ -500,14 +510,22 @@ class DataGeneratorDynamic:
             self.data_df['y'] = self.data_df['y'] + 1
             self.data_df['cum_y'] = self.data_df[['date_', 'infocode', 'y']].groupby('infocode').cumprod(axis=0)
 
-            self.data_code = pd.read_csv('./data/kr_sizeinfo_90.csv')
-            self.data_code = self.data_code[self.data_code.infocode > 0]
+            self.univ_type = univ_type
+            if univ_type == 'all':
+                self.data_code = pd.read_csv('./data/kr_sizeinfo_90.csv')
+                self.data_code = self.data_code[self.data_code.infocode > 0]
+            elif univ_type == 'selected':
+                self.data_code = pd.read_csv('./data/kr_univ_monthly.csv')
+                self.data_code = self.data_code[self.data_code.infocode > 0]
             self.base_d = None
 
             self.features_cls = features_cls
 
     def _set_df_pivoted(self, univ_idx):
         date_arr = self.data_code.eval_d.unique()
+        if np.sum(date_arr <= self.date_[univ_idx]) == 0:
+            return False
+
         base_d = max(date_arr[date_arr <= self.date_[univ_idx]])
 
         if self.base_d != base_d:
@@ -518,15 +536,24 @@ class DataGeneratorDynamic:
 
             df_pivoted = self.data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
             df_pivoted.columns = df_pivoted.columns.droplevel(0).to_numpy(dtype=np.int32)
-            self.df_pivoted = df_pivoted[univ_list]
+            univ_list_selected = sorted(list(set(univ_list).intersection(set(df_pivoted.columns))))
 
+            self.df_pivoted = df_pivoted[univ_list_selected]
+            self.df_size = self.data_code[self.data_code.eval_d == base_d][['infocode', 'mktcap']].set_index('infocode').loc[univ_list_selected, :]
+            self.df_size['rnk'] = self.df_size.mktcap.rank() / len(self.df_size)
+        return True
 
-    def sample_inputdata_split_new(self, base_idx, sampling_days=5, m_days=60, k_days=20, calc_length=250, balance_class=True,label_type='trainable_label'):
+    def sample_inputdata_split_new(self, base_idx, sampling_days=5, m_days=60, k_days=20, calc_length=250, balance_class=True,label_type='trainable_label', univ_idx=None):
         if label_type != 'trainable_label':
             balance_class = False
 
-        self._set_df_pivoted(base_idx)
+        if univ_idx is None:
+            univ_idx = base_idx
+        is_data_exist = self._set_df_pivoted(univ_idx)
+
         # 미래데이터 원천 제거
+        if not is_data_exist:
+            return False
 
         df_selected_data = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx - m_days - calc_length])
                                            & (self.df_pivoted.index <= self.date_[base_idx])]
