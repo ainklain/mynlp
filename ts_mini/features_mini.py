@@ -58,7 +58,7 @@ class Feature:
         self.label_feature = label_feature
         self.pred_feature = pred_feature
 
-    def labels_for_mtl(self, features_list, labels):
+    def labels_for_mtl(self, features_list, labels, size_value):
         labels_mtl = dict()
         for key in self.structure.keys():
             if isinstance(self.structure[key], str):    # classification
@@ -67,6 +67,7 @@ class Feature:
             else:
                 labels_mtl[key] = np.stack([labels[:, :, features_list.index(key + '_' + item)] for item in self.structure[key]],
                                            axis=-1)
+        labels_mtl['size_value'] = size_value
 
         return labels_mtl
 
@@ -272,10 +273,10 @@ class Feature:
         #     idx_y_nm = self.label_feature
         #
         # idx_y = features_list.index(idx_y_nm)
-        input_idx_y = features_list.index(self.label_feature)
-        idx_y = 0
+        idx_y = features_list.index(self.label_feature)
 
         true_y = np.zeros(int(np.ceil(len(input_enc_list) / time_step)) + 1)
+        true_y_mw = np.zeros(int(np.ceil(len(input_enc_list) / time_step)) + 1)
 
         pred_q1 = np.zeros_like(true_y)
         pred_q2 = np.zeros_like(true_y)
@@ -284,13 +285,20 @@ class Feature:
         pred_q5 = np.zeros_like(true_y)
         pos_wgt = np.zeros_like(true_y)
 
-        for i, (input_enc_t, output_dec_t, target_dec_t) in enumerate(zip(input_enc_list, output_dec_list, target_dec_list)):
+        pred_q1_mw = np.zeros_like(true_y)
+        pred_q2_mw = np.zeros_like(true_y)
+        pred_q3_mw = np.zeros_like(true_y)
+        pred_q4_mw = np.zeros_like(true_y)
+        pred_q5_mw = np.zeros_like(true_y)
+
+        size_value_list = [add_info['size_value'] for add_info in additional_infos]
+        for i, (input_enc_t, output_dec_t, target_dec_t, size_value) in enumerate(zip(input_enc_list, output_dec_list, target_dec_list, size_value_list)):
             if i % time_step != 0:
                 continue
             t = i // time_step + 1
-            assert np.sum(input_enc_t[:, -1, input_idx_y] - output_dec_t[:, 0, idx_y]) == 0
+            assert np.sum(input_enc_t[:, -1, idx_y] - output_dec_t[:, 0, idx_y]) == 0
             new_output_t = np.zeros_like(output_dec_t)
-            new_output_t[:, 0, :] = output_dec_t[:, 0, :]
+            new_output_t[:, 0, :] = output_dec_t[:, 0, :] + size_value[:, 0, :]
 
             features = {'input': input_enc_t, 'output': new_output_t}
             labels = target_dec_t
@@ -302,12 +310,24 @@ class Feature:
             value_ = predictions[self.pred_feature][:, 0, 0]
 
             q1_crit, q2_crit, q3_crit, q4_crit = np.percentile(value_, q=[80, 60, 40, 20])
-            pred_q1[t] = np.mean(labels[value_ >= q1_crit, 0, idx_y])
-            pred_q2[t] = np.mean(labels[(value_ >= q2_crit) & (value_ < q1_crit), 0, idx_y])
-            pred_q3[t] = np.mean(labels[(value_ >= q3_crit) & (value_ < q2_crit), 0, idx_y])
-            pred_q4[t] = np.mean(labels[(value_ >= q4_crit) & (value_ < q3_crit), 0, idx_y])
-            pred_q5[t] = np.mean(labels[(value_ < q4_crit), 0, idx_y])
+            crit1 = (value_ >= q1_crit)
+            crit2 = ((value_ >= q2_crit) & (value_ < q1_crit))
+            crit3 = ((value_ >= q3_crit) & (value_ < q2_crit))
+            crit4 = ((value_ >= q4_crit) & (value_ < q3_crit))
+            crit5 = (value_ < q4_crit)
+            pred_q1[t] = np.mean(labels[crit1, 0, idx_y])
+            pred_q2[t] = np.mean(labels[crit2, 0, idx_y])
+            pred_q3[t] = np.mean(labels[crit3, 0, idx_y])
+            pred_q4[t] = np.mean(labels[crit4, 0, idx_y])
+            pred_q5[t] = np.mean(labels[crit5, 0, idx_y])
             pos_wgt[t] = np.sum(value_ > 0.5) / len(value_)
+
+            true_y_mw[t] = np.sum(labels[:, 0, idx_y] * size_value[:, 0, 0]) / np.sum(size_value[:, 0, 0])
+            pred_q1_mw[t] = np.sum(labels[crit1, 0, idx_y] * size_value[crit1, 0, 0]) / np.sum(size_value[crit1, 0, 0])
+            pred_q2_mw[t] = np.sum(labels[crit2, 0, idx_y] * size_value[crit2, 0, 0]) / np.sum(size_value[crit2, 0, 0])
+            pred_q3_mw[t] = np.sum(labels[crit3, 0, idx_y] * size_value[crit3, 0, 0]) / np.sum(size_value[crit3, 0, 0])
+            pred_q4_mw[t] = np.sum(labels[crit4, 0, idx_y] * size_value[crit4, 0, 0]) / np.sum(size_value[crit4, 0, 0])
+            pred_q5_mw[t] = np.sum(labels[crit5, 0, idx_y] * size_value[crit5, 0, 0]) / np.sum(size_value[crit5, 0, 0])
 
         data = pd.DataFrame({'true_y': np.cumprod(1. + true_y),
                              'pred_ls': np.cumprod(1. + pred_q1 - pred_q5),
@@ -317,11 +337,22 @@ class Feature:
                              'pred_q4': np.cumprod(1. + pred_q4),
                              'pred_q5': np.cumprod(1. + pred_q5),
                              'pos_wgt': pos_wgt,
+                             'true_y_mw': np.cumprod(1. + true_y_mw),
+                             'pred_ls_mw': np.cumprod(1. + pred_q1_mw - pred_q5_mw),
+                             'pred_q1_mw': np.cumprod(1. + pred_q1_mw),
+                             'pred_q2_mw': np.cumprod(1. + pred_q2_mw),
+                             'pred_q3_mw': np.cumprod(1. + pred_q3_mw),
+                             'pred_q4_mw': np.cumprod(1. + pred_q4_mw),
+                             'pred_q5_mw': np.cumprod(1. + pred_q5_mw),
         })
 
+        # equal fig
         fig = plt.figure()
         fig.suptitle('{} ~ {}'.format(start_date, end_date))
-        ax1, ax2, ax3 = fig.subplots(3, 1)
+        ax1 = fig.add_subplot(221)
+        ax2 = fig.add_subplot(222)
+        ax3 = fig.add_subplot(223)
+        ax4 = fig.add_subplot(224)
         ax1.plot(data[['true_y', 'pred_ls', 'pred_q1', 'pred_q5']])
         box = ax1.get_position()
         ax1.set_position([box.x0, box.y0, box.width * 0.8, box.height])
@@ -335,16 +366,28 @@ class Feature:
         ax2.legend(['true_y', 'q1', 'q2', 'q3', 'q4', 'q5'], loc='center left', bbox_to_anchor=(1, 0.5))
         ax2.set_yscale('log', basey=2)
 
-        ax3.plot(data[['pos_wgt']])
+        # ax3.plot(data[['pos_wgt']])
+        # box = ax3.get_position()
+        # ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+        # ax3.legend(['positive wgt'], loc='center left', bbox_to_anchor=(1, 0.5))
+
+        # value fig
+        ax3.plot(data[['true_y_mw', 'pred_ls_mw', 'pred_q1_mw', 'pred_q5_mw']])
         box = ax3.get_position()
         ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-        ax3.legend(['positive wgt'], loc='center left', bbox_to_anchor=(1, 0.5))
+        ax3.legend(['true_y(mw)', 'long-short', 'long', 'short'], loc='center left', bbox_to_anchor=(1, 0.5))
+        if ylog:
+            ax3.set_yscale('log', basey=2)
+
+        ax4.plot(data[['true_y_mw', 'pred_q1_mw', 'pred_q2_mw', 'pred_q3_mw', 'pred_q4_mw', 'pred_q5_mw']])
+        box = ax4.get_position()
+        ax4.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+        ax4.legend(['true_y(mw)', 'q1', 'q2', 'q3', 'q4', 'q5'], loc='center left', bbox_to_anchor=(1, 0.5))
+        ax4.set_yscale('log', basey=2)
 
         fig.savefig(save_dir)
         print("figure saved. (dir: {})".format(save_dir))
         plt.close(fig)
-
-
 
 
 

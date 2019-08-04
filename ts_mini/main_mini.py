@@ -12,16 +12,17 @@ def main():
     ts_configs.label_feature = 'logy_{}d'.format(ts_configs.k_days)
     ts_configs.pred_feature = 'pos_{}d'.format(ts_configs.k_days)
     # ts_configs.k_days = 5
-    ts_configs.f_name = 'kr_model_newuniv_20_0'  #: kr every
+    ts_configs.f_name = 'kr_model_ew_20_1'  #: kr every
     ts_configs.train_steps = 10000
     ts_configs.eval_steps = 500
     ts_configs.early_stopping_count = 5
+    ts_configs.weight_scheme = 'ew'  # mw / ew
     config_str = ts_configs.export()
     # get data for all assets and dates
     features_cls = Feature(ts_configs.label_feature, ts_configs.pred_feature)
 
-    ds = DataScheduler(ts_configs, features_cls, data_type='kr_stock', univ_type='selected')
-    model = TSModel(ts_configs, features_cls)
+    ds = DataScheduler(ts_configs, features_cls, data_type='kr_stock', univ_type='all')
+    model = TSModel(ts_configs, features_cls, weight_scheme=ts_configs.weight_scheme)
     # ts_configs.f_name = 'kr_mtl_dg_dynamic_2_0_90'  #: kr every
 
     os.makedirs(os.path.join(ds.data_out_path, ts_configs.f_name), exist_ok=True)
@@ -31,7 +32,8 @@ def main():
     if os.path.exists(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name + '.pkl')):
         model.load_model(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name))
 
-    ds.set_idx(5600)
+    # ds.set_idx(5600)
+    ds.set_idx(4000)
     ds.test_end_idx = ds.base_idx + 1000
     ii = 0
     while not ds.done:

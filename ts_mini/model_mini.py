@@ -59,7 +59,7 @@ class MultiHeadAttention(Model):
         key_dim_size = float(key.get_shape().as_list()[-1])
         key = tf.transpose(key, perm=[0, 2, 1])
         outputs = tf.matmul(query, key) / tf.sqrt(key_dim_size)
-        print("MHA: matmul_size {} (q: {}, k: {})".format(tf.matmul(query, key).shape, query.shape, key.shape))
+        # print("MHA: matmul_size {} (q: {}, k: {})".format(tf.matmul(query, key).shape, query.shape, key.shape))
         if masked:
             diag_vals = tf.ones_like(outputs[0, :, :])
             tril = tf.linalg.LinearOperatorLowerTriangular(diag_vals).to_dense()
@@ -86,12 +86,12 @@ class MultiHeadAttention(Model):
 
     def call(self, query, key, value, masked=False):
 
-        print("before: [q: {}, k: {}, v:{}]".format(query.shape, key.shape, value.shape))
+        # print("before: [q: {}, k: {}, v:{}]".format(query.shape, key.shape, value.shape))
         query = tf.concat(tf.split(self.q_layer(query), self.heads, axis=-1), axis=0)
         key = tf.concat(tf.split(self.k_layer(key), self.heads, axis=-1), axis=0)
         value = tf.concat(tf.split(self.v_layer(value), self.heads, axis=-1), axis=0)
 
-        print("after: [q: {}, k: {}, v:{}]".format(query.shape, key.shape, value.shape))
+        # print("after: [q: {}, k: {}, v:{}]".format(query.shape, key.shape, value.shape))
         attention_map = self.scaled_dot_product_attention(query, key, value, masked=masked)
 
         attn_outputs = tf.concat(tf.split(attention_map, self.heads, axis=0), axis=-1)
@@ -150,9 +150,12 @@ class Decoder(Model):
 
 class TSModel:
     """omit embedding time series. just 1-D data used"""
-    def __init__(self, configs, feature_cls):
+    def __init__(self, configs, feature_cls, weight_scheme='ew'):
+        self.weight_scheme = weight_scheme
+
         self.input_seq_size = configs.m_days // configs.sampling_days
-        self.output_seq_size = configs.k_days // configs.sampling_days
+        # self.output_seq_size = configs.k_days // configs.sampling_days
+        self.output_seq_size = 1
         self.position_encode_in = positional_encoding(configs.embedding_size, self.input_seq_size)
         self.position_encode_out = positional_encoding(configs.embedding_size, self.output_seq_size)
 
@@ -264,8 +267,14 @@ class TSModel:
                 var_lists += self.predictor[key].trainable_variables
 
                 if key[:3] == 'pos':
+                    if self.weight_scheme == 'mw':
+                        adj_weight = labels_mtl['size_value'][:, :, 0] * 2  # size value 평균이 0.5 이므로 기존이랑 스케일 맞추기 위해 2 곱
+                    else:
+                        adj_weight = 1.
+
                     loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) \
-                                     * tf.abs(labels_mtl['logy'][:, :, self.predictor_helper[key]])
+                                     * tf.abs(labels_mtl['logy'][:, :, self.predictor_helper[key]]) \
+                                     * adj_weight
                 else:
                     loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key])
 
@@ -322,8 +331,8 @@ class TSModel:
 
     def evaluate_mtl(self, datasets, features_list, steps=-1):
         loss_avg = 0
-        for i, (features, labels) in enumerate(datasets.take(steps)):
-            labels_mtl = self.feature_cls.labels_for_mtl(features_list, labels)
+        for i, (features, labels, size_values) in enumerate(datasets.take(steps)):
+            labels_mtl = self.feature_cls.labels_for_mtl(features_list, labels, size_values)
 
             x_embed = features['input'] + self.position_encode_in
             y_embed = features['output'] + self.position_encode_out
@@ -340,8 +349,14 @@ class TSModel:
                 var_lists += self.predictor[key].trainable_variables
 
                 if key[:3] == 'pos':
+                    if self.weight_scheme == 'mw':
+                        adj_weight = labels_mtl['size_value'][:, :, 0] * 2
+                    else:
+                        adj_weight = 1.
+
                     loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) \
-                                     * tf.abs(labels_mtl['logy'][:, :, self.predictor_helper[key]])
+                                     * tf.abs(labels_mtl['logy'][:, :, self.predictor_helper[key]]) \
+                                     * adj_weight
                 else:
                     loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key])
 

@@ -132,23 +132,30 @@ class DataScheduler:
             print('[train] no train/eval data')
             return False
 
-        train_input_enc, train_output_dec, train_target_dec, features_list, _, _, _ = _train_dataset
-        eval_input_enc, eval_output_dec, eval_target_dec, _, _, _, _ = _eval_dataset
+        train_input_enc, train_output_dec, train_target_dec, features_list, train_add_infos, _, _ = _train_dataset
+        eval_input_enc, eval_output_dec, eval_target_dec, _, eval_add_infos, _, _ = _eval_dataset
 
         assert np.sum(train_input_enc[:, -1, :] - train_output_dec[:, 0, :]) == 0
         assert np.sum(eval_input_enc[:, -1, :] - eval_output_dec[:, 0, :]) == 0
 
+        train_size_value = np.concatenate([add_info['size_value'] for add_info in train_add_infos], axis=0)
+        eval_size_value = np.concatenate([add_info['size_value'] for add_info in eval_add_infos], axis=0)
+
         # K > 1인 경우 미래데이터 안 땡겨쓰게.
         train_new_output = np.zeros_like(train_output_dec)
-        train_new_output[:, 0, :] = train_output_dec[:, 0, :]
         eval_new_output = np.zeros_like(eval_output_dec)
-        eval_new_output[:, 0, :] = eval_output_dec[:, 0, :]
+        # if weight_scheme == 'ew':
+        #     train_new_output[:, 0, :] = train_output_dec[:, 0, :]
+        #     eval_new_output[:, 0, :] = eval_output_dec[:, 0, :]
+        # elif weight_scheme == 'mw':
+        train_new_output[:, 0, :] = train_output_dec[:, 0, :] + train_size_value[:, 0, :]
+        eval_new_output[:, 0, :] = eval_output_dec[:, 0, :] + eval_size_value[:, 0, :]
 
-        train_dataset = dataset_process(train_input_enc, train_new_output, train_target_dec, batch_size=self.train_batch_size)
-        eval_dataset = dataset_process(eval_input_enc, eval_new_output, eval_target_dec, batch_size=self.eval_batch_size, iter_num=1)
+        train_dataset = dataset_process(train_input_enc, train_new_output, train_target_dec, train_size_value, batch_size=self.train_batch_size)
+        eval_dataset = dataset_process(eval_input_enc, eval_new_output, eval_target_dec, eval_size_value, batch_size=self.eval_batch_size, iter_num=1)
         print("train step: {}  eval step: {}".format(len(train_input_enc) // self.train_batch_size,
                                                      len(eval_input_enc) // self.eval_batch_size))
-        for i, (features, labels) in enumerate(train_dataset.take(train_steps)):
+        for i, (features, labels, size_values) in enumerate(train_dataset.take(train_steps)):
             print_loss = False
             if i % save_steps == 0:
                 model.save_model(model_name)
@@ -164,7 +171,7 @@ class DataScheduler:
                     model.save_model(model_name)
                     break
 
-            labels_mtl = self.features_cls.labels_for_mtl(features_list, labels)
+            labels_mtl = self.features_cls.labels_for_mtl(features_list, labels, size_values)
             model.train_mtl(features, labels_mtl, print_loss=print_loss)
 
     def test(self, model, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None, time_step=1):
@@ -541,6 +548,8 @@ class DataGeneratorDynamic:
             self.df_pivoted = df_pivoted[univ_list_selected]
             self.df_size = self.data_code[self.data_code.eval_d == base_d][['infocode', 'mktcap']].set_index('infocode').loc[univ_list_selected, :]
             self.df_size['rnk'] = self.df_size.mktcap.rank() / len(self.df_size)
+
+            assert self.df_pivoted.shape[1] == self.df_size.shape[0]
         return True
 
     def sample_inputdata_split_new(self, base_idx, sampling_days=5, m_days=60, k_days=20, calc_length=250, balance_class=True,label_type='trainable_label', univ_idx=None):
@@ -605,21 +614,22 @@ class DataGeneratorDynamic:
 
         _, n_asset, n_feature = features_sampled_data.shape
         question = np.zeros([n_asset, M, n_feature], dtype=np.float32)
+        answer = np.zeros([n_asset, 2, n_feature], dtype=np.float32)
 
         question[:] = np.transpose(features_sampled_data, [1, 0, 2])
         if label_type == 'trainable_label':
-            answer = np.zeros([n_asset, 2, n_feature], dtype=np.float32)
             answer[:, :2, :] = np.transpose(features_sampled_label, [1, 0, 2])
             assert np.sum(answer[:, 0, :] - question[:, -1, :]) == 0
         elif label_type == 'test_label':
             label_idx = features_list.index(self.features_cls.label_feature)
-
-            answer = np.zeros([n_asset, 2, 1], dtype=np.float32)
-            answer[:, :2, :] = np.transpose(features_sampled_label, [1, 0, 2])
-            assert np.sum(answer[:, 0, 0] - question[:, -1, label_idx]) == 0
-        else:
-            answer = np.zeros([n_asset, 2, n_feature], dtype=np.float32)
             answer[:, 0, :] = question[:, -1, :]
+            answer[:, 1, label_idx] = np.transpose(features_sampled_label, [1, 0, 2])[:, 1, 0]
+            assert features_sampled_label.shape[-1] == 1
+        else:
+            answer[:, 0, :] = question[:, -1, :]
+
+        size_adjusted_factor = np.array(self.df_size.loc[df_for_data.columns].rnk, dtype=np.float32).reshape([-1, 1, 1])
+        assert len(size_adjusted_factor) == n_asset
 
         # _, n_asset, n_feature = features_sampled_data.shape
         # question = np.zeros([n_asset, M, n_feature], dtype=np.float32)
@@ -645,6 +655,7 @@ class DataGeneratorDynamic:
 
             idx_bal = np.concatenate([idx_pos, idx_neg])
             input_enc, output_dec, target_dec = question[idx_bal], answer[idx_bal, :-1, :], answer[idx_bal, 1:, :]
+            additional_info['size_value'] = size_adjusted_factor[idx_bal]
             # num_min_class = np.min([np.sum(answer[:, 1, idx_y] > 0), np.sum(answer[:, 1, idx_y] <= 0)])
             # idx_pos = np.random.choice(np.where(answer[:, 1, 0] > 0)[0], num_min_class, replace=False)
             # idx_neg = np.random.choice(np.where(answer[:, 1, 0] <= 0)[0], num_min_class, replace=False)
@@ -652,13 +663,11 @@ class DataGeneratorDynamic:
             # input_enc, output_dec, target_dec = question[idx_bal], answer[idx_bal, :-1, :], answer[idx_bal, 1:, :]
         else:
             input_enc, output_dec, target_dec = question[:], answer[:, :-1, :], answer[:, 1:, :]
+            additional_info['size_value'] = size_adjusted_factor[:]
             assert len(additional_info['assets_list']) == len(input_enc)
 
-        if label_type == 'test_label':
-            label_idx = features_list.index(self.features_cls.label_feature)
-            assert np.sum(input_enc[:, -1, label_idx] - output_dec[:, 0, 0]) == 0
-        else:
-            assert np.sum(input_enc[:, -1, :] - output_dec[:, 0, :]) == 0
+        assert np.sum(input_enc[:, -1:, :] - output_dec[:, :, :]) == 0
+
         return input_enc, output_dec, target_dec, features_list, additional_info
 
     def sample_inputdata_split(self, base_idx, sampling_days=5, m_days=60, k_days=20, balance_class=True, use_label=True):
@@ -814,21 +823,21 @@ class DataGeneratorDynamic:
         return len(self.date_)
 
 
-def rearrange(input, output, target):
+def rearrange(input, output, target, size_value):
     features = {"input": input, "output": output}
-    return features, target
+    return features, target, size_value
 
 
 # 학습에 들어가 배치 데이터를 만드는 함수이다.
-def dataset_process(train_input_enc, train_output_dec, train_target_dec, batch_size, shuffle=True, iter_num=None):
+def dataset_process(input_enc, output_dec, target_dec, size_value, batch_size, shuffle=True, iter_num=None):
     # Dataset을 생성하는 부분으로써 from_tensor_slices부분은
     # 각각 한 문장으로 자른다고 보면 된다.
     # train_input_enc, train_output_dec, train_target_dec
     # 3개를 각각 한문장으로 나눈다.
-    dataset = tf.data.Dataset.from_tensor_slices((train_input_enc, train_output_dec, train_target_dec))
+    dataset = tf.data.Dataset.from_tensor_slices((input_enc, output_dec, target_dec, size_value))
     # 전체 데이터를 섞는다.
     if shuffle is True:
-        dataset = dataset.shuffle(buffer_size=len(train_input_enc))
+        dataset = dataset.shuffle(buffer_size=len(input_enc))
     # 배치 인자 값이 없다면  에러를 발생 시킨다.
     assert batch_size is not None, "train batchSize must not be None"
     # from_tensor_slices를 통해 나눈것을
