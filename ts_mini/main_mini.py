@@ -5,18 +5,19 @@ from ts_mini.features_mini import Feature
 from ts_mini.data_process_v2_0_mini import DataScheduler
 
 import os
+import numpy as np
 
 def main():
     ts_configs = Config()
-    ts_configs.k_days = 20
+    ts_configs.k_days = 5
     ts_configs.label_feature = 'logy_{}d'.format(ts_configs.k_days)
     ts_configs.pred_feature = 'pos_{}d'.format(ts_configs.k_days)
     # ts_configs.k_days = 5
-    ts_configs.f_name = 'kr_model_ew_20_1'  #: kr every
-    ts_configs.train_steps = 10000
-    ts_configs.eval_steps = 500
+    ts_configs.f_name = 'kr_model_mw_20_with_beta_2'  #: kr every
+    ts_configs.train_steps = 5000
+    ts_configs.eval_steps = 200
     ts_configs.early_stopping_count = 5
-    ts_configs.weight_scheme = 'ew'  # mw / ew
+    ts_configs.weight_scheme = 'mw'  # mw / ew
     config_str = ts_configs.export()
     # get data for all assets and dates
     features_cls = Feature(ts_configs.label_feature, ts_configs.pred_feature)
@@ -33,7 +34,7 @@ def main():
         model.load_model(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name))
 
     # ds.set_idx(5600)
-    ds.set_idx(4000)
+    ds.set_idx(5000)
     ds.test_end_idx = ds.base_idx + 1000
     ii = 0
     while not ds.done:
@@ -53,7 +54,7 @@ def main():
                 ylog=False,
                 save_type='csv',
                 table_nm='kr_weekly_score_temp',
-                time_step=4)
+                time_step=ts_configs.k_days // ts_configs.sampling_days)
 
         ds.next()
         ii += 1

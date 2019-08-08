@@ -513,9 +513,12 @@ class DataGeneratorDynamic:
             date_temp.columns = ['cnt']
 
             self.date_ = list(date_temp.index)
-            self.data_df = pd.merge(date_temp, data_df_temp, on='date_')  # 최소 10종목 이상 존재 하는 날짜만
-            self.data_df['y'] = self.data_df['y'] + 1
-            self.data_df['cum_y'] = self.data_df[['date_', 'infocode', 'y']].groupby('infocode').cumprod(axis=0)
+            data_df = pd.merge(date_temp, data_df_temp, on='date_')  # 최소 10종목 이상 존재 하는 날짜만
+            data_df['y'] = data_df['y'] + 1
+            data_df['cum_y'] = data_df[['date_', 'infocode', 'y']].groupby('infocode').cumprod(axis=0)
+
+            self.df_pivoted_all = data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
+            self.df_pivoted_all.columns = self.df_pivoted_all.columns.droplevel(0).to_numpy(dtype=np.int32)
 
             self.univ_type = univ_type
             if univ_type == 'all':
@@ -524,6 +527,16 @@ class DataGeneratorDynamic:
             elif univ_type == 'selected':
                 self.data_code = pd.read_csv('./data/kr_univ_monthly.csv')
                 self.data_code = self.data_code[self.data_code.infocode > 0]
+
+            additional_df = pd.read_csv('./data/kr_additional_info.csv')
+            additional_df = additional_df[additional_df.infocode > 0]
+
+            self.df_beta_all = additional_df[['date_', 'infocode', 'beta']].pivot(index='date_', columns='infocode')
+            self.df_beta_all.columns = self.df_beta_all.columns.droplevel(0).to_numpy(dtype=np.int32)
+
+            self.df_ivol_all = additional_df[['date_', 'infocode', 'ivol']].pivot(index='date_', columns='infocode')
+            self.df_ivol_all.columns = self.df_ivol_all.columns.droplevel(0).to_numpy(dtype=np.int32)
+
             self.base_d = None
 
             self.features_cls = features_cls
@@ -541,15 +554,21 @@ class DataGeneratorDynamic:
 
             univ_list = list(self.data_code[self.data_code.eval_d == base_d]['infocode'].to_numpy(dtype=np.int32))
 
-            df_pivoted = self.data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
-            df_pivoted.columns = df_pivoted.columns.droplevel(0).to_numpy(dtype=np.int32)
-            univ_list_selected = sorted(list(set(univ_list).intersection(set(df_pivoted.columns))))
+            # df_pivoted = self.data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
+            # df_pivoted.columns = df_pivoted.columns.droplevel(0).to_numpy(dtype=np.int32)
+            univ_list_selected = sorted(list(set.intersection(set(univ_list),
+                                                              set(self.df_pivoted_all.columns),
+                                                              set(self.df_beta_all.columns),
+                                                              set(self.df_ivol_all.columns))))
 
-            self.df_pivoted = df_pivoted[univ_list_selected]
+            self.df_pivoted = self.df_pivoted_all[univ_list_selected]
             self.df_size = self.data_code[self.data_code.eval_d == base_d][['infocode', 'mktcap']].set_index('infocode').loc[univ_list_selected, :]
             self.df_size['rnk'] = self.df_size.mktcap.rank() / len(self.df_size)
-
             assert self.df_pivoted.shape[1] == self.df_size.shape[0]
+
+            self.df_beta = self.df_beta_all[univ_list_selected]
+            self.df_ivol = self.df_ivol_all[univ_list_selected]
+
         return True
 
     def sample_inputdata_split_new(self, base_idx, sampling_days=5, m_days=60, k_days=20, calc_length=250, balance_class=True,label_type='trainable_label', univ_idx=None):
@@ -576,8 +595,29 @@ class DataGeneratorDynamic:
         if df_for_data.empty:
             return False
 
+        # beta & ivol
+        if (len(set.difference(set(df_for_data.index), set(self.df_beta.index))) > 0) or \
+                (len(set.difference(set(df_for_data.index), set(self.df_ivol.index))) > 0):
+            print('no beta/ivol data')
+            return False
+
+        df_beta = self.df_beta.loc[df_for_data.index, df_for_data.columns]
+        df_ivol = self.df_ivol.loc[df_for_data.index, df_for_data.columns]
+        df_beta.ffill(axis=0, inplace=True)
+        df_beta.bfill(axis=0, inplace=True)
+        df_ivol.ffill(axis=0, inplace=True)
+        df_ivol.bfill(axis=0, inplace=True)
+
+        additional_dict = {'beta': df_beta, 'ivol': df_ivol}
         additional_info = {'date': self.date_[base_idx], 'assets_list': list(df_for_data.columns)}
-        features_list, features_sampled_data, _ = self.features_cls.processing_split_new(df_for_data, m_days=m_days, k_days=k_days, sampling_days=sampling_days, calc_length=calc_length, label_type=None)
+
+        features_list, features_sampled_data, _ = self.features_cls.processing_split_new(df_for_data,
+                                                                                         m_days=m_days,
+                                                                                         k_days=k_days,
+                                                                                         sampling_days=sampling_days,
+                                                                                         calc_length=calc_length,
+                                                                                         label_type=None,
+                                                                                         additional_dict=additional_dict)
         # features_for_data = features_for_data[calc_length:]
 
         M = m_days // sampling_days
@@ -595,7 +635,16 @@ class DataGeneratorDynamic:
             df_for_label.bfill(axis=0, inplace=True)
             df_for_label = df_for_label.ix[:, np.sum(df_for_label.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
 
-            _, features_data_for_label, features_sampled_label = self.features_cls.processing_split_new(df_for_label, m_days=m_days, k_days=k_days, sampling_days=sampling_days, calc_length=calc_length, label_type='trainable_label')
+            df_beta = self.df_beta.loc[df_for_label.index, df_for_data.columns]
+            df_ivol = self.df_ivol.loc[df_for_label.index, df_for_data.columns]
+
+            df_beta.ffill(axis=0, inplace=True)
+            df_beta.bfill(axis=0, inplace=True)
+            df_ivol.ffill(axis=0, inplace=True)
+            df_ivol.bfill(axis=0, inplace=True)
+
+            additional_dict = {'beta': df_beta, 'ivol': df_ivol}
+            _, features_data_for_label, features_sampled_label = self.features_cls.processing_split_new(df_for_label, m_days=m_days, k_days=k_days, sampling_days=sampling_days, calc_length=calc_length, label_type='trainable_label', additional_dict=additional_dict)
             # features_for_label = features_for_label[calc_length:]
 
             assert np.sum(features_sampled_data - features_data_for_label) == 0
@@ -609,7 +658,16 @@ class DataGeneratorDynamic:
             df_for_label.bfill(axis=0, inplace=True)
             df_for_label = df_for_label.ix[:, np.sum(df_for_label.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
 
-            _, features_data_for_label, features_sampled_label = self.features_cls.processing_split_new(df_for_label, m_days=m_days, k_days=k_days, sampling_days=sampling_days, calc_length=calc_length, label_type='test_label')
+            df_beta = self.df_beta.loc[df_for_label.index, df_for_data.columns]
+            df_ivol = self.df_ivol.loc[df_for_label.index, df_for_data.columns]
+
+            df_beta.ffill(axis=0, inplace=True)
+            df_beta.bfill(axis=0, inplace=True)
+            df_ivol.ffill(axis=0, inplace=True)
+            df_ivol.bfill(axis=0, inplace=True)
+
+            additional_dict = {'beta': df_beta, 'ivol': df_ivol}
+            _, features_data_for_label, features_sampled_label = self.features_cls.processing_split_new(df_for_label, m_days=m_days, k_days=k_days, sampling_days=sampling_days, calc_length=calc_length, label_type='test_label', additional_dict=additional_dict)
             # features_for_label = features_for_label[calc_length:]
 
         _, n_asset, n_feature = features_sampled_data.shape
@@ -629,7 +687,9 @@ class DataGeneratorDynamic:
             answer[:, 0, :] = question[:, -1, :]
 
         size_adjusted_factor = np.array(self.df_size.loc[df_for_data.columns].rnk, dtype=np.float32).reshape([-1, 1, 1])
+        size_adjusted_factor_mktcap = np.array(self.df_size.loc[df_for_data.columns].mktcap, dtype=np.float32).reshape([-1, 1, 1])
         assert len(size_adjusted_factor) == n_asset
+        assert len(size_adjusted_factor_mktcap) == n_asset
 
         # _, n_asset, n_feature = features_sampled_data.shape
         # question = np.zeros([n_asset, M, n_feature], dtype=np.float32)
@@ -656,6 +716,7 @@ class DataGeneratorDynamic:
             idx_bal = np.concatenate([idx_pos, idx_neg])
             input_enc, output_dec, target_dec = question[idx_bal], answer[idx_bal, :-1, :], answer[idx_bal, 1:, :]
             additional_info['size_value'] = size_adjusted_factor[idx_bal]
+            additional_info['mktcap'] = size_adjusted_factor_mktcap[idx_bal]
             # num_min_class = np.min([np.sum(answer[:, 1, idx_y] > 0), np.sum(answer[:, 1, idx_y] <= 0)])
             # idx_pos = np.random.choice(np.where(answer[:, 1, 0] > 0)[0], num_min_class, replace=False)
             # idx_neg = np.random.choice(np.where(answer[:, 1, 0] <= 0)[0], num_min_class, replace=False)
@@ -664,6 +725,7 @@ class DataGeneratorDynamic:
         else:
             input_enc, output_dec, target_dec = question[:], answer[:, :-1, :], answer[:, 1:, :]
             additional_info['size_value'] = size_adjusted_factor[:]
+            additional_info['mktcap'] = size_adjusted_factor_mktcap[:]
             assert len(additional_info['assets_list']) == len(input_enc)
 
         assert np.sum(input_enc[:, -1:, :] - output_dec[:, :, :]) == 0

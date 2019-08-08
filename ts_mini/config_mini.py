@@ -15,7 +15,7 @@ class Config:
         self.eval_steps = 200
         self.early_stopping_count = 10
         self.dropout = 0.5
-        self.embedding_size = 14
+        self.embedding_size = 18
         self.learning_rate = 1e-4
 
         self.shuffle_seek = 1000

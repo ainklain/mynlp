@@ -268,7 +268,7 @@ class TSModel:
 
                 if key[:3] == 'pos':
                     if self.weight_scheme == 'mw':
-                        adj_weight = labels_mtl['size_value'][:, :, 0] * 2  # size value 평균이 0.5 이므로 기존이랑 스케일 맞추기 위해 2 곱
+                        adj_weight = labels_mtl['size_value'][:, :, 0] * 2.  # size value 평균이 0.5 이므로 기존이랑 스케일 맞추기 위해 2 곱
                     else:
                         adj_weight = 1.
 
@@ -350,7 +350,7 @@ class TSModel:
 
                 if key[:3] == 'pos':
                     if self.weight_scheme == 'mw':
-                        adj_weight = labels_mtl['size_value'][:, :, 0] * 2
+                        adj_weight = labels_mtl['size_value'][:, :, 0] * 2.
                     else:
                         adj_weight = 1.
 
