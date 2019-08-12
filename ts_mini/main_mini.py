@@ -9,13 +9,13 @@ import numpy as np
 
 def main():
     ts_configs = Config()
-    ts_configs.k_days = 5
+    ts_configs.k_days = 20
     ts_configs.label_feature = 'logy_{}d'.format(ts_configs.k_days)
     ts_configs.pred_feature = 'pos_{}d'.format(ts_configs.k_days)
     # ts_configs.k_days = 5
-    ts_configs.f_name = 'kr_model_mw_20_with_beta_2'  #: kr every
-    ts_configs.train_steps = 5000
-    ts_configs.eval_steps = 200
+    ts_configs.f_name = 'kr_model_mw_20_2_wo_beta_day1'  #: kr every
+    ts_configs.train_steps = 10000
+    ts_configs.eval_steps = 500
     ts_configs.early_stopping_count = 5
     ts_configs.weight_scheme = 'mw'  # mw / ew
     config_str = ts_configs.export()
