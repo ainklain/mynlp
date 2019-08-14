@@ -17,7 +17,7 @@ class DataScheduler:
         os.makedirs(self.data_out_path, exist_ok=True)
 
         # self.data_generator = DataGenerator(data_type)    # infocode
-        self.data_generator = DataGeneratorDynamic(features_cls, data_type, univ_type, use_beta=False)    # infocode
+        self.data_generator = DataGeneratorDynamic(features_cls, data_type, univ_type, use_beta=configs.use_beta, delayed_days=configs.delayed_days)    # infocode
 
         self.train_set_length = configs.train_set_length
         self.retrain_days = configs.retrain_days
@@ -92,7 +92,7 @@ class DataScheduler:
         start_idx, end_idx, data_params = self.get_data_params(mode)
 
         for i, d in enumerate(range(start_idx, end_idx, self.sampling_days)):
-            _sampled_data = self.data_generator.sample_inputdata_split_new(d, **data_params)
+            _sampled_data = self.data_generator.sample_inputdata_split_new2(d, **data_params)
             if _sampled_data is False:
                 continue
             else:
@@ -502,7 +502,7 @@ class DataSchedulerCrossSection:
 
 
 class DataGeneratorDynamic:
-    def __init__(self, features_cls, data_type='kr_stock', univ_type='all', use_beta=True):
+    def __init__(self, features_cls, data_type='kr_stock', univ_type='all', use_beta=True, delayed_days=0):
         if data_type == 'kr_stock':
             data_path = './data/kr_close_y_90.csv'
             data_df_temp = pd.read_csv(data_path)
@@ -542,6 +542,7 @@ class DataGeneratorDynamic:
             self.base_d = None
 
             self.features_cls = features_cls
+            self.delayed_days = delayed_days
 
     def _set_df_pivoted(self, univ_idx):
         date_arr = self.data_code.eval_d.unique()
@@ -576,7 +577,7 @@ class DataGeneratorDynamic:
 
         return True
 
-    def sample_inputdata_split_new(self, base_idx, sampling_days=5, m_days=60, k_days=20, calc_length=250, balance_class=True,label_type='trainable_label', univ_idx=None):
+    def sample_inputdata_split_new2(self, base_idx, sampling_days=5, m_days=60, k_days=20, calc_length=250, balance_class=True,label_type='trainable_label', univ_idx=None):
         # self = ds.data_generator
         # base_idx = univ_idx = 5000
         # sampling_days = 5; m_days = 60; k_days = 20; calc_length = 250
@@ -588,10 +589,10 @@ class DataGeneratorDynamic:
             univ_idx = base_idx
         is_data_exist = self._set_df_pivoted(univ_idx)
 
-        # 미래데이터 원천 제거
         if not is_data_exist:
             return False
 
+        # 미래데이터 원천 제거
         df_selected_data = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx - m_days - calc_length])
                                            & (self.df_pivoted.index <= self.date_[base_idx])]
 
@@ -604,7 +605,6 @@ class DataGeneratorDynamic:
         if df_for_data.empty:
             return False
 
-
         additional_info = {'date': self.date_[base_idx], 'assets_list': list(df_for_data.columns)}
         additional_dict = None
         if self.use_beta:
@@ -614,14 +614,14 @@ class DataGeneratorDynamic:
                 print('no beta/ivol data')
                 return False
 
-            df_beta = self.df_beta.loc[df_for_data.index, df_for_data.columns]
-            df_ivol = self.df_ivol.loc[df_for_data.index, df_for_data.columns]
-            df_beta.ffill(axis=0, inplace=True)
-            df_beta.bfill(axis=0, inplace=True)
-            df_ivol.ffill(axis=0, inplace=True)
-            df_ivol.bfill(axis=0, inplace=True)
+            df_beta_data = self.df_beta.loc[df_for_data.index, df_for_data.columns]
+            df_ivol_data = self.df_ivol.loc[df_for_data.index, df_for_data.columns]
+            df_beta_data.ffill(axis=0, inplace=True)
+            df_beta_data.bfill(axis=0, inplace=True)
+            df_ivol_data.ffill(axis=0, inplace=True)
+            df_ivol_data.bfill(axis=0, inplace=True)
 
-            additional_dict = {'beta': df_beta, 'ivol': df_ivol}
+            additional_dict = {'beta': df_beta_data, 'ivol': df_ivol_data}
 
         features_list, features_sampled_data, _ = self.features_cls.processing_split_new(df_for_data,
                                                                                          m_days=m_days,
@@ -629,63 +629,44 @@ class DataGeneratorDynamic:
                                                                                          sampling_days=sampling_days,
                                                                                          calc_length=calc_length,
                                                                                          label_type=None,
+                                                                                         delayed_days=self.delayed_days,
                                                                                          additional_dict=additional_dict)
-        # features_for_data = features_for_data[calc_length:]
-
         M = m_days // sampling_days
 
         assert features_sampled_data.shape[0] == M
 
-        if label_type == 'trainable_label':
-            # 미래데이터 포함 라벨 생성
-            # 1 day adj.
-            df_selected_label = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx - m_days - calc_length])
-                                                & (self.df_pivoted.index <= self.date_[base_idx + (k_days + 1) + calc_length])]  # 하루 뒤 데이터
+        # ##### 라벨
+        # 1 day adj.
+        df_selected_label = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx - m_days - calc_length])
+                                            & (self.df_pivoted.index <= self.date_[base_idx + (k_days + self.delayed_days)])]  # 하루 뒤 데이터
 
-            # 현재기준으로 정제된 종목 기준 라벨 데이터 생성 및 정제
-            df_for_label = df_selected_label.loc[:, df_for_data.columns]
-            df_for_label.ffill(axis=0, inplace=True)
-            df_for_label.bfill(axis=0, inplace=True)
-            df_for_label = df_for_label.ix[:, np.sum(df_for_label.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
+        # 현재기준으로 정제된 종목 기준 라벨 데이터 생성 및 정제
+        df_for_label = df_selected_label.loc[:, df_for_data.columns]
+        df_for_label.ffill(axis=0, inplace=True)
+        df_for_label.bfill(axis=0, inplace=True)
+        df_for_label = df_for_label.ix[:, np.sum(df_for_label.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
 
-            if self.use_beta:
-                df_beta = self.df_beta.loc[df_for_label.index, df_for_data.columns]
-                df_ivol = self.df_ivol.loc[df_for_label.index, df_for_data.columns]
+        if self.use_beta:
+            df_beta_label = self.df_beta.loc[df_for_label.index, df_for_data.columns]
+            df_ivol_label = self.df_ivol.loc[df_for_label.index, df_for_data.columns]
 
-                df_beta.ffill(axis=0, inplace=True)
-                df_beta.bfill(axis=0, inplace=True)
-                df_ivol.ffill(axis=0, inplace=True)
-                df_ivol.bfill(axis=0, inplace=True)
+            df_beta_label.ffill(axis=0, inplace=True)
+            df_beta_label.bfill(axis=0, inplace=True)
+            df_ivol_label.ffill(axis=0, inplace=True)
+            df_ivol_label.bfill(axis=0, inplace=True)
 
-                additional_dict = {'beta': df_beta, 'ivol': df_ivol}
-            _, features_data_for_label, features_sampled_label = self.features_cls.processing_split_new(df_for_label, m_days=m_days, k_days=k_days, sampling_days=sampling_days, calc_length=calc_length, label_type='trainable_label', additional_dict=additional_dict)
-            # features_for_label = features_for_label[calc_length:]
+            additional_dict = {'beta': df_beta_label, 'ivol': df_ivol_label}
+        _, features_data_for_label, features_sampled_label = self.features_cls.processing_split_new(df_for_label,
+                                                                                                    m_days=m_days,
+                                                                                                    k_days=k_days,
+                                                                                                    sampling_days=sampling_days,
+                                                                                                    calc_length=calc_length,
+                                                                                                    label_type=label_type,
+                                                                                                    delayed_days=self.delayed_days,
+                                                                                                    additional_dict=additional_dict)
+        # features_for_label = features_for_label[calc_length:]
 
-            assert np.sum(features_sampled_data - features_data_for_label) == 0
-        elif label_type == 'test_label':
-            # 1 day adj.
-            df_selected_label = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx - m_days - calc_length])
-                                                & (self.df_pivoted.index <= self.date_[base_idx + (k_days + 1)])]
-
-            # 현재기준으로 정제된 종목 기준 라벨 데이터 생성 및 정제
-            df_for_label = df_selected_label.loc[:, df_for_data.columns]
-            df_for_label.ffill(axis=0, inplace=True)
-            df_for_label.bfill(axis=0, inplace=True)
-            df_for_label = df_for_label.ix[:, np.sum(df_for_label.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
-
-            if self.use_beta:
-                df_beta = self.df_beta.loc[df_for_label.index, df_for_data.columns]
-                df_ivol = self.df_ivol.loc[df_for_label.index, df_for_data.columns]
-
-                df_beta.ffill(axis=0, inplace=True)
-                df_beta.bfill(axis=0, inplace=True)
-                df_ivol.ffill(axis=0, inplace=True)
-                df_ivol.bfill(axis=0, inplace=True)
-
-                additional_dict = {'beta': df_beta, 'ivol': df_ivol}
-
-            _, features_data_for_label, features_sampled_label = self.features_cls.processing_split_new(df_for_label, m_days=m_days, k_days=k_days, sampling_days=sampling_days, calc_length=calc_length, label_type='test_label', additional_dict=additional_dict)
-            # features_for_label = features_for_label[calc_length:]
+        assert np.sum(features_sampled_data - features_data_for_label) == 0
 
         _, n_asset, n_feature = features_sampled_data.shape
         question = np.zeros([n_asset, M, n_feature], dtype=np.float32)
@@ -749,13 +730,22 @@ class DataGeneratorDynamic:
 
         return input_enc, output_dec, target_dec, features_list, additional_info
 
-    def sample_inputdata_split(self, base_idx, sampling_days=5, m_days=60, k_days=20, balance_class=True, use_label=True):
-        if use_label is False:
+    def sample_inputdata_split_new(self, base_idx, sampling_days=5, m_days=60, k_days=20, calc_length=250, balance_class=True,label_type='trainable_label', univ_idx=None):
+        # self = ds.data_generator
+        # base_idx = univ_idx = 5000
+        # sampling_days = 5; m_days = 60; k_days = 20; calc_length = 250
+
+        if label_type != 'trainable_label':
             balance_class = False
 
-        self._set_df_pivoted(base_idx)
+        if univ_idx is None:
+            univ_idx = base_idx
+        is_data_exist = self._set_df_pivoted(univ_idx)
+
         # 미래데이터 원천 제거
-        calc_length = 250
+        if not is_data_exist:
+            return False
+
         df_selected_data = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx - m_days - calc_length])
                                            & (self.df_pivoted.index <= self.date_[base_idx])]
 
@@ -768,22 +758,44 @@ class DataGeneratorDynamic:
         if df_for_data.empty:
             return False
 
+
         additional_info = {'date': self.date_[base_idx], 'assets_list': list(df_for_data.columns)}
-        features_list, features_for_data = self.features_cls.processing_split(df_for_data, m_days=m_days, k_days=k_days, calc_length=calc_length)
+        additional_dict = None
+        if self.use_beta:
+            # beta & ivol
+            if (len(set.difference(set(df_for_data.index), set(self.df_beta.index))) > 0) or \
+                    (len(set.difference(set(df_for_data.index), set(self.df_ivol.index))) > 0):
+                print('no beta/ivol data')
+                return False
+
+            df_beta = self.df_beta.loc[df_for_data.index, df_for_data.columns]
+            df_ivol = self.df_ivol.loc[df_for_data.index, df_for_data.columns]
+            df_beta.ffill(axis=0, inplace=True)
+            df_beta.bfill(axis=0, inplace=True)
+            df_ivol.ffill(axis=0, inplace=True)
+            df_ivol.bfill(axis=0, inplace=True)
+
+            additional_dict = {'beta': df_beta, 'ivol': df_ivol}
+
+        features_list, features_sampled_data, _ = self.features_cls.processing_split_new(df_for_data,
+                                                                                         m_days=m_days,
+                                                                                         k_days=k_days,
+                                                                                         sampling_days=sampling_days,
+                                                                                         calc_length=calc_length,
+                                                                                         label_type=None,
+                                                                                         delayed_days=self.delayed_days,
+                                                                                         additional_dict=additional_dict)
         # features_for_data = features_for_data[calc_length:]
 
-        assert features_for_data.shape[0] == m_days + 1
-
         M = m_days // sampling_days
-        K = k_days // sampling_days
 
-        features_sampled_data = features_for_data[::sampling_days][1:]  # 0, 5, 10, ... 데이터 중 0 데이터 제거 (의미없음)
         assert features_sampled_data.shape[0] == M
 
-        if use_label:
+        if label_type == 'trainable_label':
             # 미래데이터 포함 라벨 생성
-            df_selected_label = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx-m_days - calc_length])
-                                                & (self.df_pivoted.index <= self.date_[base_idx+k_days])]
+            # 1 day adj.
+            df_selected_label = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx - m_days - calc_length])
+                                                & (self.df_pivoted.index <= self.date_[base_idx + (k_days + self.delayed_days) + calc_length])]  # 하루 뒤 데이터
 
             # 현재기준으로 정제된 종목 기준 라벨 데이터 생성 및 정제
             df_for_label = df_selected_label.loc[:, df_for_data.columns]
@@ -791,26 +803,91 @@ class DataGeneratorDynamic:
             df_for_label.bfill(axis=0, inplace=True)
             df_for_label = df_for_label.ix[:, np.sum(df_for_label.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
 
-            _, features_for_label = self.features_cls.processing_split(df_for_label, m_days=m_days, k_days=k_days, calc_length=calc_length)
+            if self.use_beta:
+                df_beta = self.df_beta.loc[df_for_label.index, df_for_data.columns]
+                df_ivol = self.df_ivol.loc[df_for_label.index, df_for_data.columns]
+
+                df_beta.ffill(axis=0, inplace=True)
+                df_beta.bfill(axis=0, inplace=True)
+                df_ivol.ffill(axis=0, inplace=True)
+                df_ivol.bfill(axis=0, inplace=True)
+
+                additional_dict = {'beta': df_beta, 'ivol': df_ivol}
+            _, features_data_for_label, features_sampled_label = self.features_cls.processing_split_new(df_for_label,
+                                                                                                        m_days=m_days,
+                                                                                                        k_days=k_days,
+                                                                                                        sampling_days=sampling_days,
+                                                                                                        calc_length=calc_length,
+                                                                                                        label_type='trainable_label',
+                                                                                                        delayed_days=self.delayed_days,
+                                                                                                        additional_dict=additional_dict)
             # features_for_label = features_for_label[calc_length:]
 
-            assert features_for_label.shape[0] == m_days + k_days + 1
-            assert np.sum(features_for_data - features_for_label[:(m_days + 1), :, :]) == 0
+            assert np.sum(features_sampled_data - features_data_for_label) == 0
+        elif label_type == 'test_label':
+            # 1 day adj.
+            df_selected_label = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx - m_days - calc_length])
+                                                & (self.df_pivoted.index <= self.date_[base_idx + (k_days + self.delayed_days)])]
 
-            features_sampled_label = features_for_label[::sampling_days][1:]  # 0, 5, 10, ... 데이터 중 0 데이터 제거 (의미없음)
-            assert features_sampled_label.shape[0] == M + K
+            # 현재기준으로 정제된 종목 기준 라벨 데이터 생성 및 정제
+            df_for_label = df_selected_label.loc[:, df_for_data.columns]
+            df_for_label.ffill(axis=0, inplace=True)
+            df_for_label.bfill(axis=0, inplace=True)
+            df_for_label = df_for_label.ix[:, np.sum(df_for_label.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
+
+            if self.use_beta:
+                df_beta = self.df_beta.loc[df_for_label.index, df_for_data.columns]
+                df_ivol = self.df_ivol.loc[df_for_label.index, df_for_data.columns]
+
+                df_beta.ffill(axis=0, inplace=True)
+                df_beta.bfill(axis=0, inplace=True)
+                df_ivol.ffill(axis=0, inplace=True)
+                df_ivol.bfill(axis=0, inplace=True)
+
+                additional_dict = {'beta': df_beta, 'ivol': df_ivol}
+
+            _, features_data_for_label, features_sampled_label = self.features_cls.processing_split_new(df_for_label,
+                                                                                                        m_days=m_days,
+                                                                                                        k_days=k_days,
+                                                                                                        sampling_days=sampling_days,
+                                                                                                        calc_length=calc_length,
+                                                                                                        label_type='test_label',
+                                                                                                        delayed_days=self.delayed_days,
+                                                                                                        additional_dict=additional_dict)
+            # features_for_label = features_for_label[calc_length:]
 
         _, n_asset, n_feature = features_sampled_data.shape
         question = np.zeros([n_asset, M, n_feature], dtype=np.float32)
-        answer = np.zeros([n_asset, K+1, n_feature], dtype=np.float32)
+        answer = np.zeros([n_asset, 2, n_feature], dtype=np.float32)
 
-        question[:] = np.transpose(features_sampled_data[:M], [1, 0, 2])
-        if use_label:
-            answer_data = features_sampled_label[-(K + 1):]
-            answer[:, :len(answer_data), :] = np.transpose(answer_data, [1, 0, 2])
+        question[:] = np.transpose(features_sampled_data, [1, 0, 2])
+        if label_type == 'trainable_label':
+            answer[:, :2, :] = np.transpose(features_sampled_label, [1, 0, 2])
             assert np.sum(answer[:, 0, :] - question[:, -1, :]) == 0
+        elif label_type == 'test_label':
+            label_idx = features_list.index(self.features_cls.label_feature)
+            answer[:, 0, :] = question[:, -1, :]
+            answer[:, 1, label_idx] = np.transpose(features_sampled_label, [1, 0, 2])[:, 1, 0]
+            assert features_sampled_label.shape[-1] == 1
         else:
             answer[:, 0, :] = question[:, -1, :]
+
+        size_adjusted_factor = np.array(self.df_size.loc[df_for_data.columns].rnk, dtype=np.float32).reshape([-1, 1, 1])
+        size_adjusted_factor_mktcap = np.array(self.df_size.loc[df_for_data.columns].mktcap, dtype=np.float32).reshape([-1, 1, 1])
+        assert len(size_adjusted_factor) == n_asset
+        assert len(size_adjusted_factor_mktcap) == n_asset
+
+        # _, n_asset, n_feature = features_sampled_data.shape
+        # question = np.zeros([n_asset, M, n_feature], dtype=np.float32)
+        # answer = np.zeros([n_asset, K+1, n_feature], dtype=np.float32)
+        #
+        # question[:] = np.transpose(features_sampled_data[:M], [1, 0, 2])
+        # if use_label:
+        #     answer_data = features_sampled_label[-(K + 1):]
+        #     answer[:, :len(answer_data), :] = np.transpose(answer_data, [1, 0, 2])
+        #     assert np.sum(answer[:, 0, :] - question[:, -1, :]) == 0
+        # else:
+        #     answer[:, 0, :] = question[:, -1, :]
 
         if balance_class:
             idx_label = features_list.index(self.features_cls.label_feature)
@@ -824,6 +901,8 @@ class DataGeneratorDynamic:
 
             idx_bal = np.concatenate([idx_pos, idx_neg])
             input_enc, output_dec, target_dec = question[idx_bal], answer[idx_bal, :-1, :], answer[idx_bal, 1:, :]
+            additional_info['size_value'] = size_adjusted_factor[idx_bal]
+            additional_info['mktcap'] = size_adjusted_factor_mktcap[idx_bal]
             # num_min_class = np.min([np.sum(answer[:, 1, idx_y] > 0), np.sum(answer[:, 1, idx_y] <= 0)])
             # idx_pos = np.random.choice(np.where(answer[:, 1, 0] > 0)[0], num_min_class, replace=False)
             # idx_neg = np.random.choice(np.where(answer[:, 1, 0] <= 0)[0], num_min_class, replace=False)
@@ -831,70 +910,12 @@ class DataGeneratorDynamic:
             # input_enc, output_dec, target_dec = question[idx_bal], answer[idx_bal, :-1, :], answer[idx_bal, 1:, :]
         else:
             input_enc, output_dec, target_dec = question[:], answer[:, :-1, :], answer[:, 1:, :]
+            additional_info['size_value'] = size_adjusted_factor[:]
+            additional_info['mktcap'] = size_adjusted_factor_mktcap[:]
             assert len(additional_info['assets_list']) == len(input_enc)
 
-        assert np.sum(input_enc[:, -1, :] - output_dec[:, 0, :]) == 0
-        return input_enc, output_dec, target_dec, features_list, additional_info
+        assert np.sum(input_enc[:, -1:, :] - output_dec[:, :, :]) == 0
 
-    def sample_inputdata(self, base_idx, codes_list=None, sampling_days=5, m_days=60, k_days=20,
-                         balance_class=True,
-                         **kwargs):
-
-        self._set_df_pivoted(base_idx)
-        calc_length = 250
-        df_selected = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx-m_days-calc_length])
-                                      & (self.df_pivoted.index <= self.date_[base_idx+k_days])]
-        df_not_null = df_selected.ix[:, np.sum(~df_selected.isna(), axis=0) >= len(df_selected.index) * 0.9]  # 90% 이상 데이터 존재
-        df_not_null.ffill(axis=0, inplace=True)
-        df_not_null.bfill(axis=0, inplace=True)
-        df_not_null = df_not_null.ix[:, np.sum(df_not_null.isna(), axis=0) == 0]    # 맨 앞쪽 NA 제거
-
-        if codes_list is not None:
-            assert type(codes_list) == list
-            codes_exist = []
-            for code in codes_list:
-                if code in df_not_null.columns:
-                    codes_exist.append(code)
-
-            if len(codes_exist) >= 1:
-                df_not_null = df_not_null[codes_exist]
-            else:
-                return False
-
-        if df_not_null.empty:
-            return False
-
-        additional_info = {'date': self.date_[base_idx], 'assets_list': list(df_not_null.columns)}
-
-        features_list, features_data = processing(df_not_null, m_days=m_days, calc_length=calc_length)
-        features_data = features_data[calc_length:]
-
-        assert features_data.shape[0] == m_days + k_days + 1
-
-        M = m_days // sampling_days
-        K = k_days // sampling_days
-
-        features_sampled_data = features_data[::sampling_days][1:]  # 0, 5, 10, ... 데이터 중 0 데이터 제거 (의미없음)
-        assert features_sampled_data.shape[0] == M + K
-        _, n_asset, n_feature = features_sampled_data.shape
-        question = np.zeros([n_asset, M, n_feature], dtype=np.float32)
-        answer = np.zeros([n_asset, K+1, n_feature], dtype=np.float32)
-
-        question[:] = np.transpose(features_sampled_data[:M], [1, 0, 2])
-
-        answer_data = features_sampled_data[-(K + 1):]
-        answer[:, :len(answer_data), :] = np.transpose(answer_data, [1, 0, 2])
-        if balance_class:
-            num_min_class = np.min([np.sum(answer[:, 1, 0] > 0), np.sum(answer[:, 1, 0] <= 0)])
-            idx_pos = np.random.choice(np.where(answer[:, 1, 0] > 0)[0], num_min_class, replace=False)
-            idx_neg = np.random.choice(np.where(answer[:, 1, 0] <= 0)[0], num_min_class, replace=False)
-            idx_bal = np.concatenate([idx_pos, idx_neg])
-            input_enc, output_dec, target_dec = question[idx_bal], answer[idx_bal, :-1, :], answer[idx_bal, 1:, :]
-        else:
-            input_enc, output_dec, target_dec = question[:], answer[:, :-1, :], answer[:, 1:, :]
-            assert len(additional_info['assets_list']) == len(input_enc)
-
-        assert np.sum(input_enc[:, -1, :] - output_dec[:, 0, :]) == 0
         return input_enc, output_dec, target_dec, features_list, additional_info
 
     @property

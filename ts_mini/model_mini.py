@@ -174,21 +174,15 @@ class TSModel:
 
         self.predictor = dict()
         self.predictor_helper = dict()
-        for key in feature_cls.model_predictor_list:
-            if isinstance(feature_cls.structure[key], list):
-                self.predictor[key] = FeedForward(len(feature_cls.structure[key]), 64)
-            elif isinstance(feature_cls.structure[key], str):
+        for key in configs.model_predictor_list:
+            tags = key.split('_')
+            if tags[0] in configs.features_structure['regression'].keys():
+                self.predictor[key] = FeedForward(len(configs.features_structure['regression'][key]), 64)
+            elif tags[0] in configs.features_structure['classification'].keys():
                 self.predictor[key] = FeedForward(2, 64, out_activation='softmax')
-                self.predictor_helper[key] = feature_cls.structure['logy'].index(feature_cls.structure[key])
+                self.predictor_helper[key] = configs.features_structure['regression']['logy'].index(int(tags[1]))
 
         self.feature_cls = feature_cls
-                # self.predictor = dict()
-        # self.predictor['ret'] = FeedForward(4, 64)
-        # self.predictor['pos'] = FeedForward(2, 64, out_activation='softmax')
-        # self.predictor['pos20'] = FeedForward(2, 64, out_activation='softmax')
-        # self.predictor['std'] = FeedForward(3, 64)
-        # self.predictor['mdd'] = FeedForward(2, 64)
-        # self.predictor['fft'] = FeedForward(2, 64)
 
         self.optim_encoder_w = None
         self.optim_decoder_w = None
@@ -231,24 +225,6 @@ class TSModel:
         self.eval_loss = 100000
         self.eval_count = 0
 
-    def train(self, features, labels, print_loss=False):
-        with tf.GradientTape() as tape:
-            x_embed = features['input'] + self.position_encode_in
-            y_embed = features['output'] + self.position_encode_out
-
-            encoder_output = self.encoder(x_embed, dropout=self.dropout_train)
-            predict = self.decoder(y_embed, encoder_output, dropout=self.dropout_train)
-
-            var_lists = self.encoder.trainable_variables + self.decoder.trainable_variables
-            # loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=labels_))
-            loss = tf.losses.MSE(labels, predict)
-        grad = tape.gradient(loss, var_lists)
-        self.optimizer.apply_gradients(zip(grad, var_lists))
-
-        self.accuracy.update_state(labels, predict)
-        if print_loss:
-            print("loss:{}".format(np.mean(loss.numpy())))
-
     def train_mtl(self, features, labels_mtl, print_loss=False):
         with tf.GradientTape(persistent=True) as tape:
             x_embed = features['input'] + self.position_encode_in
@@ -278,14 +254,6 @@ class TSModel:
                 else:
                     loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key])
 
-                # if key == 'pos':
-                #     loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) * tf.abs(labels_mtl['ret'][:, :, 0])
-                # elif key == 'pos20':
-                #     loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) * tf.abs(
-                #         labels_mtl['ret'][:, :, 1])
-                # else:
-                #     loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key])
-
                 if loss is None:
                     loss = loss_each[key]
                 else:
@@ -300,32 +268,6 @@ class TSModel:
             print_str = ""
             for key in loss_each.keys():
                 print_str += "loss_{}: {:.6f} / ".format(key, np.mean(loss_each[key].numpy()))
-
-            print(print_str)
-
-    def finetune_mtl(self, features, labels_mtl, print_loss=False):
-        with tf.GradientTape(persistent=True) as tape:
-            x_embed = features['input'] + self.position_encode_in
-            y_embed = features['output'] + self.position_encode_out
-
-            encoder_output = self.encoder(x_embed, dropout=self.dropout_train)
-            predict = self.decoder(y_embed, encoder_output, dropout=self.dropout_train)
-
-            # var_lists = self.encoder.trainable_variables + self.decoder.trainable_variables
-
-            pred = self.predictor['pos'](predict)
-            var_lists = self.predictor['pos'].trainable_variables
-
-            loss = tf.losses.categorical_crossentropy(labels_mtl['pos'], pred) * tf.abs(labels_mtl['ret'][:, :, 0])
-
-        grad = tape.gradient(loss, var_lists)
-        self.optimizer.apply_gradients(zip(grad, var_lists))
-
-        del tape
-
-        if print_loss:
-            print_str = ""
-            print_str += "loss_pos: {:.6f} / ".format(np.mean(loss.numpy()))
 
             print(print_str)
 
