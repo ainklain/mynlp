@@ -21,6 +21,8 @@ class Config:
         self.delayed_days = 1
         self.use_beta = False
 
+        self.balancing_method = 'each'  # each / once
+
         # features info
         self.set_features_info()
 
@@ -37,27 +39,59 @@ class Config:
         self.f_name = 'ts_model_v1.0'
         self.tokenize_as_morph = False
 
-    def set_features_info(self):
-        self.model_predictor_list = ['logy', 'pos_5', 'pos_20', 'std', 'mdd', 'fft']
+    def set_features_info(self, k_days=5):
+        if k_days == 5:
+        # self.model_predictor_list = ['logy', 'pos_20', 'pos_60', 'pos_120', 'std', 'mdd', 'fft']
+            self.model_predictor_list = ['logy', 'pos_5', 'pos_10', 'pos_20', 'std', 'mdd', 'fft']
 
-        self.features_structure = \
-            {'regression':
-                 {'logy': [5, 20, 60, 120, 250],
-                  'std': [20, 60, 120],
-                  'mdd': [20, 60, 120],
-                  'fft': [3, 100]},
-             'classification':
-                 {'pos': [5, 20, 60]}}
+            self.features_structure = \
+                {'regression':
+                     # {'logy': [20, 60, 120, 250],
+                     {'logy': [5, 10, 20, 60, 120, 250],
+                      'std': [20, 60, 120],
+                      'mdd': [20, 60, 120],
+                      'fft': [3, 100]},
+                 'classification':
+                     # {'pos': [20, 60, 120, 250]}}
+                     {'pos': [5, 10, 20, 60]}}
+        elif k_days == 10:
+            self.model_predictor_list = ['logy', 'pos_10', 'pos_20', 'pos_60', 'std', 'mdd', 'fft']
+
+            self.features_structure = \
+                {'regression':
+                     {'logy': [10, 20, 60, 120, 250],
+                      'std': [20, 60, 120],
+                      'mdd': [20, 60, 120],
+                      'fft': [3, 100]},
+                 'classification':
+                     {'pos': [10, 20, 60, 120, 250]}}
+
+        elif k_days == 20:
+            self.model_predictor_list = ['logy', 'pos_20', 'pos_60', 'pos_120', 'std', 'mdd', 'fft']
+
+            self.features_structure = \
+                {'regression':
+                     {'logy': [20, 60, 120, 250],
+                      'std': [20, 60, 120],
+                      'mdd': [20, 60, 120],
+                      'fft': [3, 100]},
+                 'classification':
+                     {'pos': [20, 60, 120, 250]}}
 
         self.embedding_size = 0
         for cls in self.features_structure.keys():
             for key in self.features_structure[cls].keys():
                 self.embedding_size += len(self.features_structure[cls][key])
 
-    def set_kdays(self, k_days):
+    def set_kdays(self, k_days, pred='pos'):
         self.k_days = k_days
         self.label_feature = 'logy_{}'.format(self.k_days)
-        self.pred_feature = 'pos_{}'.format(self.k_days)
+        if pred == 'pos':
+            self.pred_feature = 'pos_{}'.format(self.k_days)
+        else:
+            self.pred_feature = pred
+
+        self.set_features_info(k_days)
 
     def export(self):
         return_str = ""

@@ -240,8 +240,9 @@ class Feature:
         pred_q4_mw = np.zeros_like(true_y)
         pred_q5_mw = np.zeros_like(true_y)
 
-        size_value_list = [add_info['mktcap'] for add_info in additional_infos]
-        for i, (input_enc_t, output_dec_t, target_dec_t, size_value) in enumerate(zip(input_enc_list, output_dec_list, target_dec_list, size_value_list)):
+        size_value_list = [add_info['size_value'] for add_info in additional_infos]
+        mktcap_list = [add_info['mktcap'] for add_info in additional_infos]
+        for i, (input_enc_t, output_dec_t, target_dec_t, size_value, mktcap) in enumerate(zip(input_enc_list, output_dec_list, target_dec_list, size_value_list, mktcap_list)):
             if i % time_step != 0:
                 continue
             t = i // time_step + 1
@@ -271,12 +272,12 @@ class Feature:
             pred_q5[t] = np.mean(labels[crit5, 0, idx_y])
             pos_wgt[t] = np.sum(value_ > 0.5) / len(value_)
 
-            true_y_mw[t] = np.sum(labels[:, 0, idx_y] * size_value[:, 0, 0]) / np.sum(size_value[:, 0, 0])
-            pred_q1_mw[t] = np.sum(labels[crit1, 0, idx_y] * size_value[crit1, 0, 0]) / np.sum(size_value[crit1, 0, 0])
-            pred_q2_mw[t] = np.sum(labels[crit2, 0, idx_y] * size_value[crit2, 0, 0]) / np.sum(size_value[crit2, 0, 0])
-            pred_q3_mw[t] = np.sum(labels[crit3, 0, idx_y] * size_value[crit3, 0, 0]) / np.sum(size_value[crit3, 0, 0])
-            pred_q4_mw[t] = np.sum(labels[crit4, 0, idx_y] * size_value[crit4, 0, 0]) / np.sum(size_value[crit4, 0, 0])
-            pred_q5_mw[t] = np.sum(labels[crit5, 0, idx_y] * size_value[crit5, 0, 0]) / np.sum(size_value[crit5, 0, 0])
+            true_y_mw[t] = np.sum(labels[:, 0, idx_y] * mktcap[:, 0, 0]) / np.sum(mktcap[:, 0, 0])
+            pred_q1_mw[t] = np.sum(labels[crit1, 0, idx_y] * mktcap[crit1, 0, 0]) / np.sum(mktcap[crit1, 0, 0])
+            pred_q2_mw[t] = np.sum(labels[crit2, 0, idx_y] * mktcap[crit2, 0, 0]) / np.sum(mktcap[crit2, 0, 0])
+            pred_q3_mw[t] = np.sum(labels[crit3, 0, idx_y] * mktcap[crit3, 0, 0]) / np.sum(mktcap[crit3, 0, 0])
+            pred_q4_mw[t] = np.sum(labels[crit4, 0, idx_y] * mktcap[crit4, 0, 0]) / np.sum(mktcap[crit4, 0, 0])
+            pred_q5_mw[t] = np.sum(labels[crit5, 0, idx_y] * mktcap[crit5, 0, 0]) / np.sum(mktcap[crit5, 0, 0])
 
         data = pd.DataFrame({'true_y': np.cumprod(1. + true_y),
                              'pred_ls': np.cumprod(1. + pred_q1 - pred_q5),
