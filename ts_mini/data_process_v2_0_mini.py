@@ -56,8 +56,8 @@ class DataScheduler:
         data_params['m_days'] = self.m_days
         data_params['k_days'] = self.k_days
         data_params['calc_length'] = 250
-        # data_params['univ_idx'] = self.test_begin_idx
-        data_params['univ_idx'] = None
+        data_params['univ_idx'] = self.test_begin_idx
+        # data_params['univ_idx'] = None
         if mode == 'train':
             start_idx = self.train_begin_idx + self.m_days
             end_idx = self.eval_begin_idx - self.k_days
@@ -90,7 +90,7 @@ class DataScheduler:
     def _dataset(self, mode='train'):
         input_enc, output_dec, target_dec = [], [], []  # test/predict 인경우 list, train/eval인 경우 array
         features_list = []
-        additional_infos = []  # test/predict 인경우 list, train/eval인 경우 dict
+        additional_infos_list = []  # test/predict 인경우 list, train/eval인 경우 dict
         start_idx, end_idx, data_params = self.get_data_params(mode)
 
         for i, d in enumerate(range(start_idx, end_idx, self.sampling_days)):
@@ -108,35 +108,41 @@ class DataScheduler:
             input_enc.append(tmp_ie)
             output_dec.append(tmp_od)
             target_dec.append(tmp_td)
-            additional_infos.append(additional_info)
+            additional_infos_list.append(additional_info)
 
         if len(input_enc) == 0:
             return False
 
-        if (self.balancing_method == 'once') and (mode in ['train', 'eval']):
+        if mode in ['train', 'eval']:
+            additional_infos = dict()
             input_enc = np.concatenate(input_enc, axis=0)
             output_dec = np.concatenate(output_dec, axis=0)
             target_dec = np.concatenate(target_dec, axis=0)
 
-            size_value = np.concatenate([additional_info['size_value'] for additional_info in additional_infos], axis=0)
-            mktcap = np.concatenate([additional_info['mktcap'] for additional_info in additional_infos], axis=0)
+            size_value = np.concatenate([additional_info['size_value'] for additional_info in additional_infos_list], axis=0)
+            mktcap = np.concatenate([additional_info['mktcap'] for additional_info in additional_infos_list], axis=0)
 
-            idx_label = features_list.index(self.features_cls.label_feature)
-            where_p = (np.squeeze(target_dec)[:, idx_label] > 0)
-            where_n = (np.squeeze(target_dec)[:, idx_label] <= 0)
-            n_max = np.max([np.sum(where_p), np.sum(where_n)])
-            idx_pos = np.concatenate([np.random.choice(np.where(where_p)[0], np.sum(where_p), replace=False),
-                                      np.random.choice(np.where(where_p)[0], n_max - np.sum(where_p),
-                                                       replace=True)])
-            idx_neg = np.concatenate([np.random.choice(np.where(where_n)[0], np.sum(where_n), replace=False),
-                                      np.random.choice(np.where(where_n)[0], n_max - np.sum(where_n),
-                                                       replace=True)])
+            if self.balancing_method == 'once':
+                idx_label = features_list.index(self.features_cls.label_feature)
+                where_p = (np.squeeze(target_dec)[:, idx_label] > 0)
+                where_n = (np.squeeze(target_dec)[:, idx_label] <= 0)
+                n_max = np.max([np.sum(where_p), np.sum(where_n)])
+                idx_pos = np.concatenate([np.random.choice(np.where(where_p)[0], np.sum(where_p), replace=False),
+                                          np.random.choice(np.where(where_p)[0], n_max - np.sum(where_p),
+                                                           replace=True)])
+                idx_neg = np.concatenate([np.random.choice(np.where(where_n)[0], np.sum(where_n), replace=False),
+                                          np.random.choice(np.where(where_n)[0], n_max - np.sum(where_n),
+                                                           replace=True)])
 
-            idx_bal = np.concatenate([idx_pos, idx_neg])
-            input_enc, output_dec, target_dec = input_enc[idx_bal], output_dec[idx_bal], target_dec[idx_bal]
-            additional_infos = dict()
-            additional_infos['size_value'] = size_value[idx_bal]
-            additional_infos['mktcap'] = mktcap[idx_bal]
+                idx_bal = np.concatenate([idx_pos, idx_neg])
+                input_enc, output_dec, target_dec = input_enc[idx_bal], output_dec[idx_bal], target_dec[idx_bal]
+                additional_infos['size_value'] = size_value[idx_bal]
+                additional_infos['mktcap'] = mktcap[idx_bal]
+            else:
+                additional_infos['size_value'] = size_value[:]
+                additional_infos['mktcap'] = mktcap[:]
+        else:
+            additional_infos = additional_infos_list
 
         start_date = self.data_generator.date_[start_idx]
         end_date = self.data_generator.date_[end_idx]
@@ -595,7 +601,7 @@ class DataGeneratorDynamic:
         if univ_idx is None:
             univ_idx = base_idx
 
-        if (date_arr is None) or (np.sum(date_arr <= self.date_[univ_idx]) == 0):
+        if (np.sum(date_arr <= self.date_[base_idx]) == 0) or (np.sum(date_arr <= self.date_[univ_idx]) == 0):
             return False
 
         base_d = max(date_arr[date_arr <= self.date_[base_idx]])
@@ -606,11 +612,13 @@ class DataGeneratorDynamic:
 
             univ_d = max(date_arr[date_arr <= self.date_[univ_idx]])
             univ_list = list(self.data_code[self.data_code.eval_d == univ_d]['infocode'].to_numpy(dtype=np.int32))
+            base_list = list(self.data_code[self.data_code.eval_d == base_d]['infocode'].to_numpy(dtype=np.int32))
 
             # df_pivoted = self.data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
             # df_pivoted.columns = df_pivoted.columns.droplevel(0).to_numpy(dtype=np.int32)
             if self.use_beta:
                 univ_list_selected = sorted(list(set.intersection(set(univ_list),
+                                                                  set(base_list),
                                                                   set(self.df_pivoted_all.columns),
                                                                   set(self.df_beta_all.columns),
                                                                   set(self.df_ivol_all.columns))))
@@ -618,7 +626,7 @@ class DataGeneratorDynamic:
                 self.df_beta = self.df_beta_all[univ_list_selected]
                 self.df_ivol = self.df_ivol_all[univ_list_selected]
             else:
-                univ_list_selected = sorted(list(set.intersection(set(univ_list), set(self.df_pivoted_all.columns))))
+                univ_list_selected = sorted(list(set.intersection(set(univ_list), set(base_list), set(self.df_pivoted_all.columns))))
 
             self.df_pivoted = self.df_pivoted_all[univ_list_selected]
             self.df_size = self.data_code[self.data_code.eval_d == base_d][['infocode', 'mktcap']].set_index('infocode').loc[univ_list_selected, :]
@@ -876,7 +884,7 @@ class DataGeneratorDynamic:
         idx_label = features_list.index(self.features_cls.label_feature)
         where_p = (answer[:, 1, idx_label] > 0)
         where_n = (answer[:, 1, idx_label] <= 0)
-        if balance_class and (np.min(np.sum(where_p), np.sum(where_n)) > 0):
+        if balance_class and (np.min([np.sum(where_p), np.sum(where_n)]) > 0):
             n_max = np.max([np.sum(where_p), np.sum(where_n)])
             idx_pos = np.concatenate([np.random.choice(np.where(where_p)[0], np.sum(where_p), replace=False),
                                       np.random.choice(np.where(where_p)[0], n_max - np.sum(where_p), replace=True)])

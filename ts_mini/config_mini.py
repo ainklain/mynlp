@@ -28,7 +28,7 @@ class Config:
 
         self.shuffle_seek = 1000
         # self.model_hidden_size = 128
-        self.model_hidden_size = self.embedding_size
+        self.model_hidden_size = self.embedding_size    # self.set_features_info 에서 재설정
         self.ffn_hidden_size = 128
         self.attention_head_size = 2
         self.layer_size = 2
@@ -82,6 +82,8 @@ class Config:
         for cls in self.features_structure.keys():
             for key in self.features_structure[cls].keys():
                 self.embedding_size += len(self.features_structure[cls][key])
+                
+        self.model_hidden_size = self.embedding_size
 
     def set_kdays(self, k_days, pred='pos'):
         self.k_days = k_days

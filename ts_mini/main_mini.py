@@ -34,6 +34,7 @@ def main(k_days, pred, univ_type, balancing_method):
     with open(os.path.join(ds.data_out_path, ts_configs.f_name, 'config.txt'), 'w') as f:
         f.write(config_str)
 
+
     if os.path.exists(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name + '.pkl')):
         model.load_model(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name))
 
@@ -64,11 +65,14 @@ def main(k_days, pred, univ_type, balancing_method):
         ii += 1
 
 i = 0
-for k_days in [5, 20, 10]:
+for k_days in [20, 5, 10]:
     for pred in ['pos', 'std', 'mdd']:
         for univ_type in ['selected', 'all']:
             for balancing_method in ['once', 'each']:
-                print(univ_type, pred, k_days)
+                i += 1
+                # if i <= 1:
+                #     continue
+                print(univ_type, pred, k_days, balancing_method)
                 main(k_days, pred, univ_type, balancing_method)
 
 # if __name__ == '__main__':
