@@ -110,7 +110,7 @@ class Feature:
                 for key in self.features_structure[cls]:
                     features_data_dict[key] = dict()
                     for nd in self.features_structure[cls][key]:
-                        if key == 'logy':
+                        if key in ['logy', 'cslogy']:
                             features_data_dict[key][str(nd)] = log_y_nd(log_p, nd)[calc_length:][:(m_days+1)]
                         elif key == 'std':
                             features_data_dict[key][str(nd)] = std_nd(log_p, nd)[calc_length:][:(m_days + 1)]
@@ -133,7 +133,7 @@ class Feature:
                 for key in self.features_structure[cls]:
                     features_data_dict[key] = dict()
                     for nd in self.features_structure[cls][key]:
-                        if key == 'logy':
+                        if key in ['logy', 'cslogy']:
                             features_data_dict[key][str(nd)] = log_y_nd(log_p, nd)[calc_length:][:(m_days+1)]
                         elif key == 'std':
                             features_data_dict[key][str(nd)] = std_nd(log_p, nd)[calc_length:][:(m_days + 1)]
@@ -164,6 +164,10 @@ class Feature:
                                 features_label_dict[key][str(nd)] = mdd_nd(log_p_wo_calc, nd)[m_days:][::k_days_adj]
                             elif key == 'fft':
                                 features_label_dict[key][str(nd)] = fft(log_p_wo_calc, nd, m_days, k_days_adj)[m_days:][::k_days_adj]
+                            elif key == 'cslogy':
+                                tmp = log_y_nd(log_p, nd)[(calc_length+m_days):][:(n_freq + 1)][::n_freq]
+                                order = tmp.argsort(axis=1)
+                                features_label_dict[key][str(nd)] = order.argsort(axis=1)
 
             elif label_type == 'test_label':
                 assert len(log_p) == ((calc_length + m_days) + k_days_adj + 1)

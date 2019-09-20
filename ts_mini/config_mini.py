@@ -42,7 +42,8 @@ class Config:
     def set_features_info(self, k_days=5):
         if k_days == 5:
         # self.model_predictor_list = ['logy', 'pos_20', 'pos_60', 'pos_120', 'std', 'mdd', 'fft']
-            self.model_predictor_list = ['logy', 'pos_5', 'pos_10', 'pos_20', 'std', 'mdd', 'fft']
+        #     self.model_predictor_list = ['logy', 'pos_5', 'pos_10', 'pos_20', 'std', 'mdd', 'fft']
+            self.model_predictor_list = ['std']
 
             self.features_structure = \
                 {'regression':
@@ -53,7 +54,9 @@ class Config:
                       'fft': [3, 100]},
                  'classification':
                      # {'pos': [20, 60, 120, 250]}}
-                     {'pos': [5, 10, 20, 60]}}
+                     {'pos': [5, 10, 20, 60]},
+                 'crosssection':
+                     {'cslogy': [5, 10, 20]}}
         elif k_days == 10:
             self.model_predictor_list = ['logy', 'pos_10', 'pos_20', 'pos_60', 'std', 'mdd', 'fft']
 
@@ -67,7 +70,8 @@ class Config:
                      {'pos': [10, 20, 60, 120, 250]}}
 
         elif k_days == 20:
-            self.model_predictor_list = ['logy', 'pos_20', 'pos_60', 'pos_120', 'std', 'mdd', 'fft']
+            # self.model_predictor_list = ['logy', 'pos_20', 'pos_60', 'pos_120', 'std', 'mdd', 'fft']
+            self.model_predictor_list = ['std']
 
             self.features_structure = \
                 {'regression':

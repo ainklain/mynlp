@@ -544,7 +544,6 @@ class DataSchedulerCrossSection:
             return False
 
 
-
 class DataGeneratorDynamic:
     def __init__(self, features_cls, data_type='kr_stock', univ_type='all', use_beta=True, delayed_days=0):
         if data_type == 'kr_stock':
@@ -575,7 +574,7 @@ class DataGeneratorDynamic:
                 data_code = data_code[data_code.infocode > 0]
 
                 w_date = pd.merge(data_code, date_, left_on='eval_d', right_on='work_m')
-                data_code_w_size = pd.merge(w_date, size_data, left_on=['infocode','eval_y'], right_on=['infocode','eval_d'])
+                data_code_w_size = pd.merge(w_date, size_data, left_on=['infocode', 'eval_y'], right_on=['infocode', 'eval_d'])
                 self.data_code = data_code_w_size.ix[:, ['eval_m', 'infocode', 'size_port', 'mktcap']]
                 self.data_code.columns = ['eval_d', 'infocode', 'size_port', 'mktcap']
 
@@ -635,7 +634,10 @@ class DataGeneratorDynamic:
 
         return True
 
-    def sample_inputdata_split_new3(self, base_idx, sampling_days=5, m_days=60, k_days=20, calc_length=250, label_type='trainable_label', univ_idx=None, balance_class='NotUsed'):
+    def sample_inputdata_split_new3(self, base_idx, sampling_days=5, m_days=60, k_days=20, calc_length=250
+                                    , label_type='trainable_label'
+                                    , univ_idx=None
+                                    , balance_class='NotUsed'):
         # balancing removed.
         # self = ds.data_generator
         # base_idx = univ_idx = 5000
@@ -754,9 +756,14 @@ class DataGeneratorDynamic:
 
         assert np.sum(input_enc[:, -1:, :] - output_dec[:, :, :]) == 0
 
+
+
         return input_enc, output_dec, target_dec, features_list, additional_info
 
-    def sample_inputdata_split_new2(self, base_idx, sampling_days=5, m_days=60, k_days=20, calc_length=250, balance_class=True,label_type='trainable_label', univ_idx=None):
+    def sample_inputdata_split_new2(self, base_idx, sampling_days=5, m_days=60, k_days=20, calc_length=250
+                                    , balance_class=True
+                                    , label_type='trainable_label'
+                                    , univ_idx=None):
         # self = ds.data_generator
         # base_idx = univ_idx = 5000
         # sampling_days = 5; m_days = 60; k_days = 20; calc_length = 250
