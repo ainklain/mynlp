@@ -64,24 +64,24 @@ def main(k_days, pred, univ_type, balancing_method):
         ds.next()
         ii += 1
 
-i = 0
-for k_days in [20, 5, 10]:
-    for pred in ['pos', 'std', 'mdd']:
-        for univ_type in ['selected', 'all']:
-            for balancing_method in ['once', 'each']:
-                i += 1
-                # if i <= 1:
-                #     continue
-                print(univ_type, pred, k_days, balancing_method)
-                main(k_days, pred, univ_type, balancing_method)
+# i = 0
+# for k_days in [20, 5, 10]:
+#     for pred in ['pos', 'std', 'mdd']:
+#         for univ_type in ['selected', 'all']:
+#             for balancing_method in ['once', 'each']:
+#                 i += 1
+#                 # if i <= 1:
+#                 #     continue
+#                 print(univ_type, pred, k_days, balancing_method)
+#                 main(k_days, pred, univ_type, balancing_method)
 
 # if __name__ == '__main__':
 #     main()
 
 
 i = 0
-for k_days in [20, 5]:
-    for pred in ['std']:
+for k_days in [5]:
+    for pred in ['cslogy']:
         for univ_type in ['selected', 'all']:
             for balancing_method in ['once', 'each']:
                 i += 1

@@ -167,7 +167,7 @@ class Feature:
                             elif key == 'cslogy':
                                 tmp = log_y_nd(log_p, nd)[(calc_length+m_days):][:(n_freq + 1)][::n_freq]
                                 order = tmp.argsort(axis=1)
-                                features_label_dict[key][str(nd)] = order.argsort(axis=1)
+                                features_label_dict[key][str(nd)] = order.argsort(axis=1) / np.max(order, axis=1).reshape([-1, 1])
 
             elif label_type == 'test_label':
                 assert len(log_p) == ((calc_length + m_days) + k_days_adj + 1)

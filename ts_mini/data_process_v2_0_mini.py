@@ -735,6 +735,7 @@ class DataGeneratorDynamic:
         question[:] = np.transpose(features_sampled_data, [1, 0, 2])
         if label_type == 'trainable_label':
             answer[:, :2, :] = np.transpose(features_sampled_label, [1, 0, 2])
+            answer[:, 0, :] = question[:, -1, :]    # temporary
             assert np.sum(answer[:, 0, :] - question[:, -1, :]) == 0
         elif label_type == 'test_label':
             label_idx = features_list.index(self.features_cls.label_feature)
