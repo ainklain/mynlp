@@ -181,6 +181,8 @@ class TSModel:
             elif tags[0] in configs.features_structure['classification'].keys():
                 self.predictor[key] = FeedForward(2, 64, out_activation='softmax')
                 self.predictor_helper[key] = configs.features_structure['regression']['logy'].index(int(tags[1]))
+            # elif tags[0] in configs.features_structure['crosssection'].keys():
+            #     self.predictor[key] = FeedForward(len(configs.features_structure['regression'][key]), 64)
 
         self.feature_cls = feature_cls
 

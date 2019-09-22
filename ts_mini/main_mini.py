@@ -17,7 +17,7 @@ def main(k_days, pred, univ_type, balancing_method):
         ts_configs.m_days = 120
 
     ts_configs.balancing_method = balancing_method
-    ts_configs.f_name = 'kr_mw_{}_{}_{}_{}_003'.format(k_days, univ_type, balancing_method, pred)  #: kr every
+    ts_configs.f_name = 'kr_mw_{}_{}_{}_{}_004'.format(k_days, univ_type, balancing_method, pred)  #: kr every
     ts_configs.train_steps = 10000
     ts_configs.eval_steps = 500
     ts_configs.early_stopping_count = 5
@@ -83,7 +83,7 @@ i = 0
 for k_days in [5]:
     for pred in ['cslogy']:
         for univ_type in ['selected', 'all']:
-            for balancing_method in ['once', 'each']:
+            for balancing_method in ['nothing']:
                 i += 1
                 # if i <= 1:
                 #     continue

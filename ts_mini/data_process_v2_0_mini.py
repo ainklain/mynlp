@@ -94,7 +94,7 @@ class DataScheduler:
         start_idx, end_idx, data_params = self.get_data_params(mode)
 
         for i, d in enumerate(range(start_idx, end_idx, self.sampling_days)):
-            if self.balancing_method == 'once':
+            if self.balancing_method in ['once', 'nothing']:
                 _sampled_data = self.data_generator.sample_inputdata_split_new3(d, **data_params)
             elif self.balancing_method == 'each':
                 _sampled_data = self.data_generator.sample_inputdata_split_new2(d, **data_params)
