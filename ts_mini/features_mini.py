@@ -35,6 +35,16 @@ def mdd_nd(log_p, n):
     return mddarr
 
 
+def arr_to_cs(arr):
+    order = arr.argsort(axis=1)
+    return_value = order.argsort(axis=1) / np.max(order, axis=1, keepdims=True)
+    return return_value
+
+def arr_to_normal(arr):
+    return_value = (arr - np.mean(arr, axis=1, keepdims=True)) / np.std(arr, axis=1, ddof=1, keepdims=True)
+    return return_value
+
+
 class Feature:
     def __init__(self, configs):
         self._init_features(configs)
@@ -81,6 +91,10 @@ class Feature:
                 else:
                     labels_mtl[key] = np.stack([labels[:, :, features_list.index("{}_{}".format(key, n))]
                                                 for n in n_arr], axis=-1)
+
+                    if key == 'cslogy':
+                        labels_mtl['cslogy_idx'] = [features_list.index("{}_{}".format(key, n)) for n in n_arr]
+
         labels_mtl['size_value'] = size_value
 
         return labels_mtl
@@ -110,7 +124,7 @@ class Feature:
                 for key in self.features_structure[cls]:
                     features_data_dict[key] = dict()
                     for nd in self.features_structure[cls][key]:
-                        if key in ['logy', 'cslogy']:
+                        if key in ['logy']:
                             features_data_dict[key][str(nd)] = log_y_nd(log_p, nd)[calc_length:][:(m_days+1)]
                         elif key == 'std':
                             features_data_dict[key][str(nd)] = std_nd(log_p, nd)[calc_length:][:(m_days + 1)]
@@ -120,6 +134,10 @@ class Feature:
                             features_data_dict[key][str(nd)] = mdd_nd(log_p_wo_calc, nd)[:(m_days + 1)]
                         elif key == 'fft':
                             features_data_dict[key][str(nd)] = fft(log_p_wo_calc, nd, m_days, k_days_adj)[:(m_days + 1)]
+                        elif key == 'cslogy':
+                            features_data_dict[key][str(nd)] = arr_to_cs(log_y_nd(log_p, nd)[calc_length:][:(m_days+1)])
+                        elif key == 'csstd':
+                            features_data_dict[key][str(nd)] = arr_to_cs(std_nd(log_p, nd)[calc_length:][:(m_days + 1)])
 
         else:
             # 1 day adj.
@@ -133,7 +151,7 @@ class Feature:
                 for key in self.features_structure[cls]:
                     features_data_dict[key] = dict()
                     for nd in self.features_structure[cls][key]:
-                        if key in ['logy', 'cslogy']:
+                        if key in ['logy']:
                             features_data_dict[key][str(nd)] = log_y_nd(log_p, nd)[calc_length:][:(m_days+1)]
                         elif key == 'std':
                             features_data_dict[key][str(nd)] = std_nd(log_p, nd)[calc_length:][:(m_days + 1)]
@@ -143,6 +161,10 @@ class Feature:
                             features_data_dict[key][str(nd)] = mdd_nd(log_p_wo_calc, nd)[:(m_days + 1)]
                         elif key == 'fft':
                             features_data_dict[key][str(nd)] = fft(log_p_wo_calc, nd, m_days, k_days_adj)[:(m_days + 1)]
+                        elif key == 'cslogy':
+                            features_data_dict[key][str(nd)] = arr_to_cs(log_y_nd(log_p, nd)[calc_length:][:(m_days+1)])
+                        elif key == 'csstd':
+                            features_data_dict[key][str(nd)] = arr_to_cs(std_nd(log_p, nd)[calc_length:][:(m_days + 1)])
 
             if label_type == 'trainable_label':
                 # 1 day adj.
@@ -165,9 +187,15 @@ class Feature:
                             elif key == 'fft':
                                 features_label_dict[key][str(nd)] = fft(log_p_wo_calc, nd, m_days, k_days_adj)[m_days:][::k_days_adj]
                             elif key == 'cslogy':
-                                tmp = log_y_nd(log_p, nd)[(calc_length+m_days):][:(n_freq + 1)][::n_freq]
-                                order = tmp.argsort(axis=1)
-                                features_label_dict[key][str(nd)] = order.argsort(axis=1) / np.max(order, axis=1).reshape([-1, 1])
+                                features_label_dict[key][str(nd)] = arr_to_cs(log_y_nd(log_p, nd)[(calc_length+m_days):][:(n_freq + 1)][::n_freq])
+                                # tmp = log_y_nd(log_p, nd)[(calc_length+m_days):][:(n_freq + 1)][::n_freq]
+                                # order = tmp.argsort(axis=1)
+                                # features_label_dict[key][str(nd)] = order.argsort(axis=1) / np.max(order, axis=1).reshape([-1, 1])
+                            elif key == 'csstd':
+                                features_label_dict[key][str(nd)] = arr_to_cs(std_nd(log_p, nd)[(calc_length+m_days):][:(n_freq + 1)][::n_freq])
+                                # tmp = std_nd(log_p, nd)[(calc_length+m_days):][:(n_freq + 1)][::n_freq]
+                                # order = tmp.argsort(axis=1)
+                                # features_label_dict[key][str(nd)] = order.argsort(axis=1) / np.max(order, axis=1).reshape([-1, 1])
 
             elif label_type == 'test_label':
                 assert len(log_p) == ((calc_length + m_days) + k_days_adj + 1)

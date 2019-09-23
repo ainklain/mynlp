@@ -17,10 +17,10 @@ def main(k_days, pred, univ_type, balancing_method):
         ts_configs.m_days = 120
 
     ts_configs.balancing_method = balancing_method
-    ts_configs.f_name = 'kr_mw_{}_{}_{}_{}_004'.format(k_days, univ_type, balancing_method, pred)  #: kr every
-    ts_configs.train_steps = 10000
-    ts_configs.eval_steps = 500
-    ts_configs.early_stopping_count = 5
+    ts_configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_003'.format(k_days, univ_type, balancing_method, pred)  #: kr every
+    ts_configs.train_steps = 20000
+    ts_configs.eval_steps = 1000
+    ts_configs.early_stopping_count = 3
     ts_configs.weight_scheme = 'mw'  # mw / ew
     config_str = ts_configs.export()
     # get data for all assets and dates
@@ -38,7 +38,7 @@ def main(k_days, pred, univ_type, balancing_method):
     if os.path.exists(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name + '.pkl')):
         model.load_model(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name))
 
-    ds.set_idx(6000)
+    ds.set_idx(6250)
     ds.test_end_idx = ds.base_idx + 1000
     ii = 0
     while not ds.done:
@@ -80,9 +80,9 @@ def main(k_days, pred, univ_type, balancing_method):
 
 
 i = 0
-for k_days in [5]:
+for k_days in [20, 5]:
     for pred in ['cslogy']:
-        for univ_type in ['selected', 'all']:
+        for univ_type in ['selected']: # , 'all']:
             for balancing_method in ['nothing']:
                 i += 1
                 # if i <= 1:

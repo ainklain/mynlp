@@ -177,7 +177,10 @@ class TSModel:
         for key in configs.model_predictor_list:
             tags = key.split('_')
             if tags[0] in configs.features_structure['regression'].keys():
-                self.predictor[key] = FeedForward(len(configs.features_structure['regression'][key]), 64)
+                if key in ['cslogy', 'csstd']:
+                    self.predictor[key] = FeedForward(len(configs.features_structure['regression'][key]), 64, out_activation='sigmoid')
+                else:
+                    self.predictor[key] = FeedForward(len(configs.features_structure['regression'][key]), 64)
             elif tags[0] in configs.features_structure['classification'].keys():
                 self.predictor[key] = FeedForward(2, 64, out_activation='softmax')
                 self.predictor_helper[key] = configs.features_structure['regression']['logy'].index(int(tags[1]))
@@ -244,22 +247,27 @@ class TSModel:
                 pred_each[key] = self.predictor[key](predict)
                 var_lists += self.predictor[key].trainable_variables
 
-                if key[:3] == 'pos':
-                    if self.weight_scheme == 'mw':
-                        adj_weight = labels_mtl['size_value'][:, :, 0] * 2.  # size value 평균이 0.5 이므로 기존이랑 스케일 맞추기 위해 2 곱
-                    else:
-                        adj_weight = 1.
+                if self.weight_scheme == 'mw':
+                    adj_weight = labels_mtl['size_value'][:, :, 0] * 2.  # size value 평균이 0.5 이므로 기존이랑 스케일 맞추기 위해 2 곱
+                else:
+                    adj_weight = 1.
 
+                if key[:3] == 'pos':
                     loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) \
                                      * tf.abs(labels_mtl['logy'][:, :, self.predictor_helper[key]]) \
                                      * adj_weight
                 else:
-                    loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key])
+                    loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key]) * adj_weight
 
                 if loss is None:
                     loss = loss_each[key]
                 else:
                     loss += loss_each[key]
+
+            if 'cslogy' in labels_mtl.keys():
+                cs_loc = np.stack([features['output'][:, :, idx] for idx in labels_mtl['cslogy_idx']], axis=-1)
+                loss_each['cs_loc'] = tf.losses.MSE(cs_loc, pred_each['cslogy']) * adj_weight * 0.1
+                loss += loss_each['cs_loc']
 
         grad = tape.gradient(loss, var_lists)
         self.optimizer.apply_gradients(zip(grad, var_lists))
@@ -292,17 +300,17 @@ class TSModel:
                 pred_each[key] = self.predictor[key](predict)
                 var_lists += self.predictor[key].trainable_variables
 
-                if key[:3] == 'pos':
-                    if self.weight_scheme == 'mw':
-                        adj_weight = labels_mtl['size_value'][:, :, 0] * 2.
-                    else:
-                        adj_weight = 1.
+                if self.weight_scheme == 'mw':
+                    adj_weight = labels_mtl['size_value'][:, :, 0] * 2.
+                else:
+                    adj_weight = 1.
 
+                if key[:3] == 'pos':
                     loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) \
                                      * tf.abs(labels_mtl['logy'][:, :, self.predictor_helper[key]]) \
                                      * adj_weight
                 else:
-                    loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key])
+                    loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key]) * adj_weight
 
                 # if key == 'pos':
                 #     loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) * tf.abs(labels_mtl['ret'][:, :, 0])
@@ -316,6 +324,11 @@ class TSModel:
                     loss = loss_each[key]
                 else:
                     loss += loss_each[key]
+
+            if 'cslogy_idx' in labels_mtl.keys():
+                cs_loc = np.stack([features['output'][:, :, idx] for idx in labels_mtl['cslogy_idx']], axis=-1)
+                loss_each['cs_loc'] = tf.losses.MSE(cs_loc, pred_each['cslogy']) * adj_weight * 0.1
+                loss += loss_each['cs_loc']
 
             loss_avg += np.mean(loss.numpy())
 
@@ -331,7 +344,6 @@ class TSModel:
 
         else:
             self.eval_count += 1
-
 
     def predict_mtl(self, feature):
 

@@ -208,8 +208,32 @@ class DataScheduler:
                     model.save_model(model_name)
                     break
 
+            features_with_noise = {'input': None, 'output': features['output']}
+
+
+            # add random noise
+            if np.random.random() <= 0.4:
+                # normal with mu=0 and sig=sigma
+                sample_sigma = tf.math.reduce_std(features['input'], axis=[0, 1], keepdims=True)
+                eps = sample_sigma * tf.random.normal(features['input'].shape, mean=0, stddev=1)
+            else:
+                eps = 0
+
+            features_with_noise['input'] = features['input'] + eps
+
+
+            # randomly masked input data
+            if np.random.random() <= 0.1:
+                t_size = features['input'].shape[1]
+                mask = np.ones_like(features['input'])
+                masked_idx = np.random.choice(t_size, size=int(t_size * 0.2), replace=False)
+                for mask_i in masked_idx:
+                    mask[:, mask_i, :] = 0
+
+                    features_with_noise['input'] = features_with_noise['input'] * mask
+
             labels_mtl = self.features_cls.labels_for_mtl(features_list, labels, size_values)
-            model.train_mtl(features, labels_mtl, print_loss=print_loss)
+            model.train_mtl(features_with_noise, labels_mtl, print_loss=print_loss)
 
     def test(self, model, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None, time_step=1):
         if out_dir is None:
