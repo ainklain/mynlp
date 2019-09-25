@@ -74,6 +74,12 @@ class DataScheduler:
             end_idx = self.test_end_idx
             data_params['balance_class'] = False
             data_params['label_type'] = 'test_label'        # test: 예측하고자 하는 것만 반영 (k_days)
+        elif mode == 'test_insample':
+            start_idx = self.train_begin_idx + self.m_days
+            # start_idx = self.test_begin_idx
+            end_idx = self.test_begin_idx - self.k_days
+            data_params['balance_class'] = False
+            data_params['label_type'] = 'test_label'        # test: 예측하고자 하는 것만 반영 (k_days)
         elif mode == 'predict':
             start_idx = self.test_begin_idx + self.m_days
             # start_idx = self.test_begin_idx
@@ -150,6 +156,8 @@ class DataScheduler:
 
     def train(self,
               model,
+              trainset=None,
+              evalset=None,
               train_steps=1,
               eval_steps=10,
               save_steps=50,
@@ -160,8 +168,16 @@ class DataScheduler:
         train_out_path = os.path.join(self.data_out_path, model_name, '{}'.format(self.base_idx))
         os.makedirs(train_out_path, exist_ok=True)
 
-        _train_dataset = self._dataset('train')
-        _eval_dataset = self._dataset('eval')
+        if trainset is None:
+            _train_dataset = self._dataset('train')
+        else:
+            _train_dataset = trainset
+
+        if evalset is None:
+            _eval_dataset = self._dataset('eval')
+        else:
+            _eval_dataset = evalset
+
         if _train_dataset is False or _eval_dataset is False:
             print('[train] no train/eval data')
             return False
@@ -235,24 +251,23 @@ class DataScheduler:
             labels_mtl = self.features_cls.labels_for_mtl(features_list, labels, size_values)
             model.train_mtl(features_with_noise, labels_mtl, print_loss=print_loss)
 
-    def test(self, model, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None, time_step=1):
+    def test(self, model, dataset=None, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None, time_step=1):
         if out_dir is None:
             test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
         else:
             test_out_path = out_dir
 
         os.makedirs(test_out_path, exist_ok=True)
-        if file_nm is None:
-            save_file_name = '{}/{}'.format(test_out_path, '_all.png')
-        else:
-            save_file_name = '{}/{}'.format(test_out_path, file_nm)
-
         if use_label:
-            _dataset_list = self._dataset('test')
+            if dataset is None:
+                _dataset_list = self._dataset('test')
+            else:
+                _dataset_list = dataset
+
             if _dataset_list is False:
                 print('[test] no test data')
                 return False
-            self.features_cls.predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=save_file_name, ylog=ylog, time_step=time_step)
+            self.features_cls.predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=test_out_path, file_nm=file_nm, ylog=ylog, time_step=time_step)
 
         if save_type is not None:
             _dataset_list = self._dataset('predict')
@@ -658,6 +673,22 @@ class DataGeneratorDynamic:
 
         return True
 
+    def make_market_idx(self, df_for_data, mktcap, m_days, sampling_days, calc_length, label_type, delayed_days, additional_dict):
+        log_p = np.log(df_for_data.values, dtype=np.float32)
+        log_p = log_p - log_p [0, :]
+        mkt_idx = np.sum(log_p * mktcap.reshape([1, -1]), axis=1) / np.sum(mktcap)
+        mkt_df = pd.DataFrame(mkt_idx, index=df_for_data.index, columns=['mkt'])
+
+        features_list, features_sampled_data, _ = self.features_cls.processing_split_new(mkt_df,
+                                                                                         m_days=m_days,
+                                                                                         sampling_days=sampling_days,
+                                                                                         calc_length=calc_length,
+                                                                                         label_type=None,
+                                                                                         delayed_days=self.delayed_days,
+                                                                                         additional_dict=additional_dict)
+
+        return features_list, features_sampled_data
+
     def sample_inputdata_split_new3(self, base_idx, sampling_days=5, m_days=60, k_days=20, calc_length=250
                                     , label_type='trainable_label'
                                     , univ_idx=None
@@ -688,8 +719,13 @@ class DataGeneratorDynamic:
         if df_for_data.empty:
             return False
 
-        additional_info = {'date': self.date_[base_idx], 'assets_list': list(df_for_data.columns)}
+
+        additional_info = {'date': self.date_[base_idx], 'inv_date': self.date_[base_idx + self.delayed_days], 'assets_list': list(df_for_data.columns)}
         additional_dict = None
+
+        size_adjusted_factor = np.array(self.df_size.loc[df_for_data.columns].rnk, dtype=np.float32).reshape([-1, 1, 1])
+        size_adjusted_factor_mktcap = np.array(self.df_size.loc[df_for_data.columns].mktcap, dtype=np.float32).reshape([-1, 1, 1])
+        assert df_for_data.shape[-1] == size_adjusted_factor_mktcap.shape[0]
         if self.use_beta:
             # beta & ivol
             if (len(set.difference(set(df_for_data.index), set(self.df_beta.index))) > 0) or \
@@ -708,12 +744,16 @@ class DataGeneratorDynamic:
 
         features_list, features_sampled_data, _ = self.features_cls.processing_split_new(df_for_data,
                                                                                          m_days=m_days,
-                                                                                         k_days=k_days,
+                                                                                         # k_days=k_days,
                                                                                          sampling_days=sampling_days,
                                                                                          calc_length=calc_length,
                                                                                          label_type=None,
                                                                                          delayed_days=self.delayed_days,
                                                                                          additional_dict=additional_dict)
+
+        # _, mkt_sampled_data = self.make_market_idx(df_for_data, size_adjusted_factor_mktcap, m_days, sampling_days,
+        #                                            calc_length, None, self.delayed_days, additional_dict)
+
         M = m_days // sampling_days
 
         assert features_sampled_data.shape[0] == M
@@ -742,12 +782,15 @@ class DataGeneratorDynamic:
                 additional_dict = {'beta': df_beta_label, 'ivol': df_ivol_label}
             _, features_data_for_label, features_sampled_label = self.features_cls.processing_split_new(df_for_label,
                                                                                                         m_days=m_days,
-                                                                                                        k_days=k_days,
+                                                                                                        # k_days=k_days,
                                                                                                         sampling_days=sampling_days,
                                                                                                         calc_length=calc_length,
                                                                                                         label_type=label_type,
                                                                                                         delayed_days=self.delayed_days,
                                                                                                         additional_dict=additional_dict)
+
+            # _, mkt_sampled_label = self.make_market_idx(df_for_label, size_adjusted_factor_mktcap, m_days, sampling_days,
+            #                                             calc_length, None, self.delayed_days, additional_dict)
             # features_for_label = features_for_label[calc_length:]
 
             assert np.sum(features_sampled_data - features_data_for_label) == 0
@@ -769,8 +812,6 @@ class DataGeneratorDynamic:
         else:
             answer[:, 0, :] = question[:, -1, :]
 
-        size_adjusted_factor = np.array(self.df_size.loc[df_for_data.columns].rnk, dtype=np.float32).reshape([-1, 1, 1])
-        size_adjusted_factor_mktcap = np.array(self.df_size.loc[df_for_data.columns].mktcap, dtype=np.float32).reshape([-1, 1, 1])
         assert len(size_adjusted_factor) == n_asset
         assert len(size_adjusted_factor_mktcap) == n_asset
 
@@ -780,8 +821,6 @@ class DataGeneratorDynamic:
         assert len(additional_info['assets_list']) == len(input_enc)
 
         assert np.sum(input_enc[:, -1:, :] - output_dec[:, :, :]) == 0
-
-
 
         return input_enc, output_dec, target_dec, features_list, additional_info
 
@@ -836,7 +875,7 @@ class DataGeneratorDynamic:
 
         features_list, features_sampled_data, _ = self.features_cls.processing_split_new(df_for_data,
                                                                                          m_days=m_days,
-                                                                                         k_days=k_days,
+                                                                                         # k_days=k_days,
                                                                                          sampling_days=sampling_days,
                                                                                          calc_length=calc_length,
                                                                                          label_type=None,
@@ -870,7 +909,7 @@ class DataGeneratorDynamic:
                 additional_dict = {'beta': df_beta_label, 'ivol': df_ivol_label}
             _, features_data_for_label, features_sampled_label = self.features_cls.processing_split_new(df_for_label,
                                                                                                         m_days=m_days,
-                                                                                                        k_days=k_days,
+                                                                                                        # k_days=k_days,
                                                                                                         sampling_days=sampling_days,
                                                                                                         calc_length=calc_length,
                                                                                                         label_type=label_type,
@@ -992,7 +1031,7 @@ class DataGeneratorDynamic:
 
         features_list, features_sampled_data, _ = self.features_cls.processing_split_new(df_for_data,
                                                                                          m_days=m_days,
-                                                                                         k_days=k_days,
+                                                                                         # k_days=k_days,
                                                                                          sampling_days=sampling_days,
                                                                                          calc_length=calc_length,
                                                                                          label_type=None,
@@ -1028,7 +1067,7 @@ class DataGeneratorDynamic:
                 additional_dict = {'beta': df_beta, 'ivol': df_ivol}
             _, features_data_for_label, features_sampled_label = self.features_cls.processing_split_new(df_for_label,
                                                                                                         m_days=m_days,
-                                                                                                        k_days=k_days,
+                                                                                                        # k_days=k_days,
                                                                                                         sampling_days=sampling_days,
                                                                                                         calc_length=calc_length,
                                                                                                         label_type='trainable_label',
@@ -1061,7 +1100,7 @@ class DataGeneratorDynamic:
 
             _, features_data_for_label, features_sampled_label = self.features_cls.processing_split_new(df_for_label,
                                                                                                         m_days=m_days,
-                                                                                                        k_days=k_days,
+                                                                                                        # k_days=k_days,
                                                                                                         sampling_days=sampling_days,
                                                                                                         calc_length=calc_length,
                                                                                                         label_type='test_label',

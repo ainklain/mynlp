@@ -1,5 +1,6 @@
 
 import numpy as np
+import os
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -99,7 +100,7 @@ class Feature:
 
         return labels_mtl
 
-    def processing_split_new(self, df_not_null, m_days, k_days, sampling_days, calc_length=0, label_type=None,
+    def processing_split_new(self, df_not_null, m_days, sampling_days, calc_length=0, label_type=None,
                              delayed_days=0, additional_dict=None):
         # if type(df.columns) == pd.MultiIndex:
         #     df.columns = df.columns.droplevel(0)
@@ -248,7 +249,7 @@ class Feature:
         # feature_df = pd.DataFrame(np.transpose(features_data[:, :, 0]), columns=features_list)
         return features_list, features_data, features_label
 
-    def predict_plot_mtl_cross_section_test(self, model, dataset_list, save_dir='out.png', ylog=False, time_step=1):
+    def predict_plot_mtl_cross_section_test(self, model, dataset_list, save_dir, file_nm='test.png', ylog=False, time_step=1):
         if dataset_list is False:
             return False
         else:
@@ -259,27 +260,21 @@ class Feature:
         true_y = np.zeros([int(np.ceil(len(input_enc_list) / time_step)) + 1, 1])
         true_y_mw = np.zeros([int(np.ceil(len(input_enc_list) / time_step)) + 1, 1])
 
-        n_tile = 5
-        pred_arr = np.zeros([len(true_y), n_tile])
-        pred_arr_mw = np.zeros([len(true_y), n_tile])
+        n_tile = 4
+        pred_arr = dict()
+        pred_arr_mw = dict()
+        pred_arr['main'] = np.zeros([len(true_y), n_tile])
+        pred_arr_mw['main'] = np.zeros([len(true_y), n_tile])
 
-        pred_arr_ori = np.zeros([len(true_y), n_tile])
-        pred_arr_ori_mw = np.zeros([len(true_y), n_tile])
+        pred_arr['ori'] = np.zeros([len(true_y), n_tile])
+        pred_arr_mw['ori'] = np.zeros([len(true_y), n_tile])
 
-        pred_arr_cap = np.zeros([len(true_y), n_tile])
-        pred_arr_cap_mw = np.zeros([len(true_y), n_tile])
+        pred_arr['cap'] = np.zeros([len(true_y), n_tile])
+        pred_arr_mw['cap'] = np.zeros([len(true_y), n_tile])
 
-        # pred_q1 = np.zeros_like(true_y)
-        # pred_q2 = np.zeros_like(true_y)
-        # pred_q3 = np.zeros_like(true_y)
-        # pred_q4 = np.zeros_like(true_y)
-        # pred_q5 = np.zeros_like(true_y)
-        #
-        # pred_q1_mw = np.zeros_like(true_y)
-        # pred_q2_mw = np.zeros_like(true_y)
-        # pred_q3_mw = np.zeros_like(true_y)
-        # pred_q4_mw = np.zeros_like(true_y)
-        # pred_q5_mw = np.zeros_like(true_y)
+        for key in model.predictor.keys():
+            pred_arr[key] = np.zeros([len(true_y), n_tile])
+            pred_arr_mw[key] = np.zeros([len(true_y), n_tile])
 
         size_value_list = [add_info['size_value'] for add_info in additional_infos]
         mktcap_list = [add_info['mktcap'] for add_info in additional_infos]
@@ -300,215 +295,89 @@ class Feature:
             true_y_mw[t] = np.sum(labels[:, 0, idx_y] * mktcap[:, 0, 0]) / np.sum(mktcap[:, 0, 0])
 
             predictions = model.predict_mtl(features)
-            value_ = predictions[self.pred_feature][:, 0, 0]
+            value_ = dict()
+            value_['main'] = predictions[self.pred_feature][:, 0, 0]
+
+            for feature in model.predictor.keys():
+                value_[feature] = predictions[feature][:, 0, 0]
 
             predictions_ori = model.predict_mtl({'input': input_enc_t, 'output': output_dec_t})
-            value_ori = predictions_ori[self.pred_feature][:, 0, 0]
+            value_['ori'] = predictions_ori[self.pred_feature][:, 0, 0]
 
             predictions_cap = model.predict_mtl({'input': input_enc_t, 'output': new_output_t2})
-            value_cap = predictions_cap[self.pred_feature][:, 0, 0]
+            value_['cap'] = predictions_cap[self.pred_feature][:, 0, 0]
 
             for i_tile in range(n_tile):
                 low_q, high_q = 100 * (1. - (1.+i_tile) / n_tile),  100 * (1. - i_tile / n_tile)
 
-                low_crit, high_crit = np.percentile(value_, q=[low_q, high_q])
-                if high_q == 100:
-                    crit_ = (value_ >= low_crit)
-                else:
-                    crit_ = ((value_ >= low_crit) & (value_ < high_crit))
+                for v in value_.keys():
+                    low_crit, high_crit = np.percentile(value_[v], q=[low_q, high_q])
 
-                pred_arr[t, i_tile] = np.mean(labels[crit_, 0, idx_y])
-                pred_arr_mw[t, i_tile] = np.sum(labels[crit_, 0, idx_y] * mktcap[crit_, 0, 0]) / np.sum(mktcap[crit_, 0, 0])
+                    if high_q == 100:
+                        crit_ = (value_[v] >= low_crit)
+                    else:
+                        crit_ = ((value_[v] >= low_crit) & (value_[v] < high_crit))
 
-                low_crit_ori, high_crit_ori = np.percentile(value_ori, q=[low_q, high_q])
-                crit_ori = ((value_ >= low_crit_ori) & (value_ < high_crit_ori))
-                pred_arr_ori[t, i_tile] = np.mean(labels[crit_ori, 0, idx_y])
-                pred_arr_ori_mw[t, i_tile] = np.sum(labels[crit_ori, 0, idx_y] * mktcap[crit_ori, 0, 0]) / np.sum(mktcap[crit_ori, 0, 0])
+                    pred_arr[v][t, i_tile] = np.mean(labels[crit_, 0, idx_y])
+                    pred_arr_mw[v][t, i_tile] = np.sum(labels[crit_, 0, idx_y] * mktcap[crit_, 0, 0]) / np.sum(mktcap[crit_, 0, 0])
 
-                low_crit_cap, high_crit_cap = np.percentile(value_cap, q=[low_q, high_q])
-                crit_cap = ((value_ >= low_crit_cap) & (value_ < high_crit_cap))
-                pred_arr_cap[t, i_tile] = np.mean(labels[crit_cap, 0, idx_y])
-                pred_arr_cap_mw[t, i_tile] = np.sum(labels[crit_cap, 0, idx_y] * mktcap[crit_cap, 0, 0]) / np.sum(mktcap[crit_cap, 0, 0])
+        for v_ in value_.keys():
+            data = pd.DataFrame(np.cumprod(1. + np.concatenate([true_y, true_y_mw, pred_arr[v_], pred_arr_mw[v_]], axis=-1),axis=0),
+                                columns=['true_y', 'true_y_mw']
+                                        + ['pred_q{}'.format(i + 1) for i in range(n_tile)]
+                                        + ['pred_q{}_mw'.format(i + 1) for i in range(n_tile)])
+            data['pred_ls'] = np.cumprod(1. + np.mean(pred_arr[v_][:, :1], axis=1) - np.mean(pred_arr[v_][:, -1:], axis=1))
+            data['pred_ls2'] = np.cumprod(1. + np.mean(pred_arr[v_][:, :2], axis=1) - np.mean(pred_arr[v_][:, -2:], axis=1))
+            data['pred_ls_mw'] = np.cumprod(1. + np.mean(pred_arr_mw[v_][:, :1], axis=1) - np.mean(pred_arr_mw[v_][:, -1:], axis=1))
+            data['pred_ls_mw2'] = np.cumprod(1. + np.mean(pred_arr_mw[v_][:, :2], axis=1) - np.mean(pred_arr_mw[v_][:, -2:], axis=1))
 
-            # q1_crit, q2_crit, q3_crit, q4_crit = np.percentile(value_, q=[80, 60, 40, 20])
-            # crit1 = (value_ >= q1_crit)
-            # crit2 = ((value_ >= q2_crit) & (value_ < q1_crit))
-            # crit3 = ((value_ >= q3_crit) & (value_ < q2_crit))
-            # crit4 = ((value_ >= q4_crit) & (value_ < q3_crit))
-            # crit5 = (value_ < q4_crit)
-            # pred_q1[t] = np.mean(labels[crit1, 0, idx_y])
-            # pred_q2[t] = np.mean(labels[crit2, 0, idx_y])
-            # pred_q3[t] = np.mean(labels[crit3, 0, idx_y])
-            # pred_q4[t] = np.mean(labels[crit4, 0, idx_y])
-            # pred_q5[t] = np.mean(labels[crit5, 0, idx_y])
-            #
-            # pred_q1_mw[t] = np.sum(labels[crit1, 0, idx_y] * mktcap[crit1, 0, 0]) / np.sum(mktcap[crit1, 0, 0])
-            # pred_q2_mw[t] = np.sum(labels[crit2, 0, idx_y] * mktcap[crit2, 0, 0]) / np.sum(mktcap[crit2, 0, 0])
-            # pred_q3_mw[t] = np.sum(labels[crit3, 0, idx_y] * mktcap[crit3, 0, 0]) / np.sum(mktcap[crit3, 0, 0])
-            # pred_q4_mw[t] = np.sum(labels[crit4, 0, idx_y] * mktcap[crit4, 0, 0]) / np.sum(mktcap[crit4, 0, 0])
-            # pred_q5_mw[t] = np.sum(labels[crit5, 0, idx_y] * mktcap[crit5, 0, 0]) / np.sum(mktcap[crit5, 0, 0])
+            # ################################ figure 1
+            # equal fig
+            fig = plt.figure()
+            fig.suptitle('{} ~ {}'.format(start_date, end_date))
+            ax1 = fig.add_subplot(221)
+            ax2 = fig.add_subplot(222)
+            ax3 = fig.add_subplot(223)
+            ax4 = fig.add_subplot(224)
+            ax1.plot(data[['true_y', 'pred_ls', 'pred_ls2', 'pred_q1', 'pred_q{}'.format(n_tile)]])
+            box = ax1.get_position()
+            ax1.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+            ax1.legend(['true_y', 'long-short', 'long-short2', 'long', 'short'], loc='center left', bbox_to_anchor=(1, 0.5))
+            if ylog:
+                ax1.set_yscale('log', basey=2)
 
-        data = pd.DataFrame(np.cumprod(1. + np.concatenate([true_y, true_y_mw, pred_arr, pred_arr_mw], axis=-1),axis=0),
-                            columns=['true_y', 'true_y_mw']
-                                    + ['pred_q{}'.format(i + 1) for i in range(n_tile)]
-                                    + ['pred_q{}_mw'.format(i + 1) for i in range(n_tile)])
-        data['pred_ls'] = np.cumprod(1. + np.mean(pred_arr[:, :1], axis=1) - np.mean(pred_arr[:, -1:], axis=1))
-        data['pred_ls2'] = np.cumprod(1. + np.mean(pred_arr[:, :2], axis=1) - np.mean(pred_arr[:, -2:], axis=1))
-        data['pred_ls_mw'] = np.cumprod(1. + np.mean(pred_arr_mw[:, :1], axis=1) - np.mean(pred_arr_mw[:, -1:], axis=1))
-        data['pred_ls_mw2'] = np.cumprod(1. + np.mean(pred_arr_mw[:, :2], axis=1) - np.mean(pred_arr_mw[:, -2:], axis=1))
+            ax2.plot(data[['true_y'] + ['pred_q{}'.format(i + 1) for i in range(n_tile)]])
+            box = ax2.get_position()
+            ax2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+            ax2.legend(['true_y'] + ['q{}'.format(i + 1) for i in range(n_tile)], loc='center left', bbox_to_anchor=(1, 0.5))
+            ax2.set_yscale('log', basey=2)
 
-        data_ori = pd.DataFrame(np.cumprod(1. + np.concatenate([true_y, true_y_mw, pred_arr_ori, pred_arr_ori_mw], axis=-1),axis=0),
-                            columns=['true_y', 'true_y_mw']
-                                    + ['pred_q{}'.format(i + 1) for i in range(n_tile)]
-                                    + ['pred_q{}_mw'.format(i + 1) for i in range(n_tile)])
-        data_ori['pred_ls'] = np.cumprod(1. + np.mean(pred_arr_ori[:, :1], axis=1) - np.mean(pred_arr_ori[:, -1:], axis=1))
-        data_ori['pred_ls2'] = np.cumprod(1. + np.mean(pred_arr_ori[:, :2], axis=1) - np.mean(pred_arr_ori[:, -2:], axis=1))
-        data_ori['pred_ls_mw'] = np.cumprod(1. + np.mean(pred_arr_ori_mw[:, :1], axis=1) - np.mean(pred_arr_ori_mw[:, -1:], axis=1))
-        data_ori['pred_ls_mw2'] = np.cumprod(1. + np.mean(pred_arr_ori_mw[:, :2], axis=1) - np.mean(pred_arr_ori_mw[:, -2:], axis=1))
+            # value fig
+            ax3.plot(data[['true_y_mw', 'pred_ls_mw', 'pred_ls_mw2', 'pred_q1_mw', 'pred_q{}_mw'.format(n_tile)]])
+            box = ax3.get_position()
+            ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+            ax3.legend(['true_y(mw)', 'long-short', 'long-short2', 'long', 'short'], loc='center left', bbox_to_anchor=(1, 0.5))
+            if ylog:
+                ax3.set_yscale('log', basey=2)
 
-        data_cap = pd.DataFrame(np.cumprod(1. + np.concatenate([true_y, true_y_mw, pred_arr_cap, pred_arr_cap_mw], axis=-1),axis=0),
-                            columns=['true_y', 'true_y_mw']
-                                    + ['pred_q{}'.format(i + 1) for i in range(n_tile)]
-                                    + ['pred_q{}_mw'.format(i + 1) for i in range(n_tile)])
-        data_cap['pred_ls'] = np.cumprod(1. + np.mean(pred_arr_cap[:, :1], axis=1) - np.mean(pred_arr_cap[:, -1:], axis=1))
-        data_cap['pred_ls2'] = np.cumprod(1. + np.mean(pred_arr_cap[:, :2], axis=1) - np.mean(pred_arr_cap[:, -2:], axis=1))
-        data_cap['pred_ls_mw'] = np.cumprod(1. + np.mean(pred_arr_cap_mw[:, :1], axis=1) - np.mean(pred_arr_cap_mw[:, -1:], axis=1))
-        data_cap['pred_ls_mw2'] = np.cumprod(1. + np.mean(pred_arr_cap_mw[:, :2], axis=1) - np.mean(pred_arr_cap_mw[:, -2:], axis=1))
-        # data = pd.DataFrame({'true_y': np.cumprod(1. + true_y),
-        #                      'pred_ls': np.cumprod(1. + pred_q1 - pred_q5),
-        #                      'pred_q1': np.cumprod(1. + pred_q1),
-        #                      'pred_q2': np.cumprod(1. + pred_q2),
-        #                      'pred_q3': np.cumprod(1. + pred_q3),
-        #                      'pred_q4': np.cumprod(1. + pred_q4),
-        #                      'pred_q5': np.cumprod(1. + pred_q5),
-        #                      'true_y_mw': np.cumprod(1. + true_y_mw),
-        #                      'pred_ls_mw': np.cumprod(1. + pred_q1_mw - pred_q5_mw),
-        #                      'pred_q1_mw': np.cumprod(1. + pred_q1_mw),
-        #                      'pred_q2_mw': np.cumprod(1. + pred_q2_mw),
-        #                      'pred_q3_mw': np.cumprod(1. + pred_q3_mw),
-        #                      'pred_q4_mw': np.cumprod(1. + pred_q4_mw),
-        #                      'pred_q5_mw': np.cumprod(1. + pred_q5_mw),
-        # })
+            ax4.plot(data[['true_y_mw'] + ['pred_q{}_mw'.format(i + 1) for i in range(n_tile)]])
+            box = ax4.get_position()
+            ax4.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+            ax4.legend(['true_y(mw)'] + ['q{}'.format(i + 1) for i in range(n_tile)], loc='center left', bbox_to_anchor=(1, 0.5))
+            ax4.set_yscale('log', basey=2)
 
 
-        # ################################ figure 1
-        # equal fig
-        fig = plt.figure()
-        fig.suptitle('{} ~ {}'.format(start_date, end_date))
-        ax1 = fig.add_subplot(221)
-        ax2 = fig.add_subplot(222)
-        ax3 = fig.add_subplot(223)
-        ax4 = fig.add_subplot(224)
-        ax1.plot(data[['true_y', 'pred_ls', 'pred_ls2', 'pred_q1', 'pred_q5']])
-        box = ax1.get_position()
-        ax1.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-        ax1.legend(['true_y', 'long-short', 'long-short2', 'long', 'short'], loc='center left', bbox_to_anchor=(1, 0.5))
-        if ylog:
-            ax1.set_yscale('log', basey=2)
+            if file_nm is None:
+                save_file_name = '{}/{}'.format(save_dir, '_all.png')
+            else:
+                save_dir_v = os.path.join(save_dir, v_)
+                os.makedirs(save_dir_v, exist_ok=True)
+                file_nm_v = file_nm.replace(file_nm[-4:], "_{}{}".format(v_, file_nm[-4:]))
+                save_file_name = '{}/{}'.format(save_dir_v, file_nm_v)
 
-        ax2.plot(data[['true_y', 'pred_q1', 'pred_q2', 'pred_q3', 'pred_q4', 'pred_q5']])
-        box = ax2.get_position()
-        ax2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-        ax2.legend(['true_y', 'q1', 'q2', 'q3', 'q4', 'q5'], loc='center left', bbox_to_anchor=(1, 0.5))
-        ax2.set_yscale('log', basey=2)
-
-        # value fig
-        ax3.plot(data[['true_y_mw', 'pred_ls_mw', 'pred_ls_mw2', 'pred_q1_mw', 'pred_q5_mw']])
-        box = ax3.get_position()
-        ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-        ax3.legend(['true_y(mw)', 'long-short', 'long-short2', 'long', 'short'], loc='center left', bbox_to_anchor=(1, 0.5))
-        if ylog:
-            ax3.set_yscale('log', basey=2)
-
-        ax4.plot(data[['true_y_mw', 'pred_q1_mw', 'pred_q2_mw', 'pred_q3_mw', 'pred_q4_mw', 'pred_q5_mw']])
-        box = ax4.get_position()
-        ax4.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-        ax4.legend(['true_y(mw)', 'q1', 'q2', 'q3', 'q4', 'q5'], loc='center left', bbox_to_anchor=(1, 0.5))
-        ax4.set_yscale('log', basey=2)
-
-        fig.savefig(save_dir)
-        print("figure saved. (dir: {})".format(save_dir))
-        plt.close(fig)
-
-        # ################################ figure 2
-        # equal fig
-        fig = plt.figure()
-        fig.suptitle('{} ~ {}'.format(start_date, end_date))
-        ax1 = fig.add_subplot(221)
-        ax2 = fig.add_subplot(222)
-        ax3 = fig.add_subplot(223)
-        ax4 = fig.add_subplot(224)
-        ax1.plot(data_ori[['true_y', 'pred_ls', 'pred_ls2', 'pred_q1', 'pred_q5']])
-        box = ax1.get_position()
-        ax1.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-        ax1.legend(['true_y', 'long-short', 'long-short2', 'long', 'short'], loc='center left', bbox_to_anchor=(1, 0.5))
-        if ylog:
-            ax1.set_yscale('log', basey=2)
-
-        ax2.plot(data_ori[['true_y', 'pred_q1', 'pred_q2', 'pred_q3', 'pred_q4', 'pred_q5']])
-        box = ax2.get_position()
-        ax2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-        ax2.legend(['true_y', 'q1', 'q2', 'q3', 'q4', 'q5'], loc='center left', bbox_to_anchor=(1, 0.5))
-        ax2.set_yscale('log', basey=2)
-
-        # value fig
-        ax3.plot(data_ori[['true_y_mw', 'pred_ls_mw', 'pred_ls_mw2', 'pred_q1_mw', 'pred_q5_mw']])
-        box = ax3.get_position()
-        ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-        ax3.legend(['true_y(mw)', 'long-short', 'long-short2', 'long', 'short'], loc='center left', bbox_to_anchor=(1, 0.5))
-        if ylog:
-            ax3.set_yscale('log', basey=2)
-
-        ax4.plot(data_ori[['true_y_mw', 'pred_q1_mw', 'pred_q2_mw', 'pred_q3_mw', 'pred_q4_mw', 'pred_q5_mw']])
-        box = ax4.get_position()
-        ax4.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-        ax4.legend(['true_y(mw)', 'q1', 'q2', 'q3', 'q4', 'q5'], loc='center left', bbox_to_anchor=(1, 0.5))
-        ax4.set_yscale('log', basey=2)
-
-        save_dir_ori = save_dir.replace(save_dir[-4:], '_ori'+save_dir[-4:])
-        fig.savefig(save_dir_ori)
-        print("figure saved. (dir: {})".format(save_dir_ori))
-        plt.close(fig)
-
-        # ################################ figure 3
-        # equal fig
-        fig = plt.figure()
-        fig.suptitle('{} ~ {}'.format(start_date, end_date))
-        ax1 = fig.add_subplot(221)
-        ax2 = fig.add_subplot(222)
-        ax3 = fig.add_subplot(223)
-        ax4 = fig.add_subplot(224)
-        ax1.plot(data_cap[['true_y', 'pred_ls', 'pred_ls2', 'pred_q1', 'pred_q5']])
-        box = ax1.get_position()
-        ax1.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-        ax1.legend(['true_y', 'long-short', 'long-short2', 'long', 'short'], loc='center left', bbox_to_anchor=(1, 0.5))
-        if ylog:
-            ax1.set_yscale('log', basey=2)
-
-        ax2.plot(data_cap[['true_y', 'pred_q1', 'pred_q2', 'pred_q3', 'pred_q4', 'pred_q5']])
-        box = ax2.get_position()
-        ax2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-        ax2.legend(['true_y', 'q1', 'q2', 'q3', 'q4', 'q5'], loc='center left', bbox_to_anchor=(1, 0.5))
-        ax2.set_yscale('log', basey=2)
-
-        # value fig
-        ax3.plot(data_cap[['true_y_mw', 'pred_ls_mw', 'pred_ls_mw2', 'pred_q1_mw', 'pred_q5_mw']])
-        box = ax3.get_position()
-        ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-        ax3.legend(['true_y(mw)', 'long-short', 'long-short2', 'long', 'short'], loc='center left', bbox_to_anchor=(1, 0.5))
-        if ylog:
-            ax3.set_yscale('log', basey=2)
-
-        ax4.plot(data_cap[['true_y_mw', 'pred_q1_mw', 'pred_q2_mw', 'pred_q3_mw', 'pred_q4_mw', 'pred_q5_mw']])
-        box = ax4.get_position()
-        ax4.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-        ax4.legend(['true_y(mw)', 'q1', 'q2', 'q3', 'q4', 'q5'], loc='center left', bbox_to_anchor=(1, 0.5))
-        ax4.set_yscale('log', basey=2)
-
-        save_dir_cap = save_dir.replace(save_dir[-4:], '_cap'+save_dir[-4:])
-        fig.savefig(save_dir_cap)
-        print("figure saved. (dir: {})".format(save_dir_cap))
-        plt.close(fig)
+            fig.savefig(save_file_name)
+            print("figure saved. (dir: {})".format(save_file_name))
+            plt.close(fig)
 
 
 

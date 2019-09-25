@@ -11,7 +11,7 @@ class Config:
         self.sampling_days = 5          # get data every 'sampling_days' days
         self.trainset_rate = 0.8
 
-        self.batch_size = 64
+        self.batch_size = 256
         self.train_steps = 200000
         self.eval_steps = 200
         self.early_stopping_count = 10
@@ -29,7 +29,7 @@ class Config:
         self.shuffle_seek = 1000
         # self.model_hidden_size = 128
         self.model_hidden_size = self.embedding_size    # self.set_features_info 에서 재설정
-        self.ffn_hidden_size = 128
+        self.ffn_hidden_size = 64
         self.attention_head_size = 2
         self.layer_size = 2
         self.data_path = './timeseries/asset_data.csv'

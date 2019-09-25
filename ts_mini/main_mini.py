@@ -1,4 +1,5 @@
 
+from ts_mini import config_mini, model_mini, features_mini, data_process_v2_0_mini
 from ts_mini.config_mini import Config
 from ts_mini.model_mini import TSModel
 from ts_mini.features_mini import Feature
@@ -7,8 +8,14 @@ from ts_mini.data_process_v2_0_mini import DataScheduler
 import os
 import numpy as np
 
+from importlib import reload
+reload(features_mini)
+reload(data_process_v2_0_mini)
+
+
+
 def main(k_days, pred, univ_type, balancing_method):
-    # k_days = 20; w_scheme = 'mw'; univ_type='selected'; pred='std'; balancing_method='once'
+    # k_days = 20; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing'
     ts_configs = Config()
     ts_configs.set_kdays(k_days, pred=pred)
     if k_days == 5:
@@ -17,10 +24,10 @@ def main(k_days, pred, univ_type, balancing_method):
         ts_configs.m_days = 120
 
     ts_configs.balancing_method = balancing_method
-    ts_configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_003'.format(k_days, univ_type, balancing_method, pred)  #: kr every
+    ts_configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_not_csloc_008'.format(k_days, univ_type, balancing_method, pred)  #: kr every
     ts_configs.train_steps = 20000
-    ts_configs.eval_steps = 1000
-    ts_configs.early_stopping_count = 3
+    ts_configs.eval_steps = 200
+    ts_configs.early_stopping_count = 5
     ts_configs.weight_scheme = 'mw'  # mw / ew
     config_str = ts_configs.export()
     # get data for all assets and dates
@@ -38,28 +45,54 @@ def main(k_days, pred, univ_type, balancing_method):
     if os.path.exists(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name + '.pkl')):
         model.load_model(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name))
 
-    ds.set_idx(6250)
+    ds.set_idx(7500)
     ds.test_end_idx = ds.base_idx + 1000
     ii = 0
+
+    trainset = None
+    evalset = None
+    testset = None
+    testset_insample = None
     while not ds.done:
-        is_trained = ds.train(model,
-                 train_steps=ts_configs.train_steps,
-                 eval_steps=ts_configs.eval_steps,
-                 save_steps=200,
-                 early_stopping_count=ts_configs.early_stopping_count,
-                 model_name=os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name))
+        if trainset is None:
+            trainset = ds._dataset('train')
+            evalset = ds._dataset('eval')
 
-        if is_trained is not False:
-            model.save_model(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name, str(ds.base_idx), ts_configs.f_name))
+        if ii > 0:
+            is_trained = ds.train(model,
+                                  trainset=trainset,
+                                  evalset=evalset,
+                                  train_steps=ts_configs.train_steps,
+                                  eval_steps=ts_configs.eval_steps,
+                                  save_steps=200,
+                                  early_stopping_count=ts_configs.early_stopping_count,
+                                  model_name=os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name))
 
-            ds.test(model,
-                    use_label=True,
-                    out_dir=os.path.join(ds.data_out_path, ts_configs.f_name, 'test'),
-                    file_nm='test_{}.png'.format(ii),
-                    ylog=False,
-                    save_type='csv',
-                    table_nm='kr_weekly_score_temp',
-                    time_step=ts_configs.k_days // ts_configs.sampling_days)
+            if is_trained is not False:
+                model.save_model(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name, str(ds.base_idx), ts_configs.f_name))
+
+        if testset is None:
+            testset_insample = ds._dataset('test_insample')
+            testset = ds._dataset('test')
+
+        ds.test(model,
+                dataset=testset_insample,
+                use_label=True,
+                out_dir=os.path.join(ds.data_out_path, ts_configs.f_name, 'test_insample'),
+                file_nm='test_{}.png'.format(ii),
+                ylog=False,
+                save_type='csv',
+                table_nm='kr_weekly_score_temp',
+                time_step=ts_configs.k_days // ts_configs.sampling_days)
+        ds.test(model,
+                dataset=testset,
+                use_label=True,
+                out_dir=os.path.join(ds.data_out_path, ts_configs.f_name, 'test'),
+                file_nm='test_{}.png'.format(ii),
+                ylog=False,
+                save_type='csv',
+                table_nm='kr_weekly_score_temp',
+                time_step=ts_configs.k_days // ts_configs.sampling_days)
 
         ds.next()
         ii += 1
