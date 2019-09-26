@@ -37,15 +37,15 @@ class DataScheduler:
         self.base_idx = self.train_set_length
 
         self.train_begin_idx = 0
-        self.eval_begin_idx = int(self.base_idx * self.trainset_rate)
+        self.eval_begin_idx = int(self.train_set_length * self.trainset_rate)
         self.test_begin_idx = self.base_idx - self.m_days
         self.test_end_idx = self.base_idx + self.retrain_days
 
     def set_idx(self, base_idx):
         self.base_idx = base_idx
 
-        self.train_begin_idx = np.max([0, base_idx - self.train_set_length])
-        self.eval_begin_idx = int(self.train_set_length * self.trainset_rate) + self.train_begin_idx
+        # self.train_begin_idx = np.max([0, base_idx - self.train_set_length])
+        self.eval_begin_idx = int(self.train_set_length * self.trainset_rate) + np.max([0, base_idx - self.train_set_length])
         self.test_begin_idx = self.base_idx - self.m_days
         self.test_end_idx = self.base_idx + self.retrain_days
 
@@ -268,6 +268,8 @@ class DataScheduler:
                 print('[test] no test data')
                 return False
             self.features_cls.predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=test_out_path, file_nm=file_nm, ylog=ylog, time_step=time_step)
+            self.features_cls.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "2",
+                                                                  file_nm=file_nm, ylog=True, time_step=time_step)
 
         if save_type is not None:
             _dataset_list = self._dataset('predict')
@@ -326,7 +328,7 @@ class DataScheduler:
 
     def next(self):
         self.base_idx += self.retrain_days
-        self.train_begin_idx += self.retrain_days
+        # self.train_begin_idx += self.retrain_days
         self.eval_begin_idx += self.retrain_days
         self.test_begin_idx += self.retrain_days
         self.test_end_idx = min(self.test_end_idx + self.retrain_days, self.data_generator.max_length - self.k_days - 1)

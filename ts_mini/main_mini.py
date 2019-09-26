@@ -15,7 +15,7 @@ reload(data_process_v2_0_mini)
 
 
 def main(k_days, pred, univ_type, balancing_method):
-    # k_days = 20; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing'
+    # k_days = 5; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing'
     ts_configs = Config()
     ts_configs.set_kdays(k_days, pred=pred)
     if k_days == 5:
@@ -24,8 +24,8 @@ def main(k_days, pred, univ_type, balancing_method):
         ts_configs.m_days = 120
 
     ts_configs.balancing_method = balancing_method
-    ts_configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_not_csloc_008'.format(k_days, univ_type, balancing_method, pred)  #: kr every
-    ts_configs.train_steps = 20000
+    ts_configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_not_csloc_011'.format(k_days, univ_type, balancing_method, pred)  #: kr every
+    ts_configs.train_steps = 200
     ts_configs.eval_steps = 200
     ts_configs.early_stopping_count = 5
     ts_configs.weight_scheme = 'mw'  # mw / ew
@@ -45,15 +45,21 @@ def main(k_days, pred, univ_type, balancing_method):
     if os.path.exists(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name + '.pkl')):
         model.load_model(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name))
 
-    ds.set_idx(7500)
+    ds.set_idx(6250)
     ds.test_end_idx = ds.base_idx + 1000
     ii = 0
+    jj = 0
 
     trainset = None
     evalset = None
     testset = None
     testset_insample = None
     while not ds.done:
+        if ii > 100 or (ii > 1 and model.eval_loss > 10000):
+            jj += 1
+            ii = 0
+            ds.next()
+
         if trainset is None:
             trainset = ds._dataset('train')
             evalset = ds._dataset('eval')
@@ -78,7 +84,7 @@ def main(k_days, pred, univ_type, balancing_method):
         ds.test(model,
                 dataset=testset_insample,
                 use_label=True,
-                out_dir=os.path.join(ds.data_out_path, ts_configs.f_name, 'test_insample'),
+                out_dir=os.path.join(ds.data_out_path, ts_configs.f_name, str(jj), 'test_insample'),
                 file_nm='test_{}.png'.format(ii),
                 ylog=False,
                 save_type='csv',
@@ -87,14 +93,14 @@ def main(k_days, pred, univ_type, balancing_method):
         ds.test(model,
                 dataset=testset,
                 use_label=True,
-                out_dir=os.path.join(ds.data_out_path, ts_configs.f_name, 'test'),
+                out_dir=os.path.join(ds.data_out_path, ts_configs.f_name, str(jj), 'test'),
                 file_nm='test_{}.png'.format(ii),
                 ylog=False,
                 save_type='csv',
                 table_nm='kr_weekly_score_temp',
                 time_step=ts_configs.k_days // ts_configs.sampling_days)
 
-        ds.next()
+        # ds.next()
         ii += 1
 
 # i = 0
