@@ -43,8 +43,8 @@ class Config:
         if k_days == 5:
         # self.model_predictor_list = ['logy', 'pos_20', 'pos_60', 'pos_120', 'std', 'mdd', 'fft']
         #     self.model_predictor_list = ['logy', 'cslogy_5', 'pos_5', 'pos_10', 'pos_20', 'std', 'mdd', 'fft']
-            self.model_predictor_list = ['logy', 'cslogy', 'csstd', 'std', 'stdnew', 'mdd', 'fft', 'pos_5', 'pos_20']
-            # self.model_predictor_list = ['std']
+        #     self.model_predictor_list = ['logy', 'cslogy', 'csstd', 'std', 'stdnew', 'mdd', 'fft', 'pos_5', 'pos_20']
+            self.model_predictor_list = ['cslogy', 'csstd', 'pos_5']
 
             self.features_structure = \
                 {'regression':

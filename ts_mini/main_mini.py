@@ -24,7 +24,7 @@ def main(k_days, pred, univ_type, balancing_method):
         ts_configs.m_days = 120
 
     ts_configs.balancing_method = balancing_method
-    ts_configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_not_csloc_011'.format(k_days, univ_type, balancing_method, pred)  #: kr every
+    ts_configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_not_csloc_012'.format(k_days, univ_type, balancing_method, pred)  #: kr every
     ts_configs.train_steps = 200
     ts_configs.eval_steps = 200
     ts_configs.early_stopping_count = 5
@@ -50,19 +50,24 @@ def main(k_days, pred, univ_type, balancing_method):
     ii = 0
     jj = 0
 
-    trainset = None
-    evalset = None
-    testset = None
-    testset_insample = None
+    trainset = ds._dataset('train')
+    evalset = ds._dataset('eval')
+    testset_insample = ds._dataset('test_insample')
+    testset = ds._dataset('test')
     while not ds.done:
         if ii > 100 or (ii > 1 and model.eval_loss > 10000):
             jj += 1
             ii = 0
             ds.next()
 
-        if trainset is None:
             trainset = ds._dataset('train')
             evalset = ds._dataset('eval')
+            testset_insample = ds._dataset('test_insample')
+            testset = ds._dataset('test')
+
+        # if trainset is None:
+        #     trainset = ds._dataset('train')1
+        #     evalset = ds._dataset('eval')
 
         if ii > 0:
             is_trained = ds.train(model,
@@ -77,9 +82,9 @@ def main(k_days, pred, univ_type, balancing_method):
             if is_trained is not False:
                 model.save_model(os.path.join(ds.data_out_path, ts_configs.f_name, ts_configs.f_name, str(ds.base_idx), ts_configs.f_name))
 
-        if testset is None:
-            testset_insample = ds._dataset('test_insample')
-            testset = ds._dataset('test')
+        # if testset is None:
+        #     testset_insample = ds._dataset('test_insample')
+        #     testset = ds._dataset('test')
 
         ds.test(model,
                 dataset=testset_insample,

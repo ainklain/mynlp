@@ -332,7 +332,7 @@ class Feature:
                     else:
                         crit_ = ((value_[v] >= low_crit) & (value_[v] < high_crit))
 
-                    if v in ['logy', 'cslogy', 'fft', 'pos_5', 'pos_20', 'pos_60', 'pos_120']:
+                    if v in ['logy', 'cslogy', 'fft', 'pos_5', 'pos_20', 'pos_60', 'pos_120', 'main', 'cap', 'ori']:
                         pred_arr[v][t, i_tile] = np.mean(labels[crit_, 0, idx_y])
                         pred_arr_mw[v][t, i_tile] = np.sum(labels[crit_, 0, idx_y] * mktcap[crit_, 0, 0]) / np.sum(mktcap[crit_, 0, 0])
                     else:
@@ -397,7 +397,7 @@ class Feature:
             # print("figure saved. (dir: {})".format(save_file_name))
             plt.close(fig)
 
-    def predict_plot_mtl_cross_section_test_long(self, model, dataset_list, save_dir, file_nm='test.png', ylog=False, time_step=1):
+    def predict_plot_mtl_cross_section_test_long(self, model, dataset_list, save_dir, file_nm='test.png', ylog=False, time_step=1, invest_rate=0.8):
         if dataset_list is False:
             return False
         else:
@@ -408,7 +408,6 @@ class Feature:
         true_y = np.zeros([int(np.ceil(len(input_enc_list) / time_step)) + 1, 1])
         true_y_mw = np.zeros([int(np.ceil(len(input_enc_list) / time_step)) + 1, 1])
 
-        n_tile = 5
         pred_arr = dict()
         pred_arr_mw = dict()
         pred_arr['main'] = np.zeros([len(true_y), 2])
@@ -444,13 +443,13 @@ class Feature:
                 value_[feature] = predictions[feature][:, 0, 0]
 
 
-            low_crit_cslogy, high_crit_cslogy = np.percentile(value_['cslogy'], q=[100 / n_tile, 100])
+            low_crit_cslogy, high_crit_cslogy = np.percentile(value_['cslogy'], q=[100 * (1 - invest_rate), 100])
 
             for v in value_.keys():
-                if v in ['logy', 'cslogy', 'fft', 'pos_5', 'pos_20', 'pos_60', 'pos_120']:
-                    low_q, high_q = 100 / n_tile, 100
+                if v in ['logy', 'cslogy', 'fft', 'pos_5', 'pos_20', 'pos_60', 'pos_120', 'main']:
+                    low_q, high_q = 100 * (1 - invest_rate), 100
                 else:
-                    low_q, high_q = 0, 100 * (1 - 1 / n_tile)
+                    low_q, high_q = 0, 100 * invest_rate
 
                 low_crit, high_crit = np.percentile(value_[v], q=[low_q, high_q])
 
