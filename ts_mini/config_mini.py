@@ -10,6 +10,7 @@ class Config:
 
         self.sampling_days = 5          # get data every 'sampling_days' days
         self.trainset_rate = 0.8
+        self.cost_rate = 0.003
 
         self.batch_size = 256
         self.train_steps = 200000

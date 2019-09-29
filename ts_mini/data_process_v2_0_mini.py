@@ -44,7 +44,7 @@ class DataScheduler:
     def set_idx(self, base_idx):
         self.base_idx = base_idx
 
-        # self.train_begin_idx = np.max([0, base_idx - self.train_set_length])
+        self.train_begin_idx = np.max([0, base_idx - self.train_set_length])
         self.eval_begin_idx = int(self.train_set_length * self.trainset_rate) + np.max([0, base_idx - self.train_set_length])
         self.test_begin_idx = self.base_idx - self.m_days
         self.test_end_idx = self.base_idx + self.retrain_days
@@ -328,7 +328,7 @@ class DataScheduler:
 
     def next(self):
         self.base_idx += self.retrain_days
-        # self.train_begin_idx += self.retrain_days
+        self.train_begin_idx += self.retrain_days
         self.eval_begin_idx += self.retrain_days
         self.test_begin_idx += self.retrain_days
         self.test_end_idx = min(self.test_end_idx + self.retrain_days, self.data_generator.max_length - self.k_days - 1)
