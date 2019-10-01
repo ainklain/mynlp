@@ -14,7 +14,7 @@ class Config:
 
         self.batch_size = 256
         self.train_steps = 200000
-        self.eval_steps = 200
+        self.eval_steps = 50
         self.early_stopping_count = 10
         self.dropout = 0.5
         self.learning_rate = 1e-4
@@ -30,9 +30,9 @@ class Config:
         self.shuffle_seek = 1000
         # self.model_hidden_size = 128
         self.model_hidden_size = self.embedding_size    # self.set_features_info 에서 재설정
-        self.ffn_hidden_size = 64
-        self.attention_head_size = 2
-        self.layer_size = 2
+        self.ffn_hidden_size = 32
+        self.attention_head_size = 1
+        self.layer_size = 1
         self.data_path = './timeseries/asset_data.csv'
         self.data_out_path = './out/'
         # self.vocabulary_path = './data/vocabularyData.txt'

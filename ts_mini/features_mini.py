@@ -41,7 +41,7 @@ def std_nd_new(log_p, n):
 def mdd_nd(log_p, n):
     mddarr = np.zeros_like(log_p)
     for t in range(len(log_p)):
-        mddarr[t, :] = log_p[t, :] - np.max(log_p[max(0, t - n):(t + 1), :])
+        mddarr[t, :] = log_p[t, :] - np.max(log_p[max(0, t - n):(t + 1), :], axis=0)
 
     return mddarr
 

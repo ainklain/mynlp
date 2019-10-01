@@ -174,15 +174,16 @@ class TSModel:
 
         self.predictor = dict()
         self.predictor_helper = dict()
+        n_size = 16
         for key in configs.model_predictor_list:
             tags = key.split('_')
             if tags[0] in configs.features_structure['regression'].keys():
                 if key in ['cslogy', 'csstd']:
-                    self.predictor[key] = FeedForward(len(configs.features_structure['regression'][key]), 32, out_activation='sigmoid')
+                    self.predictor[key] = FeedForward(len(configs.features_structure['regression'][key]), n_size, out_activation='sigmoid')
                 else:
-                    self.predictor[key] = FeedForward(len(configs.features_structure['regression'][key]), 32)
+                    self.predictor[key] = FeedForward(len(configs.features_structure['regression'][key]), n_size)
             elif tags[0] in configs.features_structure['classification'].keys():
-                self.predictor[key] = FeedForward(2, 32, out_activation='softmax')
+                self.predictor[key] = FeedForward(2, n_size, out_activation='softmax')
                 self.predictor_helper[key] = configs.features_structure['regression']['logy'].index(int(tags[1]))
             # elif tags[0] in configs.features_structure['crosssection'].keys():
             #     self.predictor[key] = FeedForward(len(configs.features_structure['regression'][key]), 64)

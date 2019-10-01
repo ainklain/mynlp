@@ -24,9 +24,9 @@ def main(k_days, pred, univ_type, balancing_method):
         ts_configs.m_days = 120
 
     ts_configs.balancing_method = balancing_method
-    ts_configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_cost_003'.format(k_days, univ_type, balancing_method, pred)  #: kr every
-    ts_configs.train_steps = 200
-    ts_configs.eval_steps = 200
+    ts_configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_mini_002'.format(k_days, univ_type, balancing_method, pred)  #: kr every
+    ts_configs.train_steps = 50
+    ts_configs.eval_steps = 50
     ts_configs.early_stopping_count = 5
     ts_configs.weight_scheme = 'mw'  # mw / ew
     config_str = ts_configs.export()
