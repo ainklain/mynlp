@@ -250,15 +250,18 @@ class TSModel:
 
                 if self.weight_scheme == 'mw':
                     adj_weight = labels_mtl['size_value'][:, :, 0] * 2.  # size value 평균이 0.5 이므로 기존이랑 스케일 맞추기 위해 2 곱
+
                 else:
                     adj_weight = 1.
+                adj_importance = labels_mtl['importance_wgt']
 
                 if key[:3] == 'pos':
                     loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) \
                                      * tf.abs(labels_mtl['logy'][:, :, self.predictor_helper[key]]) \
-                                     * adj_weight
+                                     * adj_weight * adj_importance
+
                 else:
-                    loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key]) * adj_weight
+                    loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key]) * adj_weight * adj_importance
 
                 if loss is None:
                     loss = loss_each[key]
@@ -284,8 +287,8 @@ class TSModel:
 
     def evaluate_mtl(self, datasets, features_list, steps=-1):
         loss_avg = 0
-        for i, (features, labels, size_values) in enumerate(datasets.take(steps)):
-            labels_mtl = self.feature_cls.labels_for_mtl(features_list, labels, size_values)
+        for i, (features, labels, size_values, importance_wgt) in enumerate(datasets.take(steps)):
+            labels_mtl = self.feature_cls.labels_for_mtl(features_list, labels, size_values, importance_wgt)
 
             x_embed = features['input'] + self.position_encode_in
             y_embed = features['output'] + self.position_encode_out
@@ -306,12 +309,13 @@ class TSModel:
                 else:
                     adj_weight = 1.
 
+                # adj_importance = labels_mtl['importance_wgt']
                 if key[:3] == 'pos':
                     loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) \
                                      * tf.abs(labels_mtl['logy'][:, :, self.predictor_helper[key]]) \
-                                     * adj_weight
+                                     * adj_weight # * adj_importance
                 else:
-                    loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key]) * adj_weight
+                    loss_each[key] = tf.losses.MSE(labels_mtl[key], pred_each[key]) * adj_weight #* adj_importance
 
                 # if key == 'pos':
                 #     loss_each[key] = tf.losses.categorical_crossentropy(labels_mtl[key], pred_each[key]) * tf.abs(labels_mtl['ret'][:, :, 0])

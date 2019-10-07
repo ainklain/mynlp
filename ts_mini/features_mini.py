@@ -5,7 +5,6 @@ import pandas as pd
 from matplotlib import cm, pyplot as plt
 
 
-
 def log_y_nd(log_p, n):
     assert len(log_p.shape) == 2
 
@@ -51,6 +50,7 @@ def arr_to_cs(arr):
     return_value = order.argsort(axis=1) / np.max(order, axis=1, keepdims=True)
     return return_value
 
+
 def arr_to_normal(arr):
     return_value = (arr - np.mean(arr, axis=1, keepdims=True)) / np.std(arr, axis=1, ddof=1, keepdims=True)
     return return_value
@@ -90,7 +90,7 @@ class Feature:
 
         self.cost_rate = configs.cost_rate
 
-    def labels_for_mtl(self, features_list, labels, size_value):
+    def labels_for_mtl(self, features_list, labels, size_value, importance_wgt):
         labels_mtl = dict()
         for cls in self.features_structure.keys():
             for key in self.features_structure[cls].keys():
@@ -109,6 +109,7 @@ class Feature:
                         labels_mtl['cslogy_idx'] = [features_list.index("{}_{}".format(key, n)) for n in n_arr]
 
         labels_mtl['size_value'] = size_value
+        labels_mtl['importance_wgt'] = importance_wgt
 
         return labels_mtl
 

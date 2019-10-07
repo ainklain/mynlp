@@ -30,9 +30,9 @@ class Config:
         self.shuffle_seek = 1000
         # self.model_hidden_size = 128
         self.model_hidden_size = self.embedding_size    # self.set_features_info 에서 재설정
-        self.ffn_hidden_size = 32
-        self.attention_head_size = 1
-        self.layer_size = 1
+        self.ffn_hidden_size = 64
+        self.attention_head_size = 2
+        self.layer_size = 2
         self.data_path = './timeseries/asset_data.csv'
         self.data_out_path = './out/'
         # self.vocabulary_path = './data/vocabularyData.txt'

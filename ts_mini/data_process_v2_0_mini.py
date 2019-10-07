@@ -4,6 +4,7 @@ from ts_mini.utils_mini import *
 # from ts_mini.features_mini import processing # processing_split, labels_for_mtl
 
 import pandas as pd
+import pickle
 import tensorflow as tf
 import numpy as np
 import os
@@ -63,42 +64,49 @@ class DataScheduler:
             end_idx = self.eval_begin_idx - self.k_days
             data_params['balance_class'] = True
             data_params['label_type'] = 'trainable_label'   # trainable: calc_length 반영
+            decaying_factor = 0.99   # 기간별 샘플 중요도
         elif mode == 'eval':
             start_idx = self.eval_begin_idx + self.m_days
             end_idx = self.test_begin_idx - self.k_days
             data_params['balance_class'] = True
             data_params['label_type'] = 'trainable_label'   # trainable: calc_length 반영
+            decaying_factor = 1.   # 기간별 샘플 중요도
         elif mode == 'test':
             start_idx = self.test_begin_idx + self.m_days
             # start_idx = self.test_begin_idx
             end_idx = self.test_end_idx
             data_params['balance_class'] = False
             data_params['label_type'] = 'test_label'        # test: 예측하고자 하는 것만 반영 (k_days)
+            decaying_factor = 1.   # 기간별 샘플 중요도
         elif mode == 'test_insample':
             start_idx = self.train_begin_idx + self.m_days
             # start_idx = self.test_begin_idx
             end_idx = self.test_begin_idx - self.k_days
             data_params['balance_class'] = False
             data_params['label_type'] = 'test_label'        # test: 예측하고자 하는 것만 반영 (k_days)
+            decaying_factor = 1.   # 기간별 샘플 중요도
         elif mode == 'predict':
             start_idx = self.test_begin_idx + self.m_days
             # start_idx = self.test_begin_idx
             end_idx = self.test_end_idx
             data_params['balance_class'] = False
             data_params['label_type'] = None            # label 없이 과거데이터만으로 스코어 산출
+            decaying_factor = 1.   # 기간별 샘플 중요도
         else:
             raise NotImplementedError
 
         print("start idx:{} ({}) / end idx: {} ({})".format(start_idx, dg.date_[start_idx], end_idx, dg.date_[end_idx]))
 
-        return start_idx, end_idx, data_params
+        return start_idx, end_idx, data_params, decaying_factor
 
     def _dataset(self, mode='train'):
         input_enc, output_dec, target_dec = [], [], []  # test/predict 인경우 list, train/eval인 경우 array
         features_list = []
         additional_infos_list = []  # test/predict 인경우 list, train/eval인 경우 dict
-        start_idx, end_idx, data_params = self.get_data_params(mode)
+        sampling_wgt = []  # time decaying factor
+        start_idx, end_idx, data_params, decaying_factor = self.get_data_params(mode)
 
+        n_loop = np.ceil((end_idx - start_idx) / self.sampling_days)
         for i, d in enumerate(range(start_idx, end_idx, self.sampling_days)):
             if self.balancing_method in ['once', 'nothing']:
                 _sampled_data = self.data_generator.sample_inputdata_split_new3(d, **data_params)
@@ -111,6 +119,8 @@ class DataScheduler:
                 continue
             else:
                 tmp_ie, tmp_od, tmp_td, features_list, additional_info = _sampled_data
+                additional_info['importance_wgt'] = np.array([decaying_factor ** (n_loop - i - 1) for _ in range(len(tmp_ie))], dtype=np.float32)
+
             input_enc.append(tmp_ie)
             output_dec.append(tmp_od)
             target_dec.append(tmp_td)
@@ -127,6 +137,7 @@ class DataScheduler:
 
             size_value = np.concatenate([additional_info['size_value'] for additional_info in additional_infos_list], axis=0)
             mktcap = np.concatenate([additional_info['mktcap'] for additional_info in additional_infos_list], axis=0)
+            importance_wgt = np.concatenate([additional_info['importance_wgt'] for additional_info in additional_infos_list], axis=0)
 
             if self.balancing_method == 'once':
                 idx_label = features_list.index(self.features_cls.label_feature)
@@ -144,11 +155,14 @@ class DataScheduler:
                 input_enc, output_dec, target_dec = input_enc[idx_bal], output_dec[idx_bal], target_dec[idx_bal]
                 additional_infos['size_value'] = size_value[idx_bal]
                 additional_infos['mktcap'] = mktcap[idx_bal]
+                importance_wgt['importance_wgt'] = importance_wgt[idx_bal]
             else:
                 additional_infos['size_value'] = size_value[:]
                 additional_infos['mktcap'] = mktcap[:]
+                additional_infos['importance_wgt'] = importance_wgt[:]
         else:
             additional_infos = additional_infos_list
+
 
         start_date = self.data_generator.date_[start_idx]
         end_date = self.data_generator.date_[end_idx]
@@ -189,7 +203,9 @@ class DataScheduler:
         assert np.sum(eval_input_enc[:, -1, :] - eval_output_dec[:, 0, :]) == 0
 
         train_size_value = train_add_infos['size_value']
+        train_importance_wgt = train_add_infos['importance_wgt']
         eval_size_value = eval_add_infos['size_value']
+        eval_importance_wgt = eval_add_infos['importance_wgt']
 
         # train_size_value = np.concatenate([add_info['size_value'] for add_info in train_add_infos], axis=0)
         # eval_size_value = np.concatenate([add_info['size_value'] for add_info in eval_add_infos], axis=0)
@@ -204,11 +220,11 @@ class DataScheduler:
         train_new_output[:, 0, :] = train_output_dec[:, 0, :] + train_size_value[:, 0, :]
         eval_new_output[:, 0, :] = eval_output_dec[:, 0, :] + eval_size_value[:, 0, :]
 
-        train_dataset = dataset_process(train_input_enc, train_new_output, train_target_dec, train_size_value, batch_size=self.train_batch_size)
-        eval_dataset = dataset_process(eval_input_enc, eval_new_output, eval_target_dec, eval_size_value, batch_size=self.eval_batch_size, iter_num=1)
+        train_dataset = dataset_process(train_input_enc, train_new_output, train_target_dec, train_size_value, batch_size=self.train_batch_size, importance_wgt=train_importance_wgt)
+        eval_dataset = dataset_process(eval_input_enc, eval_new_output, eval_target_dec, eval_size_value, batch_size=self.eval_batch_size, importance_wgt=eval_importance_wgt, iter_num=1)
         print("train step: {}  eval step: {}".format(len(train_input_enc) // self.train_batch_size,
                                                      len(eval_input_enc) // self.eval_batch_size))
-        for i, (features, labels, size_values) in enumerate(train_dataset.take(train_steps)):
+        for i, (features, labels, size_values, importance_wgt) in enumerate(train_dataset.take(train_steps)):
             print_loss = False
             if i % save_steps == 0:
                 model.save_model(model_name)
@@ -248,7 +264,7 @@ class DataScheduler:
 
                     features_with_noise['input'] = features_with_noise['input'] * mask
 
-            labels_mtl = self.features_cls.labels_for_mtl(features_list, labels, size_values)
+            labels_mtl = self.features_cls.labels_for_mtl(features_list, labels, size_values, importance_wgt)
             model.train_mtl(features_with_noise, labels_mtl, print_loss=print_loss)
 
     def test(self, model, dataset=None, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None, time_step=1):
@@ -373,15 +389,21 @@ class DataGeneratorDynamic:
                 self.data_code = pd.read_csv('./data/kr_sizeinfo_90.csv')
                 self.data_code = self.data_code[self.data_code.infocode > 0]
             elif univ_type == 'selected':
-                size_data = pd.read_csv('./data/kr_sizeinfo_90.csv')
+                # size_data = pd.read_csv('./data/kr_sizeinfo_90.csv')
+                size_data = pd.read_csv('./data/kr_mktcap_daily.csv')
+                size_data.columns = ['eval_d', 'infocode', 'mktcap', 'size_port']
+                size_data = size_data[size_data.infocode > 0]
+                size_data['mktcap'] = size_data['mktcap'] / 1000.
                 date_ = pd.read_csv('./data/date.csv')
                 data_code = pd.read_csv('./data/kr_univ_monthly.csv')
                 data_code = data_code[data_code.infocode > 0]
 
                 w_date = pd.merge(data_code, date_, left_on='eval_d', right_on='work_m')
-                data_code_w_size = pd.merge(w_date, size_data, left_on=['infocode', 'eval_y'], right_on=['infocode', 'eval_d'])
+                # data_code_w_size = pd.merge(w_date, size_data, left_on=['infocode', 'eval_y'], right_on=['infocode', 'eval_d'])
+                data_code_w_size = pd.merge(w_date, size_data, left_on=['infocode', 'work_m'], right_on=['infocode', 'eval_d'])
                 self.data_code = data_code_w_size.ix[:, ['eval_m', 'infocode', 'size_port', 'mktcap']]
                 self.data_code.columns = ['eval_d', 'infocode', 'size_port', 'mktcap']
+                self.size_data = size_data
 
             additional_df = pd.read_csv('./data/kr_additional_info.csv')
             additional_df = additional_df[additional_df.infocode > 0]
@@ -408,6 +430,8 @@ class DataGeneratorDynamic:
         if (np.sum(date_arr <= self.date_[base_idx]) == 0) or (np.sum(date_arr <= self.date_[univ_idx]) == 0):
             return False
 
+        size_list = list(self.size_data[self.size_data.eval_d == self.date_[base_idx]]['infocode'].to_numpy(dtype=np.int32))
+
         base_d = max(date_arr[date_arr <= self.date_[base_idx]])
 
         if self.base_d != base_d:
@@ -423,6 +447,7 @@ class DataGeneratorDynamic:
             if self.use_beta:
                 univ_list_selected = sorted(list(set.intersection(set(univ_list),
                                                                   set(base_list),
+                                                                  set(size_list),
                                                                   set(self.df_pivoted_all.columns),
                                                                   set(self.df_beta_all.columns),
                                                                   set(self.df_ivol_all.columns))))
@@ -430,10 +455,12 @@ class DataGeneratorDynamic:
                 self.df_beta = self.df_beta_all[univ_list_selected]
                 self.df_ivol = self.df_ivol_all[univ_list_selected]
             else:
-                univ_list_selected = sorted(list(set.intersection(set(univ_list), set(base_list), set(self.df_pivoted_all.columns))))
+                univ_list_selected = sorted(list(set.intersection(set(univ_list), set(base_list), set(size_list), set(self.df_pivoted_all.columns))))
 
             self.df_pivoted = self.df_pivoted_all[univ_list_selected]
-            self.df_size = self.data_code[self.data_code.eval_d == base_d][['infocode', 'mktcap']].set_index('infocode').loc[univ_list_selected, :]
+            # self.df_size = self.data_code[self.data_code.eval_d == base_d][['infocode', 'mktcap']].set_index('infocode').loc[univ_list_selected, :]
+            # self.df_size['rnk'] = self.df_size.mktcap.rank() / len(self.df_size)
+            self.df_size = self.size_data[self.size_data.eval_d == self.date_[base_idx]][['infocode', 'mktcap']].set_index('infocode').loc[univ_list_selected, :]
             self.df_size['rnk'] = self.df_size.mktcap.rank() / len(self.df_size)
             assert self.df_pivoted.shape[1] == self.df_size.shape[0]
 
@@ -441,7 +468,7 @@ class DataGeneratorDynamic:
 
     def make_market_idx(self, df_for_data, mktcap, m_days, sampling_days, calc_length, label_type, delayed_days, additional_dict):
         log_p = np.log(df_for_data.values, dtype=np.float32)
-        log_p = log_p - log_p [0, :]
+        log_p = log_p - log_p[0, :]
         mkt_idx = np.sum(log_p * mktcap.reshape([1, -1]), axis=1) / np.sum(mktcap)
         mkt_df = pd.DataFrame(mkt_idx, index=df_for_data.index, columns=['mkt'])
 
@@ -941,18 +968,19 @@ class DataGeneratorDynamic:
         return len(self.date_)
 
 
-def rearrange(input, output, target, size_value):
+def rearrange(input, output, target, size_value, importance_wgt):
     features = {"input": input, "output": output}
-    return features, target, size_value
+    return features, target, size_value, importance_wgt
 
 
 # 학습에 들어가 배치 데이터를 만드는 함수이다.
-def dataset_process(input_enc, output_dec, target_dec, size_value, batch_size, shuffle=True, iter_num=None):
+def dataset_process(input_enc, output_dec, target_dec, size_value, batch_size, importance_wgt=None, shuffle=True, iter_num=None):
     # Dataset을 생성하는 부분으로써 from_tensor_slices부분은
     # 각각 한 문장으로 자른다고 보면 된다.
     # train_input_enc, train_output_dec, train_target_dec
     # 3개를 각각 한문장으로 나눈다.
-    dataset = tf.data.Dataset.from_tensor_slices((input_enc, output_dec, target_dec, size_value))
+    dataset = tf.data.Dataset.from_tensor_slices((input_enc, output_dec, target_dec, size_value, importance_wgt))
+
     # 전체 데이터를 섞는다.
     if shuffle is True:
         dataset = dataset.shuffle(buffer_size=len(input_enc))
