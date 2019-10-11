@@ -123,6 +123,52 @@ import sys
 from tensorflow.keras import Model
 from tensorflow.keras.layers import Dense, Dropout, Embedding
 
+
+class BNN(object):
+    def __init__(self,
+                 dim_input,
+                 dim_output,
+                 dim_hidden,
+                 num_layers,
+                 is_bnn=True):
+        self.dim_input = dim_input
+        self.dim_output = dim_output
+        self.dim_hidden = dim_hidden
+        self.num_layers = num_layers
+
+        self.is_bnn = is_bnn
+
+    def log_likelihood_data(self, predict_y, target_y, log_gamma):
+        if not self.is_bnn:
+            raise NotImplementedError()
+
+        err_y = predict_y - target_y
+
+        log_like_data = 0.5 * log_gamma - 0.5 * tf.exp(log_gamma) * tf.square(err_y)
+        return log_like_data
+
+    def log_prior_weight(self, ):
+        if not self.is_bnn:
+            raise NotImplementedError()
+
+        pass
+
+    def mse_data(self, predict_y, target_y):
+        return tf.reduce_sum(tf.square(predict_y, target_y), axis=1)
+
+    def forward
+
+    def list2vec(self, list_in):
+        return tf.concat([tf.reshape(ww, [-1]) for ww in list_in], axis=0)
+
+    def vec2dic(self, ):
+
+
+
+
+
+
+
 class FeedForward(Model):
     def __init__(self, dim_out, num_units, out_activation='linear'):
         super().__init__()
