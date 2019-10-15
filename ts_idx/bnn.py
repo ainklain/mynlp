@@ -8,6 +8,83 @@ FLAGS = flags.FLAGS
 
 
 
+# class MyNet(Model):
+#     def __init__(self, ):
+#         super().__init__()
+#
+#         self.hidden_layer = Dense(3)
+#         self.out_layer = Dense(1)
+#
+#     def call(self, inputs):
+#         x = inputs
+#
+#         return self.out_layer(self.hidden_layer(x))
+#
+# net = MyNet()
+# net(np.array([[1, 2]]))
+#
+# net2 = MyNet()
+# net2(np.array([[1, 2]]))
+#
+#
+# y_true = np.array([[3]])
+# with tf.GradientTape(persistent=True) as tape2:
+#     with tf.GradientTape() as tape:
+#         var_lists = net.trainable_variables
+#         y = net(np.array([[1, 2]]))
+#         loss = tf.square(y - y_true)
+#     grad = tape.gradient(loss, var_lists)
+#     var_lists_ = [tf.add(var_lists[i], grad[i]) for i in range(len(var_lists))]
+#     for i, v in enumerate(var_lists):
+#         net2.trainable_variables[i] = v
+#
+# grad2 = tape2.gradient(var_lists_, var_lists)
+# grad_ = tape2.gradient(net.trainable_variables, var_lists)
+# grad3 = tape2.gradient(net2.trainable_variables, var_lists)
+# del tape2
+#
+#
+#
+#
+# class A:
+#     def __init__(self):
+#         self.x = tf.Variable(1.0)
+#         self.y = tf.Variable(2.0)
+#
+#     def get_weights(self):
+#         return [self.x, self.y]
+#
+#     def f(self):
+#         x = self.x
+#         y = self.y
+#         z = 2 * x * x * x + 3 * y * y
+#         return z
+#
+# class B:
+#     def __init__(self):
+#         self.A = A()
+#
+#     def f(self, C):
+#         with tf.GradientTape(persistent=True) as tape:
+#             var = self.A.get_weights()
+#             print(var == C)
+#             for i, v in enumerate(var):
+#
+#                 print(v, C[i])
+#                 print(id(v), id(C[i]))
+#
+#         del tape
+#
+#     def g(self):
+#         with tf.GradientTape(persistent=True) as tape:
+#             C = self.A.get_weights()
+#             self.f(C)
+#
+#         del tape
+#
+# b = B()
+# b.g()
+
 class MyNet(Model):
     def __init__(self, dim_out, dim_hiddens, out_activation='linear'):
         super().__init__()
@@ -33,17 +110,15 @@ class MyNet(Model):
 
 net = MyNet(1, [10, 5])
 net(np.array([[1, 2, 3], [2, 3, 4]]))
-with tf.GradientTape(persistent=True) as tape:
+with tf.GradientTape() as tape:
     var_lists = net.trainable_variables
     y = net(np.array([[1, 2, 3], [2, 3, 4]]))
     loss = tf.reduce_mean(y - np.array([[2], [3]]))
 
     grad = tape.gradient(loss, var_lists)
-grad2 = tape.gradient(loss, var_lists)
+# grad2 = tape.gradient(loss, var_lists)
 
 del tape
-
-
 
 # network
 class BNN(object):
@@ -59,7 +134,7 @@ class BNN(object):
         self.dim_hidden = dim_hidden
         self.num_layers = num_layers
 
-        self.net = MyNet(dim_out=dim_output, dim_hiddens=[dim_hidden for _ in range(len(num_layers))])
+        self.net = MyNet(dim_out=dim_output, dim_hiddens=[dim_hidden for _ in range(num_layers)])
         self.memory = dict()
 
         # for bayesian
@@ -73,12 +148,12 @@ class BNN(object):
 
         if self.is_bnn:
             init_val = np.random.normal(-np.log(FLAGS.m_l),  0.001, [1])
-            self.log_lambda = tf.Variable(initial_value=init_val, dtype=tf.float32)
+            self.log_lambda = tf.Variable(initial_value=init_val, dtype=tf.float32, name='log_lambda')
 
             print('log_lambda: ', init_val)
 
             init_val = np.random.normal(-np.log(FLAGS.m_g),  0.001, [1])
-            self.log_gamma = tf.Variable(initial_value=init_val, dtype=tf.float32)
+            self.log_gamma = tf.Variable(initial_value=init_val, dtype=tf.float32, name='log_gamma')
 
             print('log_gamma: ', init_val)
 
@@ -133,6 +208,42 @@ class BNN(object):
     def mse_data(self, predict_y, target_y):
         return tf.reduce_sum(tf.square(predict_y - target_y), axis=1)
 
+    def get_trainable_variables(self):
+        return self.net.trainable_variables + [self.log_lambda, self.log_gamma]
+
+    def assign_values(self, wgt_list):
+        tr_var = self.get_trainable_variables()
+        assert len(tr_var) == len(wgt_list)
+        for i, var in enumerate(tr_var):
+            var.assign(wgt_list)
+
+    def convert(self, value_, from_='vector', to_='list'):
+        w_list = list()
+        if from_ == 'vector':
+            # net_weight + lambda + gamma
+            i = 0
+            for var in self.get_trainable_variables():
+                var_shape = var.shape
+                w_list.append(var.assign(tf.reshape(value_[i:(i + np.prod(var_shape))], var_shape)))
+                i += np.prod(var_shape)
+            assert i == len(value_)
+        elif from_ == 'list':
+            w_list = value_[:]
+        else:
+            raise NotImplementedError
+
+        if to_ == 'list':
+            return w_list
+        elif to_ == 'dict':
+            return {'net': w_list[:-2], 'lambda': w_list[-2], 'gamma': w_list[-1]}
+        elif to_ == 'vector':
+            return tf.concat([tf.reshape(val, [-1]) for val in w_list], axis=0)
+        else:
+            raise NotImplementedError
+
     # list of params to vector
     def list2vec(self, wgt_list):
-        return tf.concat([tf.reshape(val, [-1]) for val in wgt_list], axis=0)
+        return self.convert(wgt_list, from_='list', to_='vector')
+
+    def vec2list(self, wgt_vec):
+        return self.convert(wgt_vec, from_='vector', to_='list')

@@ -69,9 +69,9 @@ flags.DEFINE_string('gpu', '-1', 'id of the gpu to use in the local machine')
 
 FLAGS.mark_as_parsed()
 
-os.environ["CUDA_VISIBLE_DEVICES"] = FLAGS.gpu
-os.environ["TZ"] = 'EST'
-time.tzset()
+# os.environ["CUDA_VISIBLE_DEVICES"] = FLAGS.gpu
+# os.environ["TZ"] = 'EST'
+# time.tzset()
 
 # print out full configuration
 print(FLAGS.flag_values_dict())
@@ -87,7 +87,9 @@ TEST_PRINT_INTERVAL = 100
 # configs = Configs(**FLAGS.flag_values_dict())
 
 
-def train(model, dataset, saver, sess, config_str):
+# def train(model, dataset, saver, sess, config_str):
+def train(model, dataset, config_str, max_follow_step):
+
     # set log dir
     experiment_dir = FLAGS.logdir + '/' + config_str
 
@@ -143,21 +145,19 @@ def train(model, dataset, saver, sess, config_str):
             itr += 1
 
             # load data
-            [follow_x, leader_x, valid_x,
-             follow_y, leader_y, valid_y] = dataset.generate_batch(is_training=True,
-                                                                   batch_idx=None,
-                                                                   inc_follow=True)
+            # [follow_x, leader_x, valid_x, follow_y, leader_y, valid_y] = dataset.generate_batch(is_training=True, batch_idx=None, inc_follow=True)
+            inputs = dataset.generate_batch(is_training=True, batch_idx=None, inc_follow=True)
+
 
             # set input
             meta_lr = FLAGS.meta_lr * FLAGS.decay_lr ** (float(itr - 1) / float(FLAGS.num_epochs * num_iters_per_epoch / 100))
-            feed_in = OrderedDict()
+
+            model.metatrain(inputs)
+
             feed_in[model.meta_lr] = meta_lr
-            feed_in[model.follow_x] = follow_x
-            feed_in[model.follow_y] = follow_y
-            feed_in[model.leader_x] = leader_x
-            feed_in[model.leader_y] = leader_y
-            feed_in[model.valid_x] = valid_x
-            feed_in[model.valid_y] = valid_y
+
+
+
 
             # set output op
             fetch_out = [model.metatrain_op,
@@ -186,7 +186,7 @@ def train(model, dataset, saver, sess, config_str):
                          model.total_meta_loss]
 
             # run
-            result = sess.run(fetch_out, feed_in)[1:]
+            # result = sess.run(fetch_out, feed_in)[1:]
 
             # aggregate results
             follow_lpost.append(result[0])
@@ -485,8 +485,9 @@ def main():
 
     if FLAGS.train:
         # start training
-        train(model, dataset, saver, sess, config_str)
-
+        train(model, dataset, config_str, max_follow_step=FLAGS.follow_step)
+    else:
+        test(model, dataset, config_str, max_follow_step=max(FLAGS.follow_step, model.max_test_step))
 
 if __name__ == "__main__":
     main()

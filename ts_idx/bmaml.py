@@ -1,8 +1,8 @@
 from ts_idx.bnn import BNN
 from collections import OrderedDict
 import tensorflow as tf
-from tensorflow.python.platform import flags
-import ts_idx.tf_utils
+from absl import flags
+from ts_idx import tf_utils
 import math
 
 FLAGS = flags.FLAGS
@@ -41,7 +41,151 @@ class BMAML:
         # init parameters
         self.W_network_particles = None
 
-    def update_particles(self, train_x, train_y, valid_x, valid_y, num_updates, lr):
+    def metatrain(self, inputs, follow_step=1, leader_step=1, is_training=True):
+        # decompose input data
+        [follow_x, leader_x, valid_x,
+         follow_y, leader_y, valid_y] = inputs
+
+        if is_training:
+            max_follow_step = follow_step
+        else:
+            max_follow_step = max(follow_step, self.max_test_step)
+
+        with tf.GradientTape() as tape:
+            var_lists = []
+            for bnn_p in self.bnn_list:
+                var_lists.append(bnn_p.get_trainable_variables())
+
+            [step_follow_weight_var,
+             step_follow_data_var,
+             step_follow_train_llik,
+             step_follow_valid_llik,
+             step_follow_train_loss,
+             step_follow_valid_loss,
+             step_follow_train_pred,
+             step_follow_valid_pred,
+             step_follow_weight_lprior,
+             step_follow_gamma_lprior,
+             step_follow_lambda_lprior,
+             step_follow_lpost,
+             step_follow_kernel_h,
+             WW_follow] = self.update_particles(follow_x, follow_y, valid_x, valid_y, var_lists, follow_step, self.follow_lr)
+
+            [step_leader_weight_var,
+             step_leader_data_var,
+             step_leader_train_llik,
+             step_leader_valid_llik,
+             step_leader_train_loss,
+             step_leader_valid_loss,
+             step_leader_train_pred,
+             step_leader_valid_pred,
+             step_leader_weight_lprior,
+             step_leader_gamma_lprior,
+             step_leader_lambda_lprior,
+             step_leader_lpost,
+             step_leader_kernel_h,
+             WW_leader] = self.update_particles(leader_x, leader_y, valid_x, valid_y, WW_follow, leader_step, self.leader_lr)
+
+            #############
+            # meta loss #
+            #############
+            meta_loss = []
+            # for each particle
+            for p_idx in range(self.num_particles):
+                # compute follower and leader distance
+                p_dist_list = []
+                for j in range(len(WW_leader[p_idx])-2):
+                    p_dist = tf.square(WW_follow[p_idx][j] - tf.stop_gradient(WW_leader[p_idx][j]))
+                    p_dist = tf.reduce_sum(p_dist)
+                    p_dist_list.append(p_dist)
+                meta_loss.append(tf.reduce_sum(p_dist_list))
+
+            # mean over particles
+            meta_loss = tf.reduce_sum(meta_loss)
+
+            if is_training:
+                self.total_follow_weight_lprior = [tf.reduce_mean(step_follow_weight_lprior[j])
+                                                   for j in range(FLAGS.follow_step + 1)]
+                self.total_follow_gamma_lprior = [tf.reduce_mean(step_follow_gamma_lprior[j])
+                                                  for j in range(FLAGS.follow_step + 1)]
+                self.total_follow_lambda_lprior = [tf.reduce_mean(step_follow_lambda_lprior[j])
+                                                   for j in range(FLAGS.follow_step + 1)]
+                self.total_follow_train_llik = [tf.reduce_mean(step_follow_train_llik[j])
+                                                for j in range(FLAGS.follow_step + 1)]
+                self.total_follow_valid_llik = [tf.reduce_mean(step_follow_valid_llik[j])
+                                                for j in range(FLAGS.follow_step + 1)]
+                self.total_follow_train_loss = [tf.reduce_mean(step_follow_train_loss[j])
+                                                for j in range(FLAGS.follow_step + 1)]
+                self.total_follow_valid_loss = [tf.reduce_mean(step_follow_valid_loss[j])
+                                                for j in range(FLAGS.follow_step + 1)]
+                self.total_follow_weight_var = [tf.reduce_mean(step_follow_weight_var[j])
+                                                for j in range(FLAGS.follow_step + 1)]
+                self.total_follow_data_var = [tf.reduce_mean(step_follow_data_var[j])
+                                              for j in range(FLAGS.follow_step + 1)]
+                self.total_follow_lpost = [tf.reduce_mean(step_follow_lpost[j])
+                                           for j in range(FLAGS.follow_step)]
+                self.total_follow_kernel_h = [tf.reduce_mean(step_follow_kernel_h[j])
+                                              for j in range(FLAGS.follow_step)]
+                self.total_leader_weight_lprior = [tf.reduce_mean(step_leader_weight_lprior[j])
+                                                   for j in range(FLAGS.leader_step + 1)]
+                self.total_leader_gamma_lprior = [tf.reduce_mean(step_leader_gamma_lprior[j])
+                                                  for j in range(FLAGS.leader_step + 1)]
+                self.total_leader_lambda_lprior = [tf.reduce_mean(step_leader_lambda_lprior[j])
+                                                   for j in range(FLAGS.leader_step + 1)]
+                self.total_leader_train_llik = [tf.reduce_mean(step_leader_train_llik[j])
+                                                for j in range(FLAGS.leader_step + 1)]
+                self.total_leader_valid_llik = [tf.reduce_mean(step_leader_valid_llik[j])
+                                                for j in range(FLAGS.leader_step + 1)]
+                self.total_leader_train_loss = [tf.reduce_mean(step_leader_train_loss[j])
+                                                for j in range(FLAGS.leader_step + 1)]
+                self.total_leader_valid_loss = [tf.reduce_mean(step_leader_valid_loss[j])
+                                                for j in range(FLAGS.leader_step + 1)]
+                self.total_leader_weight_var = [tf.reduce_mean(step_leader_weight_var[j])
+                                                for j in range(FLAGS.leader_step + 1)]
+                self.total_leader_data_var = [tf.reduce_mean(step_leader_data_var[j])
+                                              for j in range(FLAGS.leader_step + 1)]
+                self.total_leader_lpost = [tf.reduce_mean(step_leader_lpost[j])
+                                           for j in range(FLAGS.leader_step)]
+                self.total_leader_kernel_h = [tf.reduce_mean(step_leader_kernel_h[j])
+                                              for j in range(FLAGS.leader_step)]
+                self.total_meta_loss = tf.reduce_mean(meta_loss)
+
+                # prediction
+                self.total_train_z_list = step_follow_train_pred
+                self.total_valid_z_list = step_follow_valid_pred
+
+                ###############
+                # meta update #
+                ###############
+                # set optimizer
+                optimizer = tf.keras.optimizers.Adam(learning_rate=self.meta_lr)
+
+                # compute gradient
+                gv_list = tape.gradient(self.total_meta_loss, var_lists)
+
+                # gradient clipping
+                if FLAGS.out_grad_clip > 0:
+                    gv_list = [(tf.clip_by_value(grad, -FLAGS.out_grad_clip, FLAGS.out_grad_clip), var)
+                               for grad, var in gv_list]
+
+                # apply optimizer
+                optimizer.apply_gradients(zip(gv_list, var_lists))
+            else:
+                # summarize results
+                self.eval_train_llik = [tf.reduce_mean(step_follow_train_llik[j])
+                                        for j in range(max_follow_step + 1)]
+                self.eval_train_loss = [tf.reduce_mean(step_follow_train_loss[j])
+                                        for j in range(max_follow_step + 1)]
+                self.eval_valid_llik = [tf.reduce_mean(step_follow_valid_llik[j])
+                                        for j in range(max_follow_step + 1)]
+                self.eval_valid_loss = [tf.reduce_mean(step_follow_valid_loss[j])
+                                        for j in range(max_follow_step + 1)]
+
+                # prediction
+                self.eval_train_z_list = step_follow_train_pred
+                self.eval_valid_z_list = step_follow_valid_pred
+
+    def update_particles(self, train_x, train_y, valid_x, valid_y, WW_val, num_updates, lr):
         # Stein Variational Gradient Descent
         step_weight_lprior = [None] * (num_updates + 1)
         step_lambda_lprior = [None] * (num_updates + 1)
@@ -57,7 +201,6 @@ class BMAML:
         step_kernel_h = [None] * num_updates
         step_lpost = [None] * num_updates
 
-
         for s_idx in range(num_updates + 1):
             # for each particle
             train_z_list = []
@@ -70,13 +213,21 @@ class BMAML:
             weight_var_list = []
             data_var_list = []
 
+            if s_idx < num_updates:
+                # for each particle, compute gradient
+                WW = []
+                dWW = []
+
             for p_idx in range(self.num_particles):
-                with tf.GradientTape(persistent=True) as tape:
+                with tf.GradientTape() as tape:
                     bnn_p = self.bnn_list[p_idx]
-                    var_lists = bnn_p.net.trainable_variables + [bnn_p.log_lambda, bnn_p.log_gamma]
+                    var_lists_p = bnn_p.get_trainable_variables()
+                    for i, var in enumerate(var_lists_p):
+                        var.assign(WW_val[p_idx][i])
+
                     # compute prediction
-                    train_z = bnn_p.forward_network(x=train_x)
-                    valid_z = bnn_p.forward_network(x=valid_x)
+                    train_z = bnn_p.forward_network(inputs=train_x)
+                    valid_z = bnn_p.forward_network(inputs=valid_x)
 
                     # compute data log-likelihood
                     train_llik_list.append(bnn_p.log_likelihood_data(predict_y=train_z, target_y=train_y))
@@ -93,63 +244,63 @@ class BMAML:
                     gamma_lprior_list.append(gamma_lprior)
 
                     # get variance
-                    weight_var_list.append(tf.reciprocal(tf.exp(bnn_p.log_lambda)))
-                    data_var_list.append(tf.reciprocal(tf.exp(bnn_p.log_gamma)))
+                    weight_var_list.append(tf.math.reciprocal(tf.exp(bnn_p.log_lambda)))
+                    data_var_list.append(tf.math.reciprocal(tf.exp(bnn_p.log_gamma)))
 
                     # update follower
                     if s_idx < num_updates:
                         lpost = weight_lprior + gamma_lprior + lambda_lprior + tf.reduce_sum(train_llik_list[p_idx])
-                        dWp = tape.gradient(lpost, var_lists)
-                    # for each particle, compute gradien
-                        dWW = []
+
+                        dWp = tape.gradient(lpost, var_lists_p)
+                        if FLAGS.stop_grad:
+                            dWp = tf.stop_gradient(dWp)
 
                         # save particle loss
                         if p_idx == 0:
                             step_lpost[s_idx] = []
                         step_lpost[s_idx].append(lpost)
 
-                        # stop gradient to avoid second order
-                        if FLAGS.stop_grad:
-                            dWp = [tf.stop_gradient(grad) for grad in dWp]
-
-                        # re-order
-                        dWW.append(OrderedDict(zip(WW[p_idx].keys(), dWp)))
-
-                    # mean over particle loss
-                    step_lpost[s_idx] = tf.reduce_mean(step_lpost[s_idx])
-
-                    # make SVGD gradient and flatten particles and its gradient
-                    dWW_tensor = self.diclist2tensor(WW=dWW)
-
-                    # compute kernel
-                    [kernel_mat,
-                     grad_kernel,
-                     kernel_h] = self.kernel(particle_tensor=WW_tensor)
-                    dWW_tensor = tf.divide(tf.matmul(kernel_mat, dWW_tensor) + grad_kernel, self.num_particles)
-                    step_kernel_h[s_idx] = kernel_h
-
-                    # re-order gradient into particle forms
-                    dWW = self.tensor2diclist(tensor=dWW_tensor)
-
-                    # update particles
-                    for p_idx in range(self.num_particles):
-                        # for each param
-                        param_names = []
-                        param_vals = []
-                        for key in list(WW[p_idx].keys()):
-                            if FLAGS.in_grad_clip > 0:
-                                grad = tf.clip_by_value(dWW[p_idx][key], -FLAGS.in_grad_clip, FLAGS.in_grad_clip)
-                            else:
-                                grad = dWW[p_idx][key]
-                            param_names.append(key)
-                            if 'log' in key:
-                                param_vals.append(WW[p_idx][key] + FLAGS.lambda_lr * lr * grad)
-                            else:
-                                param_vals.append(WW[p_idx][key] + lr * grad)
-                        WW[p_idx] = OrderedDict(zip(param_names, param_vals))
+                        WW.append(bnn_p.list2vec(var_lists_p))
+                        dWW.append(bnn_p.list2vec(dWp))
 
 
-            del tape
+            if s_idx < num_updates:
+                # mean over particle loss
+                step_lpost[s_idx] = tf.reduce_mean(step_lpost[s_idx])
+
+                # make SVGD gradient and flatten particles and its gradient
+                WW_tensor = tf.stack(WW)
+                dWW_tensor = tf.stack(dWW)
+
+                # compute kernel
+                [kernel_mat, grad_kernel, kernel_h] = self.kernel(particle_tensor=WW_tensor)
+                dWW_tensor = tf.divide(tf.matmul(kernel_mat, dWW_tensor) + grad_kernel, self.num_particles)
+                step_kernel_h[s_idx] = kernel_h
+
+                WW_ret = []
+                # update particles
+                for p_idx in range(self.num_particles):
+                    bnn_p = self.bnn_list[p_idx]
+                    WW_p = bnn_p.get_trainable_variables()
+                    dWW_p = bnn_p.vec2list(dWW_tensor[p_idx, :])
+                    assert len(WW_p) == len(dWW_p)
+                    # for each param
+                    param_vals = []
+                    for j in range(len(WW_p)):
+                        if FLAGS.in_grad_clip > 0:
+                            grad = tf.clip_by_value(dWW_p[j], -FLAGS.in_grad_clip, FLAGS.in_grad_clip)
+                        else:
+                            grad = dWW_p[j]
+                        # param_names.append(key)
+                        # if 'log' in key:
+                        if j >= len(WW_p) - 2:
+                            # 뒤에 두개는 log_lambda, log_gamma
+                            param_vals.append(WW_p[j] + FLAGS.lambda_lr * lr * grad)
+                        else:
+                            param_vals.append(WW_p[j] + lr * grad)
+                    WW_ret.append(param_vals)
+
+
             # get mean prediction
             train_z = tf.reduce_mean(train_z_list, 0)
             valid_z = tf.reduce_mean(valid_z_list, 0)
@@ -167,10 +318,22 @@ class BMAML:
             step_weight_var[s_idx] = tf.reduce_mean(weight_var_list)
             step_data_var[s_idx] = tf.reduce_mean(data_var_list)
 
-        pass
+        return [step_weight_var,
+                step_data_var,
+                step_train_llik,
+                step_valid_llik,
+                step_train_loss,
+                step_valid_loss,
+                step_train_pred,
+                step_valid_pred,
+                step_weight_lprior,
+                step_gamma_lprior,
+                step_lambda_lprior,
+                step_lpost,
+                step_kernel_h,
+                WW_ret]
 
-
-    def update_particle(self,
+    def update_particle_original(self,
                         train_x,
                         train_y,
                         valid_x,
@@ -632,7 +795,7 @@ class BMAML:
                 h = mean_dist / math.log(self.num_particles)
 
         kernel_matrix = tf.exp(-pairwise_dists / h)
-        kernel_sum = tf.reduce_sum(kernel_matrix, axis=1, keep_dims=True)
+        kernel_sum = tf.math.reduce_sum(kernel_matrix, axis=1, keepdims=True)
         grad_kernel = -tf.matmul(kernel_matrix, particle_tensor)
         grad_kernel += particle_tensor * kernel_sum
         grad_kernel /= h
