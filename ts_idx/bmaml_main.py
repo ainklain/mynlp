@@ -157,8 +157,6 @@ def train(model, dataset, config_str, max_follow_step):
             feed_in[model.meta_lr] = meta_lr
 
 
-
-
             # set output op
             fetch_out = [model.metatrain_op,
                          model.total_follow_lpost,

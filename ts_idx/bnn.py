@@ -1,5 +1,6 @@
 import numpy as np
 from collections import OrderedDict
+import re
 import tensorflow as tf
 from tensorflow.keras import Model
 from tensorflow.keras.layers import Dense, LSTM
@@ -8,126 +9,65 @@ FLAGS = flags.FLAGS
 
 
 
-class MyNet(Model):
-    def __init__(self, ):
-        super().__init__()
-
-        self.h = Dense(3, name='h', kernel_initializer='ones')
-        self.o = Dense(1, name='o', kernel_initializer='ones')
-
-    def call(self, inputs):
-        x = inputs
-
-        return self.o(self.h(x))
-
-net = MyNet()
-net(tf.zeros([1, 3]))
-import re
-layer_list = []
-attr_list = []
-for var in net.trainable_weights:
-    _, layer_nm, attr_nm = list(filter(lambda x: x != '', re.split('/|:\d', var.name)))
-    layer_list.append(layer_nm)
-    attr_list.append(attr_nm)
-
-add_value = []
-with tf.GradientTape(persistent=True) as tape2:
-    with tf.GradientTape() as tape:
-        var_lists = net.trainable_variables
-        y = net(tf.convert_to_tensor(np.array([[1, 0, 0]]), dtype=tf.float32))
-        loss = tf.square(y - 2)
-    grad = tape.gradient(loss, var_lists)
-    print('var:{}'.format(var_lists[0]))
-    print('grad:{}'.format(grad[0]))
-    print('add:{}'.format(var_lists[0] + grad[0]))
-    new_var_lists = []
-    for i in range(len(attr_list)):
-        obj = net.get_layer(layer_list[i])
-        print('before:{}'.format(getattr(obj, attr_list[i])))
-        setattr(obj, attr_list[i], getattr(obj, attr_list[i]) + grad[i])
-        print('after:{}'.format(getattr(obj, attr_list[i])))
-        new_var_lists.append(getattr(obj, attr_list[i]))
-        if i == 0:
-            print('var:{}\nreal:{}'.format(var_lists[i], net.h.kernel))
-
-    y2 = net(tf.convert_to_tensor(np.array([[1, 0, 0]]), dtype=tf.float32))
-    grad2 = tape2.gradient(y2, var_lists)
-    grad3 = tape2.gradient(y2, new_var_lists)
-    print('var:{}'.format(var_lists[0]))
-    print('grad2:{}'.format(grad2[0]))
-    print('grad3:{}'.format(grad3[0]))
-    print('add:{}'.format(var_lists[0] + grad2[0]))
-
-    for i in range(len(attr_list)):
-        obj = net.get_layer(layer_list[i])
-        print('before:{}'.format(getattr(obj, attr_list[i])))
-        setattr(obj, attr_list[i], getattr(obj, attr_list[i]) + grad2[i])
-        print('after:{}'.format(getattr(obj, attr_list[i])))
-
-        if i == 0:
-            print('var:{}\nreal:{}'.format(var_lists[i], net.h.kernel))
+# class MyNet_test(Model):
+#     def __init__(self, ):
+#         super().__init__()
 #
-# net2 = MyNet()
-# net2(np.array([[1, 2]]))
+#         self.h = Dense(3, name='h', kernel_initializer='ones')
+#         self.o = Dense(1, name='o', kernel_initializer='ones')
 #
+#     def call(self, inputs):
+#         x = inputs
 #
-# y_true = np.array([[3]])
+#         return self.o(self.h(x))
+#
+# net = MyNet_test()
+# net(tf.zeros([1, 3]))
+#
+# layer_list = []
+# attr_list = []
+# for var in net.trainable_weights:
+#     _, layer_nm, attr_nm = list(filter(lambda x: x != '', re.split('/|:\d', var.name)))
+#     layer_list.append(layer_nm)
+#     attr_list.append(attr_nm)
+#
+# add_value = []
 # with tf.GradientTape(persistent=True) as tape2:
 #     with tf.GradientTape() as tape:
 #         var_lists = net.trainable_variables
-#         y = net(np.array([[1, 2]]))
-#         loss = tf.square(y - y_true)
+#         y = net(tf.convert_to_tensor(np.array([[1, 0, 0]]), dtype=tf.float32))
+#         loss = tf.square(y - 2)
 #     grad = tape.gradient(loss, var_lists)
-#     var_lists_ = [tf.add(var_lists[i], grad[i]) for i in range(len(var_lists))]
-#     for i, v in enumerate(var_lists):
-#         net2.trainable_variables[i] = v
+#     print('var:{}'.format(var_lists[0]))
+#     print('grad:{}'.format(grad[0]))
+#     print('add:{}'.format(var_lists[0] + grad[0]))
+#     new_var_lists = []
+#     for i in range(len(attr_list)):
+#         obj = net.get_layer(layer_list[i])
+#         print('before:{}'.format(getattr(obj, attr_list[i])))
+#         setattr(obj, attr_list[i], getattr(obj, attr_list[i]) + grad[i])
+#         print('after:{}'.format(getattr(obj, attr_list[i])))
+#         new_var_lists.append(getattr(obj, attr_list[i]))
+#         if i == 0:
+#             print('var:{}\nreal:{}'.format(var_lists[i], net.h.kernel))
 #
-# grad2 = tape2.gradient(var_lists_, var_lists)
-# grad_ = tape2.gradient(net.trainable_variables, var_lists)
-# grad3 = tape2.gradient(net2.trainable_variables, var_lists)
-# del tape2
+#     y2 = net(tf.convert_to_tensor(np.array([[1, 0, 0]]), dtype=tf.float32))
+#     grad2 = tape2.gradient(y2, var_lists)
+#     grad3 = tape2.gradient(y2, new_var_lists)
+#     print('var:{}'.format(var_lists[0]))
+#     print('grad2:{}'.format(grad2[0]))
+#     print('grad3:{}'.format(grad3[0]))
+#     print('add:{}'.format(var_lists[0] + grad2[0]))
 #
+#     for i in range(len(attr_list)):
+#         obj = net.get_layer(layer_list[i])
+#         print('before:{}'.format(getattr(obj, attr_list[i])))
+#         setattr(obj, attr_list[i], getattr(obj, attr_list[i]) + grad2[i])
+#         print('after:{}'.format(getattr(obj, attr_list[i])))
 #
-#
-#
-# class A:
-#     def __init__(self):
-#         self.x = tf.Variable(1.0)
-#         self.y = tf.Variable(2.0)
-#
-#     def get_weights(self):
-#         return [self.x, self.y]
-#
-#     def f(self):
-#         x = self.x
-#         y = self.y
-#         z = 2 * x * x * x + 3 * y * y
-#         return z
-#
-# class B:
-#     def __init__(self):
-#         self.A = A()
-#
-#     def f(self, C):
-#         with tf.GradientTape(persistent=True) as tape:
-#             var = self.A.get_weights()
-#             print(var == C)
-#             for i, v in enumerate(var):
-#
-#                 print(v, C[i])
-#                 print(id(v), id(C[i]))
-#
-#         del tape
-#
-#     def g(self):
-#         with tf.GradientTape(persistent=True) as tape:
-#             C = self.A.get_weights()
-#             self.f(C)
-#
-#         del tape
-#
-# b = B()
-# b.g()
+#         if i == 0:
+#             print('var:{}\nreal:{}'.format(var_lists[i], net.h.kernel))
+
 
 class MyNet(Model):
     def __init__(self, dim_out, dim_hiddens, out_activation='linear'):
@@ -151,18 +91,6 @@ class MyNet(Model):
 
         return self.out_layer(x)
 
-
-net = MyNet(1, [10, 5])
-net(np.array([[1, 2, 3], [2, 3, 4]]))
-with tf.GradientTape() as tape:
-    var_lists = net.trainable_variables
-    y = net(np.array([[1, 2, 3], [2, 3, 4]]))
-    loss = tf.reduce_mean(y - np.array([[2], [3]]))
-
-    grad = tape.gradient(loss, var_lists)
-# grad2 = tape.gradient(loss, var_lists)
-
-del tape
 
 # network
 class BNN(object):
@@ -190,6 +118,9 @@ class BNN(object):
         x = tf.zeros([1, self.dim_input])
         self.net(x)
 
+        # 업데이트된 layers를 찾아내기 위한 리스트 (덮어쓰면 trainable_weights에서 사라지기 때문)
+        self._parse_attrs()
+
         if self.is_bnn:
             init_val = np.random.normal(-np.log(FLAGS.m_l),  0.001, [1])
             self.log_lambda = tf.Variable(initial_value=init_val, dtype=tf.float32, name='log_lambda')
@@ -201,10 +132,36 @@ class BNN(object):
 
             print('log_gamma: ', init_val)
 
-    def memory_wgt(self, name):
-        self.memory[name] = {'net': self.net.trainable_variables,
-                             'log_lambda': self.log_lambda,
-                             'log_gamma': self.log_gamma}
+    def _parse_attrs(self):
+        if hasattr(self, 'layer_list'):
+            print('already parsed.')
+            return None
+
+        self.layer_list = []
+        self.attr_list = []
+
+        for var in self.net.trainable_weights:
+            _, layer_nm, attr_nm = list(filter(lambda x: x != '', re.split('/|:\d', var.name)))
+            self.layer_list.append(layer_nm)
+            self.attr_list.append(attr_nm)
+
+    def get_var_lists(self):
+        var_lists = []
+        for i in range(len(self.attr_list)):
+            obj = self.net.get_layer(self.layer_list[i])
+            var_lists.append(getattr(obj, self.attr_list[i]))
+
+        var_lists += [self.log_lambda, self.log_gamma]
+        return var_lists
+
+    def set_var_lists(self, var_lists):
+        assert len(var_lists) == len(self.attr_list) + 2
+        for i in range(len(self.attr_list)):
+            obj = self.net.get_layer(self.layer_list[i])
+            setattr(obj,  self.attr_list[i], var_lists[i])
+
+        self.log_lambda = var_lists[-2]
+        self.log_gamma = var_lists[-1]
 
     def forward_network(self, inputs):
         return self.net(inputs)
@@ -230,12 +187,13 @@ class BNN(object):
         if not self.is_bnn:
             NotImplementedError()
 
+        W_list = self.get_var_lists()
         # get lambda, gamma
-        log_lambda = self.log_lambda
-        log_gamma = self.log_gamma
+        log_lambda = tf.reshape(W_list[-2], (1,))
+        log_gamma = tf.reshape(W_list[-1], (1,))
 
         # get only weights
-        W_vec = self.list2vec(self.net.trainable_variables)
+        W_vec = self.list2vec(W_list)[:-2]
         num_params = tf.cast(W_vec.shape[0], tf.float32)
 
         # get data log-prior
@@ -252,25 +210,24 @@ class BNN(object):
     def mse_data(self, predict_y, target_y):
         return tf.reduce_sum(tf.square(predict_y - target_y), axis=1)
 
-    def get_trainable_variables(self):
-        return self.net.trainable_variables + [self.log_lambda, self.log_gamma]
-
-    def assign_values(self, wgt_list):
-        tr_var = self.get_trainable_variables()
-        assert len(tr_var) == len(wgt_list)
-        for i, var in enumerate(tr_var):
-            var.assign(wgt_list)
+    # def get_trainable_variables(self):
+    #     return self.net.trainable_variables + [self.log_lambda, self.log_gamma]
 
     def convert(self, value_, from_='vector', to_='list'):
         w_list = list()
         if from_ == 'vector':
             # net_weight + lambda + gamma
-            i = 0
-            for var in self.get_trainable_variables():
-                var_shape = var.shape
-                w_list.append(var.assign(tf.reshape(value_[i:(i + np.prod(var_shape))], var_shape)))
-                i += np.prod(var_shape)
-            assert i == len(value_)
+            j = 0
+            for i in range(len(self.attr_list)):
+                obj = self.net.get_layer(self.layer_list[i])
+                var_shape = getattr(obj, self.attr_list[i]).shape
+
+                w_list.append(tf.reshape(value_[j:(j + np.prod(var_shape))], var_shape))
+                j += np.prod(var_shape)
+
+            assert j == len(value_) - 2
+            w_list += [tf.reshape(value_[-2], (1,)), tf.reshape(value_[-1], (1,))]  # lambda and gamma
+
         elif from_ == 'list':
             w_list = value_[:]
         else:

@@ -53,8 +53,10 @@ class BMAML:
 
         with tf.GradientTape() as tape:
             var_lists = []
-            for bnn_p in self.bnn_list:
-                var_lists.append(bnn_p.get_trainable_variables())
+            for i, bnn_p in enumerate(self.bnn_list):
+                # var_lists.append(bnn_p.get_trainable_variables())
+                var_lists.append(bnn_p.get_var_lists())
+            tape.watch(var_lists)
 
             [step_follow_weight_var,
              step_follow_data_var,
@@ -69,8 +71,8 @@ class BMAML:
              step_follow_lambda_lprior,
              step_follow_lpost,
              step_follow_kernel_h,
-             WW_follow] = self.update_particles(follow_x, follow_y, valid_x, valid_y, var_lists, follow_step, self.follow_lr)
-
+             WW_follow] = self.update_particles(follow_x, follow_y, valid_x, valid_y, follow_step, self.follow_lr)
+            # train_x, train_y, valid_x, valid_y, num_updates, lr = follow_x, follow_y, valid_x, valid_y, follow_step, self.follow_lr
             [step_leader_weight_var,
              step_leader_data_var,
              step_leader_train_llik,
@@ -84,8 +86,8 @@ class BMAML:
              step_leader_lambda_lprior,
              step_leader_lpost,
              step_leader_kernel_h,
-             WW_leader] = self.update_particles(leader_x, leader_y, valid_x, valid_y, WW_follow, leader_step, self.leader_lr)
-
+             WW_leader] = self.update_particles(leader_x, leader_y, valid_x, valid_y, leader_step, self.leader_lr)
+            # train_x, train_y, valid_x, valid_y, num_updates, lr = leader_x, leader_y, valid_x, valid_y, leader_step, self.leader_lr
             #############
             # meta loss #
             #############
@@ -185,7 +187,7 @@ class BMAML:
                 self.eval_train_z_list = step_follow_train_pred
                 self.eval_valid_z_list = step_follow_valid_pred
 
-    def update_particles(self, train_x, train_y, valid_x, valid_y, WW_val, num_updates, lr):
+    def update_particles(self, train_x, train_y, valid_x, valid_y, num_updates, lr):
         # Stein Variational Gradient Descent
         step_weight_lprior = [None] * (num_updates + 1)
         step_lambda_lprior = [None] * (num_updates + 1)
@@ -201,6 +203,7 @@ class BMAML:
         step_kernel_h = [None] * num_updates
         step_lpost = [None] * num_updates
 
+        WW = [self.bnn_list[p_idx].get_var_lists() for p_idx in range(self.num_particles)]
         for s_idx in range(num_updates + 1):
             # for each particle
             train_z_list = []
@@ -215,15 +218,13 @@ class BMAML:
 
             if s_idx < num_updates:
                 # for each particle, compute gradient
-                WW = []
                 dWW = []
 
             for p_idx in range(self.num_particles):
                 with tf.GradientTape() as tape:
                     bnn_p = self.bnn_list[p_idx]
-                    var_lists_p = bnn_p.get_trainable_variables()
-                    for i, var in enumerate(var_lists_p):
-                        var.assign(WW_val[p_idx][i])
+                    var_lists_p = WW[p_idx]
+                    tape.watch(var_lists_p)
 
                     # compute prediction
                     train_z = bnn_p.forward_network(inputs=train_x)
@@ -249,7 +250,7 @@ class BMAML:
 
                     # update follower
                     if s_idx < num_updates:
-                        lpost = weight_lprior + gamma_lprior + lambda_lprior + tf.reduce_sum(train_llik_list[p_idx])
+                        lpost = weight_lprior + gamma_lprior + lambda_lprior + tf.reduce_sum(train_llik_list[p_idx], axis=[1, 2])
 
                         dWp = tape.gradient(lpost, var_lists_p)
                         if FLAGS.stop_grad:
@@ -260,8 +261,7 @@ class BMAML:
                             step_lpost[s_idx] = []
                         step_lpost[s_idx].append(lpost)
 
-                        WW.append(bnn_p.list2vec(var_lists_p))
-                        dWW.append(bnn_p.list2vec(dWp))
+                        dWW.append(dWp)
 
 
             if s_idx < num_updates:
@@ -269,21 +269,21 @@ class BMAML:
                 step_lpost[s_idx] = tf.reduce_mean(step_lpost[s_idx])
 
                 # make SVGD gradient and flatten particles and its gradient
-                WW_tensor = tf.stack(WW)
-                dWW_tensor = tf.stack(dWW)
+                WW_tensor = self.diclist2tensor(WW)
+                dWW_tensor = self.diclist2tensor(dWW)
 
                 # compute kernel
                 [kernel_mat, grad_kernel, kernel_h] = self.kernel(particle_tensor=WW_tensor)
                 dWW_tensor = tf.divide(tf.matmul(kernel_mat, dWW_tensor) + grad_kernel, self.num_particles)
                 step_kernel_h[s_idx] = kernel_h
 
-                WW_ret = []
+                dWW = self.tensor2diclist(dWW_tensor)
                 # update particles
                 for p_idx in range(self.num_particles):
                     bnn_p = self.bnn_list[p_idx]
-                    WW_p = bnn_p.get_trainable_variables()
-                    dWW_p = bnn_p.vec2list(dWW_tensor[p_idx, :])
-                    assert len(WW_p) == len(dWW_p)
+                    WW_p = WW[p_idx]
+                    dWW_p = dWW[p_idx]
+
                     # for each param
                     param_vals = []
                     for j in range(len(WW_p)):
@@ -298,7 +298,9 @@ class BMAML:
                             param_vals.append(WW_p[j] + FLAGS.lambda_lr * lr * grad)
                         else:
                             param_vals.append(WW_p[j] + lr * grad)
-                    WW_ret.append(param_vals)
+
+                    bnn_p.set_var_lists(param_vals)
+                    WW[p_idx] = bnn_p.get_var_lists()
 
 
             # get mean prediction
@@ -331,7 +333,7 @@ class BMAML:
                 step_lambda_lprior,
                 step_lpost,
                 step_kernel_h,
-                WW_ret]
+                WW]
 
     def update_particle_original(self,
                         train_x,
@@ -802,12 +804,7 @@ class BMAML:
         return kernel_matrix, grad_kernel, h
 
     def diclist2tensor(self, WW):
-        list_m = []
-        for Wm_dic in WW:
-            W_vec = tf.concat([tf.reshape(ww, [-1]) for ww in Wm_dic.values()], axis=0)
-            list_m.append(W_vec)
-        tensor = tf.stack(list_m)
-        return tensor
+        return tf.stack([self.bnn_list[m].list2vec(WW[m]) for m in range(self.num_particles)])
 
     def tensor2diclist(self, tensor):
-        return [self.bnn.vec2dic(tensor[m]) for m in range(self.num_particles)]
+        return [self.bnn_list[m].vec2list(tensor[m]) for m in range(self.num_particles)]
