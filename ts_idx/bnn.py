@@ -154,6 +154,15 @@ class BNN(object):
         var_lists += [self.log_lambda, self.log_gamma]
         return var_lists
 
+    def tensors_to_variables(self):
+        for i in range(len(self.attr_list)):
+            obj = self.net.get_layer(self.layer_list[i])
+            attr = getattr(obj, self.attr_list[i])
+            setattr(obj, self.attr_list[i], tf.Variable(attr.numpy()))
+
+        self.log_lambda = tf.Variable(self.log_lambda.numpy())
+        self.log_gamma = tf.Variable(self.log_gamma.numpy())
+
     def set_var_lists(self, var_lists):
         assert len(var_lists) == len(self.attr_list) + 2
         for i in range(len(self.attr_list)):

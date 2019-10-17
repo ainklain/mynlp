@@ -4,6 +4,7 @@ import tensorflow as tf
 from absl import flags
 from ts_idx import tf_utils
 import math
+from functools import partial
 
 FLAGS = flags.FLAGS
 
@@ -41,10 +42,90 @@ class BMAML:
         # init parameters
         self.W_network_particles = None
 
-    def metatrain(self, inputs, follow_step=1, leader_step=1, is_training=True):
-        # decompose input data
-        [follow_x, leader_x, valid_x,
-         follow_y, leader_y, valid_y] = inputs
+    def fast_train_one_task(self, inputs, follow_step=1, leader_step=1):
+        [follow_x, leader_x, valid_x, follow_y, leader_y, valid_y] = inputs
+
+        [step_follow_weight_var,
+         step_follow_data_var,
+         step_follow_train_llik,
+         step_follow_valid_llik,
+         step_follow_train_loss,
+         step_follow_valid_loss,
+         step_follow_train_pred,
+         step_follow_valid_pred,
+         step_follow_weight_lprior,
+         step_follow_gamma_lprior,
+         step_follow_lambda_lprior,
+         step_follow_lpost,
+         step_follow_kernel_h,
+         WW_follow] = self.update_particles(follow_x, follow_y, valid_x, valid_y, follow_step, self.follow_lr)
+        # train_x, train_y, valid_x, valid_y, num_updates, lr = follow_x, follow_y, valid_x, valid_y, follow_step, self.follow_lr
+        [step_leader_weight_var,
+         step_leader_data_var,
+         step_leader_train_llik,
+         step_leader_valid_llik,
+         step_leader_train_loss,
+         step_leader_valid_loss,
+         step_leader_train_pred,
+         step_leader_valid_pred,
+         step_leader_weight_lprior,
+         step_leader_gamma_lprior,
+         step_leader_lambda_lprior,
+         step_leader_lpost,
+         step_leader_kernel_h,
+         WW_leader] = self.update_particles(leader_x, leader_y, valid_x, valid_y, leader_step, self.leader_lr)
+        # train_x, train_y, valid_x, valid_y, num_updates, lr = leader_x, leader_y, valid_x, valid_y, leader_step, self.leader_lr
+        #############
+        # meta loss #
+        #############
+        meta_loss = []
+        # for each particle
+        for p_idx in range(self.num_particles):
+            # compute follower and leader distance
+            p_dist_list = []
+            for j in range(len(WW_leader[p_idx]) - 2):
+                p_dist = tf.square(WW_follow[p_idx][j] - tf.stop_gradient(WW_leader[p_idx][j]))
+                p_dist = tf.reduce_sum(p_dist)
+                p_dist_list.append(p_dist)
+            meta_loss.append(tf.reduce_sum(p_dist_list))
+
+        # mean over particles
+        meta_loss = tf.reduce_sum(meta_loss)
+
+        return [step_follow_weight_lprior,
+                step_follow_gamma_lprior,
+                step_follow_lambda_lprior,
+                step_follow_train_llik,
+                step_follow_valid_llik,
+                step_follow_train_loss,
+                step_follow_valid_loss,
+                step_follow_train_pred,
+                step_follow_valid_pred,
+                step_follow_weight_var,
+                step_follow_data_var,
+                step_follow_lpost,
+                step_follow_kernel_h,
+                step_leader_weight_lprior,
+                step_leader_gamma_lprior,
+                step_leader_lambda_lprior,
+                step_leader_train_llik,
+                step_leader_valid_llik,
+                step_leader_train_loss,
+                step_leader_valid_loss,
+                step_leader_train_pred,
+                step_leader_valid_pred,
+                step_leader_weight_var,
+                step_leader_data_var,
+                step_leader_lpost,
+                step_leader_kernel_h,
+                meta_loss]
+
+    def re_initialize_net(self):
+        for bnn_p in self.bnn_list:
+            bnn_p.tensors_to_variables()
+
+    def metatrain(self, inputs, follow_step=1, is_training=True):
+        # [follow_x, leader_x, valid_x, follow_y, leader_y, valid_y] =inputs
 
         if is_training:
             max_follow_step = follow_step
@@ -55,106 +136,123 @@ class BMAML:
             var_lists = []
             for i, bnn_p in enumerate(self.bnn_list):
                 # var_lists.append(bnn_p.get_trainable_variables())
-                var_lists.append(bnn_p.get_var_lists())
+                var_lists += bnn_p.get_var_lists()
             tape.watch(var_lists)
 
-            [step_follow_weight_var,
-             step_follow_data_var,
-             step_follow_train_llik,
-             step_follow_valid_llik,
-             step_follow_train_loss,
-             step_follow_valid_loss,
-             step_follow_train_pred,
-             step_follow_valid_pred,
-             step_follow_weight_lprior,
-             step_follow_gamma_lprior,
-             step_follow_lambda_lprior,
-             step_follow_lpost,
-             step_follow_kernel_h,
-             WW_follow] = self.update_particles(follow_x, follow_y, valid_x, valid_y, follow_step, self.follow_lr)
-            # train_x, train_y, valid_x, valid_y, num_updates, lr = follow_x, follow_y, valid_x, valid_y, follow_step, self.follow_lr
-            [step_leader_weight_var,
-             step_leader_data_var,
-             step_leader_train_llik,
-             step_leader_valid_llik,
-             step_leader_train_loss,
-             step_leader_valid_loss,
-             step_leader_train_pred,
-             step_leader_valid_pred,
-             step_leader_weight_lprior,
-             step_leader_gamma_lprior,
-             step_leader_lambda_lprior,
-             step_leader_lpost,
-             step_leader_kernel_h,
-             WW_leader] = self.update_particles(leader_x, leader_y, valid_x, valid_y, leader_step, self.leader_lr)
-            # train_x, train_y, valid_x, valid_y, num_updates, lr = leader_x, leader_y, valid_x, valid_y, leader_step, self.leader_lr
-            #############
-            # meta loss #
-            #############
-            meta_loss = []
-            # for each particle
-            for p_idx in range(self.num_particles):
-                # compute follower and leader distance
-                p_dist_list = []
-                for j in range(len(WW_leader[p_idx])-2):
-                    p_dist = tf.square(WW_follow[p_idx][j] - tf.stop_gradient(WW_leader[p_idx][j]))
-                    p_dist = tf.reduce_sum(p_dist)
-                    p_dist_list.append(p_dist)
-                meta_loss.append(tf.reduce_sum(p_dist_list))
+            # set output type
+            out_dtype = [[tf.float32] * (max_follow_step + 1),
+                         [tf.float32] * (max_follow_step + 1),
+                         [tf.float32] * (max_follow_step + 1),
+                         [tf.float32] * (max_follow_step + 1),
+                         [tf.float32] * (max_follow_step + 1),
+                         [tf.float32] * (max_follow_step + 1),
+                         [tf.float32] * (max_follow_step + 1),
+                         [tf.float32] * (max_follow_step + 1),
+                         [tf.float32] * (max_follow_step + 1),
+                         [tf.float32] * (max_follow_step + 1),
+                         [tf.float32] * (max_follow_step + 1),
+                         [tf.float32] * max_follow_step,
+                         [tf.float32] * max_follow_step,
+                         [tf.float32] * (FLAGS.leader_step + 1),
+                         [tf.float32] * (FLAGS.leader_step + 1),
+                         [tf.float32] * (FLAGS.leader_step + 1),
+                         [tf.float32] * (FLAGS.leader_step + 1),
+                         [tf.float32] * (FLAGS.leader_step + 1),
+                         [tf.float32] * (FLAGS.leader_step + 1),
+                         [tf.float32] * (FLAGS.leader_step + 1),
+                         [tf.float32] * (FLAGS.leader_step + 1),
+                         [tf.float32] * (FLAGS.leader_step + 1),
+                         [tf.float32] * (FLAGS.leader_step + 1),
+                         [tf.float32] * (FLAGS.leader_step + 1),
+                         [tf.float32] * FLAGS.leader_step,
+                         [tf.float32] * FLAGS.leader_step,
+                         tf.float32]
 
-            # mean over particles
-            meta_loss = tf.reduce_sum(meta_loss)
+            result = tf.map_fn(partial(self.fast_train_one_task, follow_step=max_follow_step, leader_step=FLAGS.leader_step)
+                               , elems=inputs #[follow_x, leader_x, valid_x, follow_y, leader_y, valid_y]
+                               , dtype=out_dtype
+                               , parallel_iterations=FLAGS.num_tasks)
+
+
+            # unroll result
+            [full_step_follow_weight_lprior,
+             full_step_follow_gamma_lprior,
+             full_step_follow_lambda_lprior,
+             full_step_follow_train_llik,
+             full_step_follow_valid_llik,
+             full_step_follow_train_loss,
+             full_step_follow_valid_loss,
+             full_step_follow_train_pred,
+             full_step_follow_valid_pred,
+             full_step_follow_weight_var,
+             full_step_follow_data_var,
+             full_step_follow_lpost,
+             full_step_follow_kernel_h,
+             full_step_leader_weight_lprior,
+             full_step_leader_gamma_lprior,
+             full_step_leader_lambda_lprior,
+             full_step_leader_train_llik,
+             full_step_leader_valid_llik,
+             full_step_leader_train_loss,
+             full_step_leader_valid_loss,
+             full_step_leader_train_pred,
+             full_step_leader_valid_pred,
+             full_step_leader_weight_var,
+             full_step_leader_data_var,
+             full_step_leader_lpost,
+             full_step_leader_kernel_h,
+             full_meta_loss] = result
 
             if is_training:
-                self.total_follow_weight_lprior = [tf.reduce_mean(step_follow_weight_lprior[j])
+                self.total_follow_weight_lprior = [tf.reduce_mean(full_step_follow_weight_lprior[j])
                                                    for j in range(FLAGS.follow_step + 1)]
-                self.total_follow_gamma_lprior = [tf.reduce_mean(step_follow_gamma_lprior[j])
+                self.total_follow_gamma_lprior = [tf.reduce_mean(full_step_follow_gamma_lprior[j])
                                                   for j in range(FLAGS.follow_step + 1)]
-                self.total_follow_lambda_lprior = [tf.reduce_mean(step_follow_lambda_lprior[j])
+                self.total_follow_lambda_lprior = [tf.reduce_mean(full_step_follow_lambda_lprior[j])
                                                    for j in range(FLAGS.follow_step + 1)]
-                self.total_follow_train_llik = [tf.reduce_mean(step_follow_train_llik[j])
+                self.total_follow_train_llik = [tf.reduce_mean(full_step_follow_train_llik[j])
                                                 for j in range(FLAGS.follow_step + 1)]
-                self.total_follow_valid_llik = [tf.reduce_mean(step_follow_valid_llik[j])
+                self.total_follow_valid_llik = [tf.reduce_mean(full_step_follow_valid_llik[j])
                                                 for j in range(FLAGS.follow_step + 1)]
-                self.total_follow_train_loss = [tf.reduce_mean(step_follow_train_loss[j])
+                self.total_follow_train_loss = [tf.reduce_mean(full_step_follow_train_loss[j])
                                                 for j in range(FLAGS.follow_step + 1)]
-                self.total_follow_valid_loss = [tf.reduce_mean(step_follow_valid_loss[j])
+                self.total_follow_valid_loss = [tf.reduce_mean(full_step_follow_valid_loss[j])
                                                 for j in range(FLAGS.follow_step + 1)]
-                self.total_follow_weight_var = [tf.reduce_mean(step_follow_weight_var[j])
+                self.total_follow_weight_var = [tf.reduce_mean(full_step_follow_weight_var[j])
                                                 for j in range(FLAGS.follow_step + 1)]
-                self.total_follow_data_var = [tf.reduce_mean(step_follow_data_var[j])
+                self.total_follow_data_var = [tf.reduce_mean(full_step_follow_data_var[j])
                                               for j in range(FLAGS.follow_step + 1)]
-                self.total_follow_lpost = [tf.reduce_mean(step_follow_lpost[j])
+                self.total_follow_lpost = [tf.reduce_mean(full_step_follow_lpost[j])
                                            for j in range(FLAGS.follow_step)]
-                self.total_follow_kernel_h = [tf.reduce_mean(step_follow_kernel_h[j])
+                self.total_follow_kernel_h = [tf.reduce_mean(full_step_follow_kernel_h[j])
                                               for j in range(FLAGS.follow_step)]
-                self.total_leader_weight_lprior = [tf.reduce_mean(step_leader_weight_lprior[j])
+                self.total_leader_weight_lprior = [tf.reduce_mean(full_step_leader_weight_lprior[j])
                                                    for j in range(FLAGS.leader_step + 1)]
-                self.total_leader_gamma_lprior = [tf.reduce_mean(step_leader_gamma_lprior[j])
+                self.total_leader_gamma_lprior = [tf.reduce_mean(full_step_leader_gamma_lprior[j])
                                                   for j in range(FLAGS.leader_step + 1)]
-                self.total_leader_lambda_lprior = [tf.reduce_mean(step_leader_lambda_lprior[j])
+                self.total_leader_lambda_lprior = [tf.reduce_mean(full_step_leader_lambda_lprior[j])
                                                    for j in range(FLAGS.leader_step + 1)]
-                self.total_leader_train_llik = [tf.reduce_mean(step_leader_train_llik[j])
+                self.total_leader_train_llik = [tf.reduce_mean(full_step_leader_train_llik[j])
                                                 for j in range(FLAGS.leader_step + 1)]
-                self.total_leader_valid_llik = [tf.reduce_mean(step_leader_valid_llik[j])
+                self.total_leader_valid_llik = [tf.reduce_mean(full_step_leader_valid_llik[j])
                                                 for j in range(FLAGS.leader_step + 1)]
-                self.total_leader_train_loss = [tf.reduce_mean(step_leader_train_loss[j])
+                self.total_leader_train_loss = [tf.reduce_mean(full_step_leader_train_loss[j])
                                                 for j in range(FLAGS.leader_step + 1)]
-                self.total_leader_valid_loss = [tf.reduce_mean(step_leader_valid_loss[j])
+                self.total_leader_valid_loss = [tf.reduce_mean(full_step_leader_valid_loss[j])
                                                 for j in range(FLAGS.leader_step + 1)]
-                self.total_leader_weight_var = [tf.reduce_mean(step_leader_weight_var[j])
+                self.total_leader_weight_var = [tf.reduce_mean(full_step_leader_weight_var[j])
                                                 for j in range(FLAGS.leader_step + 1)]
-                self.total_leader_data_var = [tf.reduce_mean(step_leader_data_var[j])
+                self.total_leader_data_var = [tf.reduce_mean(full_step_leader_data_var[j])
                                               for j in range(FLAGS.leader_step + 1)]
-                self.total_leader_lpost = [tf.reduce_mean(step_leader_lpost[j])
+                self.total_leader_lpost = [tf.reduce_mean(full_step_leader_lpost[j])
                                            for j in range(FLAGS.leader_step)]
-                self.total_leader_kernel_h = [tf.reduce_mean(step_leader_kernel_h[j])
+                self.total_leader_kernel_h = [tf.reduce_mean(full_step_leader_kernel_h[j])
                                               for j in range(FLAGS.leader_step)]
-                self.total_meta_loss = tf.reduce_mean(meta_loss)
+                self.total_meta_loss = tf.reduce_mean(full_meta_loss)
 
                 # prediction
-                self.total_train_z_list = step_follow_train_pred
-                self.total_valid_z_list = step_follow_valid_pred
+                self.total_train_z_list = full_step_follow_train_pred
+                self.total_valid_z_list = full_step_follow_valid_pred
 
                 ###############
                 # meta update #
@@ -174,18 +272,20 @@ class BMAML:
                 optimizer.apply_gradients(zip(gv_list, var_lists))
             else:
                 # summarize results
-                self.eval_train_llik = [tf.reduce_mean(step_follow_train_llik[j])
+                self.eval_train_llik = [tf.reduce_mean(full_step_follow_train_llik[j])
                                         for j in range(max_follow_step + 1)]
-                self.eval_train_loss = [tf.reduce_mean(step_follow_train_loss[j])
+                self.eval_train_loss = [tf.reduce_mean(full_step_follow_train_loss[j])
                                         for j in range(max_follow_step + 1)]
-                self.eval_valid_llik = [tf.reduce_mean(step_follow_valid_llik[j])
+                self.eval_valid_llik = [tf.reduce_mean(full_step_follow_valid_llik[j])
                                         for j in range(max_follow_step + 1)]
-                self.eval_valid_loss = [tf.reduce_mean(step_follow_valid_loss[j])
+                self.eval_valid_loss = [tf.reduce_mean(full_step_follow_valid_loss[j])
                                         for j in range(max_follow_step + 1)]
 
                 # prediction
-                self.eval_train_z_list = step_follow_train_pred
-                self.eval_valid_z_list = step_follow_valid_pred
+                self.eval_train_z_list = full_step_follow_train_pred
+                self.eval_valid_z_list = full_step_follow_valid_pred
+
+        self.re_initialize_net()
 
     def update_particles(self, train_x, train_y, valid_x, valid_y, num_updates, lr):
         # Stein Variational Gradient Descent
@@ -250,7 +350,7 @@ class BMAML:
 
                     # update follower
                     if s_idx < num_updates:
-                        lpost = weight_lprior + gamma_lprior + lambda_lprior + tf.reduce_sum(train_llik_list[p_idx], axis=[1, 2])
+                        lpost = weight_lprior + gamma_lprior + lambda_lprior + tf.reduce_sum(train_llik_list[p_idx])
 
                         dWp = tape.gradient(lpost, var_lists_p)
                         if FLAGS.stop_grad:

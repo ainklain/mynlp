@@ -146,42 +146,39 @@ def train(model, dataset, config_str, max_follow_step):
 
             # load data
             # [follow_x, leader_x, valid_x, follow_y, leader_y, valid_y] = dataset.generate_batch(is_training=True, batch_idx=None, inc_follow=True)
-            inputs = dataset.generate_batch(is_training=True, batch_idx=None, inc_follow=True)
-
+            inputs_data = dataset.generate_batch(is_training=True, batch_idx=None, inc_follow=True)
+            inputs = [inputs.astype(np.float32) for inputs in inputs_data]
+            # inputs_dataset = tf.data.Dataset.from_tensor_slices(tuple(inputs_data)).batch(1)
 
             # set input
             meta_lr = FLAGS.meta_lr * FLAGS.decay_lr ** (float(itr - 1) / float(FLAGS.num_epochs * num_iters_per_epoch / 100))
 
             model.metatrain(inputs)
 
-            feed_in[model.meta_lr] = meta_lr
-
-
             # set output op
-            fetch_out = [model.metatrain_op,
-                         model.total_follow_lpost,
-                         model.total_follow_weight_lprior,
-                         model.total_follow_gamma_lprior,
-                         model.total_follow_lambda_lprior,
-                         model.total_follow_train_llik,
-                         model.total_follow_valid_llik,
-                         model.total_follow_train_loss,
-                         model.total_follow_valid_loss,
-                         model.total_follow_weight_var,
-                         model.total_follow_data_var,
-                         model.total_follow_kernel_h,
-                         model.total_leader_lpost,
-                         model.total_leader_weight_lprior,
-                         model.total_leader_gamma_lprior,
-                         model.total_leader_lambda_lprior,
-                         model.total_leader_train_llik,
-                         model.total_leader_valid_llik,
-                         model.total_leader_train_loss,
-                         model.total_leader_valid_loss,
-                         model.total_leader_weight_var,
-                         model.total_leader_data_var,
-                         model.total_leader_kernel_h,
-                         model.total_meta_loss]
+            result = [model.total_follow_lpost,
+                     model.total_follow_weight_lprior,
+                     model.total_follow_gamma_lprior,
+                     model.total_follow_lambda_lprior,
+                     model.total_follow_train_llik,
+                     model.total_follow_valid_llik,
+                     model.total_follow_train_loss,
+                     model.total_follow_valid_loss,
+                     model.total_follow_weight_var,
+                     model.total_follow_data_var,
+                     model.total_follow_kernel_h,
+                     model.total_leader_lpost,
+                     model.total_leader_weight_lprior,
+                     model.total_leader_gamma_lprior,
+                     model.total_leader_lambda_lprior,
+                     model.total_leader_train_llik,
+                     model.total_leader_valid_llik,
+                     model.total_leader_train_loss,
+                     model.total_leader_valid_loss,
+                     model.total_leader_weight_var,
+                     model.total_leader_data_var,
+                     model.total_leader_kernel_h,
+                     model.total_meta_loss]
 
             # run
             # result = sess.run(fetch_out, feed_in)[1:]
@@ -466,26 +463,26 @@ def main():
                   num_particles=FLAGS.num_particles,
                   max_test_step=10)
 
-    # init model
-    model.construct_model(is_training=True)
-
-    # for testing
-    model.construct_model(is_training=False)
-
-    # # set summ ops
-    # saver = tf.train.Saver(tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES), max_to_keep=1)
-    #
-    # # open session
-    # sess = tf.InteractiveSession()
-    #
     # # init model
-    # tf.global_variables_initializer().run()
+    # model.construct_model(is_training=True)
+    #
+    # # for testing
+    # model.construct_model(is_training=False)
+    #
+    # # # set summ ops
+    # # saver = tf.train.Saver(tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES), max_to_keep=1)
+    # #
+    # # # open session
+    # # sess = tf.InteractiveSession()
+    # #
+    # # # init model
+    # # tf.global_variables_initializer().run()
+    #
+    # if FLAGS.train:
+    #     # start training
+    #     train(model, dataset, config_str, max_follow_step=FLAGS.follow_step)
+    # else:
+    #     test(model, dataset, config_str, max_follow_step=max(FLAGS.follow_step, model.max_test_step))
 
-    if FLAGS.train:
-        # start training
-        train(model, dataset, config_str, max_follow_step=FLAGS.follow_step)
-    else:
-        test(model, dataset, config_str, max_follow_step=max(FLAGS.follow_step, model.max_test_step))
-
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()
