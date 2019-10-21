@@ -2,10 +2,319 @@
 import pandas as pd
 import tensorflow as tf
 import numpy as np
-from numba import jit
 import os
 import time
 from tqdm import tqdm
+
+
+def log_y_nd(log_p, n):
+    if len(log_p.shape) == 2:
+        return np.r_[log_p[:n, :] - log_p[:1, :], log_p[n:, :] - log_p[:-n, :]]
+    elif len(log_p.shape) == 1:
+        return np.r_[log_p[:n] - log_p[:1], log_p[n:] - log_p[:-n]]
+    else:
+        raise NotImplementedError
+
+
+def fft(log_p, n, m_days, k_days):
+    assert (len(log_p) == (m_days + k_days + 1)) or (len(log_p) == (m_days + 1))
+
+    log_p_fft = np.fft.fft(log_p[:(m_days + 1)], axis=0)
+    log_p_fft[n:-n] = 0
+    return np.real(np.fft.ifft(log_p_fft, m_days + k_days + 1, axis=0))[:len(log_p)]
+
+
+def std_nd(log_p, n):
+    y = np.exp(log_y_nd(log_p, 1)) - 1.
+    stdarr = np.zeros_like(y)
+    for t in range(1, len(y)):
+        stdarr[t, :] = np.std(y[max(0, t - n):(t + 1), :], axis=0)
+
+    return stdarr
+
+
+def std_nd_new(log_p, n):
+    y = np.exp(log_y_nd(log_p, n)) - 1.
+    stdarr = np.zeros_like(y)
+    for t in range(1, len(y)):
+        stdarr[t, :] = np.std(y[max(0, t - n * 12):(t + 1), :][::n], axis=0)
+
+    return stdarr
+
+
+def mdd_nd(log_p, n):
+    mddarr = np.zeros_like(log_p)
+    for t in range(len(log_p)):
+        mddarr[t, :] = log_p[t, :] - np.max(log_p[max(0, t - n):(t + 1), :], axis=0)
+
+    return mddarr
+
+
+def arr_to_cs(arr):
+    order = arr.argsort(axis=1)
+    return_value = order.argsort(axis=1) / np.max(order, axis=1, keepdims=True)
+    return return_value
+
+
+def arr_to_normal(arr):
+    return_value = (arr - np.mean(arr, axis=1, keepdims=True)) / np.std(arr, axis=1, ddof=1, keepdims=True)
+    return return_value
+
+
+def numpy_fill(arr):
+    '''Solution provided by Divakar.'''
+    mask = np.isnan(arr)
+    idx = np.where(~mask, np.arange(mask.shape[1]), 0)
+    np.maximum.accumulate(idx, axis=1, out=idx)
+    out = arr[np.arange(idx.shape[0])[:, None], idx]
+    return out
+
+
+def cleansing_missing_value(df_selected, n_allow_missing_value=5, to_log=True):
+    mask = np.sum(df_selected.isna(), axis=0) <= n_allow_missing_value
+    df = df_selected.ix[:, mask].ffill().bfill()
+    df = df / df.iloc[0]
+    if to_log:
+        df = np.log(df)
+
+    return df
+
+
+class DataContainer:
+    def __init__(self, date_):
+        self.date_ = date_
+        self.codes = list()
+        self.dataset = list()
+
+
+class Config:
+    def __init__(self):
+        self.m_days = 60
+        self.k_days = 20
+        self.calc_length = 250
+        self.delay_days = 1
+        self.sampling_days = 5
+
+    def generate_name(self):
+        return "M{}_K{}".format(self.m_days, self.k_days)
+
+
+class Feature:
+    def __init__(self, configs):
+        self.name = configs.generate_name()
+        self.calc_length = configs.calc_length
+        self.m_days = configs.m_days
+        self.k_days = configs.k_days
+        self.delay_days = configs.delay_days
+        self.sampling_days = configs.sampling_days
+
+    def split_data_label(self, data_arr):
+        # log_p_arr shape : (m_days + k_days + 1, all dates)
+        assert len(data_arr) == self.m_days + self.k_days + self.delay_days + 1
+
+        data_ = data_arr[:(self.m_days + 1)]
+        label_ = data_arr[self.m_days:][self.delay_days:]
+        return data_, label_
+
+    def calc_features(self, log_p_arr, transpose=False, debug=False):
+        calc_length = self.calc_length
+        m_days = self.m_days
+        k_days_adj = self.k_days + self.delay_days
+
+        if transpose:
+            log_p_arr = np.transpose(log_p_arr)
+
+        # log_p_arr shape : (days per each date, all dates)
+        assert log_p_arr.shape[0] == calc_length + m_days + k_days_adj + 1
+        log_p_wo_calc = log_p_arr[calc_length:]
+        features_dict = dict()
+        labels_dict = dict()
+
+        if debug:
+            # label data 원천삭제
+            log_p_arr_debug = log_p_arr[:(-k_days_adj)]
+            log_p_wo_calc_debug = log_p_arr_debug[calc_length:]
+            features_dict_debug = dict()
+
+
+        for n in [5, 10, 20, 60, 120]:
+            nm = 'logy_{}'.format(n)
+            features_dict[nm], labels_dict[nm] = self.split_data_label(log_y_nd(log_p_arr, n)[calc_length:])
+
+            nm = 'std_{}'.format(n)
+            features_dict[nm], labels_dict[nm] = self.split_data_label(std_nd(log_p_arr, n)[calc_length:])
+
+            nm = 'stdnew_{}'.format(n)
+            features_dict[nm], labels_dict[nm] = self.split_data_label(std_nd_new(log_p_arr, n)[calc_length:])
+
+            nm = 'pos_{}'.format(n)
+            features_dict[nm] = np.sign(features_dict['logy_{}'.format(n)])
+            labels_dict[nm] = np.sign(labels_dict['logy_{}'.format(n)])
+
+            nm = 'mdd_{}'.format(n)
+            features_dict[nm], labels_dict[nm] = self.split_data_label(mdd_nd(log_p_wo_calc, n))
+
+            nm = 'fft_{}'.format(n)
+            features_dict[nm], labels_dict[nm] = self.split_data_label(fft(log_p_wo_calc, n, m_days, k_days_adj))
+
+            if debug:
+                features_dict_debug['logy_{}'.format(n)] = log_y_nd(log_p_arr_debug, n)[calc_length:]
+                features_dict_debug['std_{}'.format(n)] = std_nd(log_p_arr_debug, n)[calc_length:]
+                features_dict_debug['stdnew_{}'.format(n)] = std_nd_new(log_p_arr_debug, n)[calc_length:]
+                features_dict_debug['pos_{}'.format(n)] = np.sign(features_dict_debug['logy_{}'.format(n)])
+                features_dict_debug['mdd_{}'.format(n)] = mdd_nd(log_p_wo_calc_debug, n)
+                features_dict_debug['fft_{}'.format(n)] = fft(log_p_wo_calc_debug, n, m_days, k_days_adj)
+
+        if debug:
+            for key in features_dict.keys():
+                n_error = np.sum(features_dict[key] - features_dict_debug[key])
+                if n_error != 0:
+                    print("[debug: {}] data not matched.".format(key))
+                    raise AssertionError
+
+        if transpose:
+            for key in features_dict.keys():
+                features_dict[key] = np.transpose(features_dict[key])
+
+        return features_dict, labels_dict
+
+
+class Code:
+    def __init__(self, df_p):
+        self.name = df_p.name
+        self._initialize(df_p)
+
+    def _initialize(self, df_p):
+        self.begin_d = df_p.first_valid_index()
+        self.end_d = df_p.last_valid_index()
+        self.date_i = df_p.index[(df_p.index >= self.begin_d) & (df_p.index <= self.end_d)].to_list()
+        value_i = df_p.loc[self.date_i].to_numpy(dtype=np.float32)
+        logp_i = np.log(value_i)
+        self.logp_i = logp_i - logp_i[0]
+
+    def is_vector(self, arr):
+        if len(arr.shape) == 1:
+            return True
+        else:
+            return False
+
+    def split_by_nd(self, nd):
+        arr_1d = self.logp_i
+        # 1차원 데이터
+        assert self.is_vector(arr_1d)
+
+        # 최소한 nd보단 긴 길이
+        assert len(arr_1d) >= nd + 1
+
+        arr_2d = []
+        for i in range(nd, len(arr_1d)):
+            arr_2d.append(arr_1d[(i-nd):(i+1)])
+
+        assert len(arr_2d) == len(self.date_i[nd:])
+        return np.stack(arr_2d), self.date_i[nd:]
+
+    def cleansing_missing_value(self, data_for_calc, date_index, n_allow_missing_value=5):
+        mask = np.sum(np.isnan(data_for_calc), axis=1) <= n_allow_missing_value
+        data_for_calc = numpy_fill(data_for_calc[mask])     # [forward fill] np version.
+        date_index = list(np.array(date_index)[mask])
+        return data_for_calc, date_index
+
+    def prepare_data_for_calc(self, feature_cls):
+        m_days = feature_cls.m_days
+        k_days = feature_cls.k_days
+        calc_length = feature_cls.calc_length
+        delay_days = feature_cls.delay_days
+        k_days_adj = k_days + delay_days
+
+        logp_for_calc, date_index = self.split_by_nd(calc_length + m_days + k_days_adj)
+        logp_for_calc, date_index = self.cleansing_missing_value(logp_for_calc, date_index, int((m_days + k_days_adj) * 0.1))
+        self.feature_i, self.label_i = feature_cls.calc_features(logp_for_calc, transpose=True)
+        self.date_index = date_index
+
+
+class CodesInDate:
+    def __init__(self, name, data_dir='./data'):
+        self._initialize(name)
+
+    def _initialize(self, name):
+        if os.path.exists(os.path.join(self.data_dir, '{}.pkl'.format(name))):
+            self.load(name)
+        else:
+            data_path = './data/kr_close_y_90.csv'
+            data_df_temp = pd.read_csv(data_path)
+            data_df_temp = data_df_temp[data_df_temp.infocode > 0]
+
+            date_temp = data_df_temp[['date_', 'infocode']].groupby('date_').count()
+            date_temp = date_temp[date_temp.infocode >= 10]
+            date_temp.columns = ['cnt']
+
+            date_ = list(date_temp.index)
+            data_df = pd.merge(date_temp, data_df_temp, on='date_')  # 최소 10종목 이상 존재 하는 날짜만
+            data_df['y'] = data_df['y'] + 1
+            data_df['cum_y'] = data_df[['date_', 'infocode', 'y']].groupby('infocode').cumprod(axis=0)
+
+            df_pivoted_all = data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
+            df_pivoted_all.columns = df_pivoted_all.columns.droplevel(0).to_numpy(dtype=np.int32)
+            self.df_pivoted = df_pivoted_all
+
+    def a(self):
+        df_pivoted = self.df_pivoted
+        feature_cls = Feature(Config())
+        m_days = feature_cls.m_days
+        k_days = feature_cls.k_days
+        calc_length = feature_cls.calc_length
+        delay_days = feature_cls.delay_days
+        k_days_adj = k_days + delay_days
+        len_data = calc_length + m_days
+        len_label = k_days_adj
+
+        date_ = list(df_pivoted.index)
+        aa = dict()
+
+        tt = time.time()
+        for date_i in range(len_data, len(date_)):
+            if date_i % 100 == 0:
+                prev_t = tt
+                tt = time.time()
+                print('i {}, time: {}'.format(date_i, tt - prev_t))
+            start_d = date_[(date_i - len_data)]
+            end_d = date_[min(date_i + len_label, len(date_) - 1)]
+
+            select_where = ((df_pivoted.index >= start_d) & (df_pivoted.index <= end_d))
+            df_logp = cleansing_missing_value(df_pivoted.ix[select_where, :], n_allow_missing_value=5, to_log=True)
+
+            feature_i, label_i = feature_cls.calc_features(df_logp.to_numpy(dtype=np.float32), transpose=False)
+            aa[date_[date_i]] = {'feature': feature_i, 'label': label_i, 'asset_list': df_logp.columns.to_list()}
+
+
+def prepare_all_code():
+    data_path = './data/kr_close_y_90.csv'
+    data_df_temp = pd.read_csv(data_path)
+    data_df_temp = data_df_temp[data_df_temp.infocode > 0]
+
+    date_temp = data_df_temp[['date_', 'infocode']].groupby('date_').count()
+    date_temp = date_temp[date_temp.infocode >= 10]
+    date_temp.columns = ['cnt']
+
+    date_ = list(date_temp.index)
+    data_df = pd.merge(date_temp, data_df_temp, on='date_')  # 최소 10종목 이상 존재 하는 날짜만
+    data_df['y'] = data_df['y'] + 1
+    data_df['cum_y'] = data_df[['date_', 'infocode', 'y']].groupby('infocode').cumprod(axis=0)
+
+    df_pivoted_all = data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
+    df_pivoted_all.columns = df_pivoted_all.columns.droplevel(0).to_numpy(dtype=np.int32)
+
+    feature_cls = Feature(Config())
+    code_list = []
+
+    for i in tqdm(range(len(df_pivoted_all.columns))):
+        code = df_pivoted_all.columns[i]
+        print(code)
+        code_list.append(Code(df_pivoted_all.loc[:, code]))
+        code_list[i].prepare_data_for_calc(feature_cls)
+
+
+
 
 class DataScheduler:
     def __init__(self, configs, features_cls, data_type='kr_stock', univ_type='all'):
@@ -359,335 +668,6 @@ class DataScheduler:
             return True
         else:
             return False
-
-
-
-def log_y_nd(log_p, n):
-    if len(log_p.shape) == 2:
-        return np.r_[log_p[:n, :] - log_p[:1, :], log_p[n:, :] - log_p[:-n, :]]
-    elif len(log_p.shape) == 1:
-        return np.r_[log_p[:n] - log_p[:1], log_p[n:] - log_p[:-n]]
-    else:
-        raise NotImplementedError
-
-
-def fft(log_p, n, m_days, k_days):
-    assert (len(log_p) == (m_days + k_days + 1)) or (len(log_p) == (m_days + 1))
-
-    log_p_fft = np.fft.fft(log_p[:(m_days + 1)], axis=0)
-    log_p_fft[n:-n] = 0
-    return np.real(np.fft.ifft(log_p_fft, m_days + k_days + 1, axis=0))[:len(log_p)]
-
-
-def std_nd(log_p, n):
-    y = np.exp(log_y_nd(log_p, 1)) - 1.
-    stdarr = np.zeros_like(y)
-    for t in range(1, len(y)):
-        stdarr[t, :] = np.std(y[max(0, t - n):(t + 1), :], axis=0)
-
-    return stdarr
-
-
-def std_nd_new(log_p, n):
-    y = np.exp(log_y_nd(log_p, n)) - 1.
-    stdarr = np.zeros_like(y)
-    for t in range(1, len(y)):
-        stdarr[t, :] = np.std(y[max(0, t - n * 12):(t + 1), :][::n], axis=0)
-
-    return stdarr
-
-
-def mdd_nd(log_p, n):
-    mddarr = np.zeros_like(log_p)
-    for t in range(len(log_p)):
-        mddarr[t, :] = log_p[t, :] - np.max(log_p[max(0, t - n):(t + 1), :], axis=0)
-
-    return mddarr
-
-
-def arr_to_cs(arr):
-    order = arr.argsort(axis=1)
-    return_value = order.argsort(axis=1) / np.max(order, axis=1, keepdims=True)
-    return return_value
-
-
-def arr_to_normal(arr):
-    return_value = (arr - np.mean(arr, axis=1, keepdims=True)) / np.std(arr, axis=1, ddof=1, keepdims=True)
-    return return_value
-
-
-def numpy_fill(arr):
-    '''Solution provided by Divakar.'''
-    mask = np.isnan(arr)
-    idx = np.where(~mask, np.arange(mask.shape[1]), 0)
-    np.maximum.accumulate(idx, axis=1, out=idx)
-    out = arr[np.arange(idx.shape[0])[:, None], idx]
-    return out
-
-
-class DataContainer:
-    def __init__(self, date_):
-        self.date_ = date_
-        self.codes = list()
-        self.dataset = list()
-
-
-class Config:
-    def __init__(self):
-        self.m_days = 60
-        self.k_days = 20
-        self.calc_length = 250
-        self.delay_days = 1
-        self.sampling_days = 5
-
-    def generate_name(self):
-        return "M{}_K{}".format(self.m_days, self.k_days)
-
-
-class Feature:
-    def __init__(self, configs):
-        self.name = configs.generate_name()
-        self.calc_length = configs.calc_length
-        self.m_days = configs.m_days
-        self.k_days = configs.k_days
-        self.delay_days = configs.delay_days
-        self.sampling_days = configs.sampling_days
-
-    def split_data_label(self, data_arr):
-        # log_p_arr shape : (m_days + k_days + 1, all dates)
-        assert len(data_arr) == self.m_days + self.k_days + self.delay_days + 1
-
-        data_ = data_arr[:(self.m_days + 1)][::self.sampling_days]
-        label_ = data_arr[self.m_days:][self.delay_days::self.sampling_days]
-        return data_, label_
-
-    def calc_features(self, log_p_arr, transpose=False, debug=False):
-        calc_length = self.calc_length
-        m_days = self.m_days
-        k_days_adj = self.k_days + self.delay_days
-
-        if transpose:
-            log_p_arr = np.transpose(log_p_arr)
-
-        # log_p_arr shape : (days per each date, all dates)
-        assert log_p_arr.shape[0] == calc_length + m_days + k_days_adj + 1
-        log_p_wo_calc = log_p_arr[calc_length:]
-        features_dict = dict()
-        labels_dict = dict()
-
-        if debug:
-            # label data 원천삭제
-            log_p_arr_debug = log_p_arr[:(-k_days_adj)]
-            log_p_wo_calc_debug = log_p_arr_debug[calc_length:]
-            features_dict_debug = dict()
-
-
-        for n in [5, 10, 20, 60, 120]:
-            nm = 'logy_{}'.format(n)
-            features_dict[nm], labels_dict[nm] = self.split_data_label(log_y_nd(log_p_arr, n)[calc_length:])
-
-            nm = 'std_{}'.format(n)
-            features_dict[nm], labels_dict[nm] = self.split_data_label(std_nd(log_p_arr, n)[calc_length:])
-
-            nm = 'stdnew_{}'.format(n)
-            features_dict[nm], labels_dict[nm] = self.split_data_label(std_nd_new(log_p_arr, n)[calc_length:])
-
-            nm = 'pos_{}'.format(n)
-            features_dict[nm] = np.sign(features_dict['logy_{}'.format(n)])
-            labels_dict[nm] = np.sign(labels_dict['logy_{}'.format(n)])
-
-            nm = 'mdd_{}'.format(n)
-            features_dict[nm], labels_dict[nm] = self.split_data_label(mdd_nd(log_p_wo_calc, n))
-
-            nm = 'fft_{}'.format(n)
-            features_dict[nm], labels_dict[nm] = self.split_data_label(fft(log_p_wo_calc, n, m_days, k_days_adj))
-
-            if debug:
-                features_dict_debug['logy_{}'.format(n)] = log_y_nd(log_p_arr_debug, n)[calc_length:]
-                features_dict_debug['std_{}'.format(n)] = std_nd(log_p_arr_debug, n)[calc_length:]
-                features_dict_debug['stdnew_{}'.format(n)] = std_nd_new(log_p_arr_debug, n)[calc_length:]
-                features_dict_debug['pos_{}'.format(n)] = np.sign(features_dict_debug['logy_{}'.format(n)])
-                features_dict_debug['mdd_{}'.format(n)] = mdd_nd(log_p_wo_calc_debug, n)
-                features_dict_debug['fft_{}'.format(n)] = fft(log_p_wo_calc_debug, n, m_days, k_days_adj)
-
-        if debug:
-            for key in features_dict.keys():
-                n_error = np.sum(features_dict[key] - features_dict_debug[key][::self.sampling_days])
-                if n_error != 0:
-                    print("[debug: {}] data not matched.".format(key))
-                    raise AssertionError
-
-        if transpose:
-            for key in features_dict.keys():
-                features_dict[key] = np.transpose(features_dict[key])
-
-        return features_dict, labels_dict
-
-
-class Code:
-    def __init__(self, df_p):
-        self.name = df_p.name
-        self._initialize(df_p)
-
-    def _initialize(self, df_p):
-        self.begin_d = df_p.first_valid_index()
-        self.end_d = df_p.last_valid_index()
-        self.date_i = df_p.index[(df_p.index >= self.begin_d) & (df_p.index <= self.end_d)].to_list()
-        value_i = df_p.loc[self.date_i].to_numpy(dtype=np.float32)
-        logp_i = np.log(value_i)
-        self.logp_i = logp_i - logp_i[0]
-
-    def is_vector(self, arr):
-        if len(arr.shape) == 1:
-            return True
-        else:
-            return False
-
-    def split_by_nd(self, nd):
-        arr_1d = self.logp_i
-        # 1차원 데이터
-        assert self.is_vector(arr_1d)
-
-        # 최소한 nd보단 긴 길이
-        assert len(arr_1d) >= nd + 1
-
-        arr_2d = []
-        for i in range(nd, len(arr_1d)):
-            arr_2d.append(arr_1d[(i-nd):(i+1)])
-
-        assert len(arr_2d) == len(self.date_i[nd:])
-        return np.stack(arr_2d), self.date_i[nd:]
-
-    def cleansing_missing_value(self, data_for_calc, date_index, n_allow_missing_value=5):
-        mask = np.sum(np.isnan(data_for_calc), axis=1) <= n_allow_missing_value
-        data_for_calc = numpy_fill(data_for_calc[mask])     # [forward fill] np version.
-        date_index = list(np.array(date_index)[mask])
-        return data_for_calc, date_index
-
-    def prepare_data_for_calc(self, feature_cls):
-        m_days = feature_cls.m_days
-        k_days = feature_cls.k_days
-        calc_length = feature_cls.calc_length
-        delay_days = feature_cls.delay_days
-        k_days_adj = k_days + delay_days
-
-        logp_for_calc, date_index = self.split_by_nd(calc_length + m_days + k_days_adj)
-        logp_for_calc, date_index = self.cleansing_missing_value(logp_for_calc, date_index, int((m_days + k_days_adj) * 0.1))
-        self.feature_i, self.label_i = feature_cls.calc_features(logp_for_calc, transpose=True)
-        self.date_index = date_index
-
-
-
-class CodesInDate:
-    def __init__(self, name, data_dir='./data'):
-        self._initialize(name)
-
-    def _initialize(self, name):
-        if os.path.exists(os.path.join(self.data_dir, '{}.pkl'.format(name))):
-            self.load(name)
-        else:
-            data_path = './data/kr_close_y_90.csv'
-            data_df_temp = pd.read_csv(data_path)
-            data_df_temp = data_df_temp[data_df_temp.infocode > 0]
-
-            date_temp = data_df_temp[['date_', 'infocode']].groupby('date_').count()
-            date_temp = date_temp[date_temp.infocode >= 10]
-            date_temp.columns = ['cnt']
-
-            date_ = list(date_temp.index)
-            data_df = pd.merge(date_temp, data_df_temp, on='date_')  # 최소 10종목 이상 존재 하는 날짜만
-            data_df['y'] = data_df['y'] + 1
-            data_df['cum_y'] = data_df[['date_', 'infocode', 'y']].groupby('infocode').cumprod(axis=0)
-
-            df_pivoted_all = data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
-            df_pivoted_all.columns = df_pivoted_all.columns.droplevel(0).to_numpy(dtype=np.int32)
-            self.df_pivoted = df_pivoted_all
-
-    def cleansing_missing_value(self, df_selected, n_allow_missing_value=5):
-        mask = np.sum(df_selected.isna(), axis=0) <= n_allow_missing_value
-        df = df_selected.ix[:, mask].ffill().bfill()
-        df = df / df.iloc[0]
-        return df
-
-    def a(self, df_pivoted, feature_cls):
-        m_days = feature_cls.m_days
-        k_days = feature_cls.k_days
-        calc_length = feature_cls.calc_length
-        delay_days = feature_cls.delay_days
-        k_days_adj = k_days + delay_days
-        len_data = calc_length + m_days
-        len_label = k_days_adj
-
-        date_ = list(df_pivoted.index)
-
-        for date_i in range(len_data, len(date_)):
-            start_d = date_[(date_i - len_data)]
-            end_d = date_[min(date_i + len_label, len(date_) - 1)]
-
-            select_where = ((df_pivoted.index >= start_d) & (df_pivoted.index <= end_d))
-            df_selected = self.cleansing_missing_value(df_pivoted.ix[select_where, :], n_allow_missing_value=5)
-
-
-    def split_by_nd(self, nd):
-        arr_1d = self.logp_i
-        # 1차원 데이터
-        assert self.is_vector(arr_1d)
-
-        # 최소한 nd보단 긴 길이
-        assert len(arr_1d) >= nd + 1
-
-        arr_2d = []
-        for i in range(nd, len(arr_1d)):
-            arr_2d.append(arr_1d[(i-nd):(i+1)])
-
-        assert len(arr_2d) == len(self.date_i[nd:])
-        return np.stack(arr_2d), self.date_i[nd:]
-
-    def prepare_data_for_calc(self, feature_cls):
-        m_days = feature_cls.m_days
-        k_days = feature_cls.k_days
-        calc_length = feature_cls.calc_length
-        delay_days = feature_cls.delay_days
-        k_days_adj = k_days + delay_days
-
-        # 미래데이터 원천 제거
-        df_selected_data = self.df_pivoted[(self.df_pivoted.index >= self.date_[base_idx - m_days - calc_length])
-                                           & (self.df_pivoted.index <= self.date_[base_idx])]
-
-
-        logp_for_calc, date_index = self.split_by_nd(calc_length + m_days + k_days_adj)
-        logp_for_calc, date_index = self.cleansing_missing_value(logp_for_calc, date_index, int((m_days + k_days_adj) * 0.1))
-        self.feature_i, self.label_i = feature_cls.calc_features(logp_for_calc, transpose=True)
-        self.date_index = date_index
-
-
-def prepare_all_code():
-    data_path = './data/kr_close_y_90.csv'
-    data_df_temp = pd.read_csv(data_path)
-    data_df_temp = data_df_temp[data_df_temp.infocode > 0]
-
-    date_temp = data_df_temp[['date_', 'infocode']].groupby('date_').count()
-    date_temp = date_temp[date_temp.infocode >= 10]
-    date_temp.columns = ['cnt']
-
-    date_ = list(date_temp.index)
-    data_df = pd.merge(date_temp, data_df_temp, on='date_')  # 최소 10종목 이상 존재 하는 날짜만
-    data_df['y'] = data_df['y'] + 1
-    data_df['cum_y'] = data_df[['date_', 'infocode', 'y']].groupby('infocode').cumprod(axis=0)
-
-    df_pivoted_all = data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
-    df_pivoted_all.columns = df_pivoted_all.columns.droplevel(0).to_numpy(dtype=np.int32)
-
-    feature_cls = Feature(Config())
-    code_list = []
-
-    for i in tqdm(range(len(df_pivoted_all.columns))):
-        code = df_pivoted_all.columns[i]
-        print(code)
-        code_list.append(Code(df_pivoted_all.loc[:, code]))
-        code_list[i].prepare_data_for_calc(feature_cls)
-
-
 
 
 
