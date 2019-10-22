@@ -3,9 +3,10 @@ import pandas as pd
 import tensorflow as tf
 import numpy as np
 import os
+from functools import partial
 import time
 from tqdm import tqdm
-
+import pickle
 
 def log_y_nd(log_p, n):
     if len(log_p.shape) == 2:
@@ -107,6 +108,7 @@ class Feature:
         self.k_days = configs.k_days
         self.delay_days = configs.delay_days
         self.sampling_days = configs.sampling_days
+        self.possible_func = ['logy', 'std', 'stdnew', 'pos', 'mdd', 'fft']
 
     def split_data_label(self, data_arr):
         # log_p_arr shape : (m_days + k_days + 1, all dates)
@@ -116,67 +118,82 @@ class Feature:
         label_ = data_arr[self.m_days:][self.delay_days:]
         return data_, label_
 
-    def calc_features(self, log_p_arr, transpose=False, debug=False):
-        calc_length = self.calc_length
-        m_days = self.m_days
-        k_days_adj = self.k_days + self.delay_days
+    def calc_func(self, arr, feature_nm, debug=False):
+        # 아래 함수 추가할때마다 추가해줄것...
 
+        func_nm, nd = feature_nm.split('_')
+        n = int(nd)
+
+        calc_length, m_days, k_days, delay_days = self.calc_length, self.m_days, self.k_days, self.delay_days
+        k_days_adj = k_days + delay_days
+
+        assert arr.shape[0] == calc_length + m_days + k_days_adj + 1
+        if debug:
+            # label 데이터 제거 후 산출
+            arr_debug = arr[:-k_days_adj]
+
+        # arr default: logp
+        if func_nm == 'logy':
+            result = log_y_nd(arr, n)[calc_length:]
+            if debug:
+                result_debug = log_y_nd(arr_debug, n)[calc_length:]
+        elif func_nm == 'std':
+            result = std_nd(arr, n)[calc_length:]
+            if debug:
+                result_debug = std_nd(arr_debug, n)[calc_length:]
+        elif func_nm == 'stdnew':
+            result = std_nd_new(arr, n)[calc_length:]
+            if debug:
+                result_debug = std_nd_new(arr_debug, n)[calc_length:]
+        elif func_nm == 'pos':
+            result = np.sign(log_y_nd(arr, n)[calc_length:])
+            if debug:
+                result_debug = np.sign(log_y_nd(arr_debug, n)[calc_length:])
+        elif func_nm == 'mdd':
+            # arr: data without calc data
+            result = mdd_nd(arr[calc_length:], n)
+            if debug:
+                result_debug = mdd_nd(arr_debug[calc_length:], n)
+        elif func_nm == 'fft':
+            # arr: data without calc data
+            result = fft(arr[calc_length:], n, m_days, k_days_adj)
+            if debug:
+                result_debug = fft(arr_debug[calc_length:], n, m_days, k_days_adj)
+
+        feature, label = self.split_data_label(result)
+        if debug:
+            n_error = np.sum(feature - result_debug)
+            if n_error != 0:
+                print("[debug: {}] data not matched.".format(func_nm))
+                raise AssertionError
+
+        return feature[::self.sampling_days], label[::self.sampling_days]
+
+    def calc_features(self, log_p_arr, transpose=False, debug=False):
         if transpose:
             log_p_arr = np.transpose(log_p_arr)
 
-        # log_p_arr shape : (days per each date, all dates)
-        assert log_p_arr.shape[0] == calc_length + m_days + k_days_adj + 1
-        log_p_wo_calc = log_p_arr[calc_length:]
-        features_dict = dict()
-        labels_dict = dict()
+        # log_p_arr shape : (days per each date, codes_list)
+        # features_dict = dict()
+        # labels_dict = dict()
+        data_dict = dict()
+        for func_nm in self.possible_func:
+        # for func_nm in ['logy']:
+            for n in [5, 10, 20, 60, 120]:
+                nm = '{}_{}'.format(func_nm, n)
+                # features_dict[nm], labels_dict[nm] = self.calc_func(log_p_arr, nm, debug)
+                data_dict[nm] = dict()
+                data_dict[nm]['feature'], data_dict[nm]['label'] = self.calc_func(log_p_arr, nm, debug)
 
-        if debug:
-            # label data 원천삭제
-            log_p_arr_debug = log_p_arr[:(-k_days_adj)]
-            log_p_wo_calc_debug = log_p_arr_debug[calc_length:]
-            features_dict_debug = dict()
-
-
-        for n in [5, 10, 20, 60, 120]:
-            nm = 'logy_{}'.format(n)
-            features_dict[nm], labels_dict[nm] = self.split_data_label(log_y_nd(log_p_arr, n)[calc_length:])
-
-            nm = 'std_{}'.format(n)
-            features_dict[nm], labels_dict[nm] = self.split_data_label(std_nd(log_p_arr, n)[calc_length:])
-
-            nm = 'stdnew_{}'.format(n)
-            features_dict[nm], labels_dict[nm] = self.split_data_label(std_nd_new(log_p_arr, n)[calc_length:])
-
-            nm = 'pos_{}'.format(n)
-            features_dict[nm] = np.sign(features_dict['logy_{}'.format(n)])
-            labels_dict[nm] = np.sign(labels_dict['logy_{}'.format(n)])
-
-            nm = 'mdd_{}'.format(n)
-            features_dict[nm], labels_dict[nm] = self.split_data_label(mdd_nd(log_p_wo_calc, n))
-
-            nm = 'fft_{}'.format(n)
-            features_dict[nm], labels_dict[nm] = self.split_data_label(fft(log_p_wo_calc, n, m_days, k_days_adj))
-
-            if debug:
-                features_dict_debug['logy_{}'.format(n)] = log_y_nd(log_p_arr_debug, n)[calc_length:]
-                features_dict_debug['std_{}'.format(n)] = std_nd(log_p_arr_debug, n)[calc_length:]
-                features_dict_debug['stdnew_{}'.format(n)] = std_nd_new(log_p_arr_debug, n)[calc_length:]
-                features_dict_debug['pos_{}'.format(n)] = np.sign(features_dict_debug['logy_{}'.format(n)])
-                features_dict_debug['mdd_{}'.format(n)] = mdd_nd(log_p_wo_calc_debug, n)
-                features_dict_debug['fft_{}'.format(n)] = fft(log_p_wo_calc_debug, n, m_days, k_days_adj)
-
-        if debug:
-            for key in features_dict.keys():
-                n_error = np.sum(features_dict[key] - features_dict_debug[key])
-                if n_error != 0:
-                    print("[debug: {}] data not matched.".format(key))
-                    raise AssertionError
-
+        # if transpose:
+        #     for key in features_dict.keys():
+        #         features_dict[key] = np.transpose(features_dict[key])
         if transpose:
-            for key in features_dict.keys():
-                features_dict[key] = np.transpose(features_dict[key])
+            for key in data_dict.keys():
+                data_dict[key]['feature'] = np.transpose(data_dict[key]['feature'])
+                data_dict[key]['label'] = np.transpose(data_dict[key]['label'])
 
-        return features_dict, labels_dict
+        return data_dict
 
 
 class Code:
@@ -269,7 +286,6 @@ class CodesInDate:
         len_label = k_days_adj
 
         date_ = list(df_pivoted.index)
-        aa = dict()
 
         tt = time.time()
         for date_i in range(len_data, len(date_)):
@@ -283,8 +299,14 @@ class CodesInDate:
             select_where = ((df_pivoted.index >= start_d) & (df_pivoted.index <= end_d))
             df_logp = cleansing_missing_value(df_pivoted.ix[select_where, :], n_allow_missing_value=5, to_log=True)
 
-            feature_i, label_i = feature_cls.calc_features(df_logp.to_numpy(dtype=np.float32), transpose=False)
-            aa[date_[date_i]] = {'feature': feature_i, 'label': label_i, 'asset_list': df_logp.columns.to_list()}
+            data_i = feature_cls.calc_features(df_logp.to_numpy(dtype=np.float32), transpose=False)
+            base_dir = './data/preprocessed/{}/'.format(date_i)
+            os.makedirs(base_dir, exist_ok=True)
+            for feature_nm in data_i.keys():
+                pickle.dump(data_i[feature_nm], open(os.path.join(base_dir, '{}.pkl'.format(feature_nm)), 'wb'))
+
+            obj = {'feature': feature_i, 'label': label_i, 'asset_list': df_logp.columns.to_list()}
+
 
 
 def prepare_all_code():

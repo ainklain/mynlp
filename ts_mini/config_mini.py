@@ -4,8 +4,11 @@ class Config:
         # time series parameter
         self.train_set_length = 2500    # previous 10 years data
         self.retrain_days = 250         # re-train every year
-        self.m_days = 60                # input length of encoding layer (key, value)
-        self.k_days = 5                # input and output length of decoding layer (query)
+        self.m_days = 120                # input length of encoding layer (key, value)
+        self.k_days = 20                # input and output length of decoding layer (query)
+        self.calc_length = 250
+        self.calc_length_label = 120
+        self.delay_days = 1
         self.set_kdays(self.k_days)
 
         self.sampling_days = 5          # get data every 'sampling_days' days
@@ -13,16 +16,17 @@ class Config:
         self.cost_rate = 0.003
 
         self.batch_size = 256
+        self.eval_batch_size = 64
         self.train_steps = 200000
         self.eval_steps = 50
         self.early_stopping_count = 10
         self.dropout = 0.5
         self.learning_rate = 1e-4
 
-        self.delayed_days = 1
         self.use_beta = False
-
-        self.balancing_method = 'each'  # each / once
+        self.univ_type = 'selected'     # all / selected
+        self.balancing_method = 'each'  # each / once / nothing
+        self.data_type = 'kr_stock'
 
         # features info
         self.set_features_info()
@@ -123,3 +127,7 @@ class Config:
             return_str += "{}: {}\n".format(key, self.__dict__[key])
 
         return return_str
+
+    def generate_name(self):
+        return "M{}_K{}_COST{}_BS{}_LR{}_BM{}_UT{}".format(self.m_days, self.k_days, self.cost_rate,
+                                                      self.batch_size, self.learning_rate, self.balancing_method, self.univ_type)

@@ -6,9 +6,12 @@ from matplotlib import cm, pyplot as plt
 
 
 def log_y_nd(log_p, n):
-    assert len(log_p.shape) == 2
-
-    return np.r_[log_p[:n, :] - log_p[:1, :], log_p[n:, :] - log_p[:-n, :]]
+    if len(log_p.shape) == 2:
+        return np.r_[log_p[:n, :] - log_p[:1, :], log_p[n:, :] - log_p[:-n, :]]
+    elif len(log_p.shape) == 1:
+        return np.r_[log_p[:n] - log_p[:1], log_p[n:] - log_p[:-n]]
+    else:
+        raise NotImplementedError
 
 
 def fft(log_p, n, m_days, k_days):
@@ -54,6 +57,124 @@ def arr_to_cs(arr):
 def arr_to_normal(arr):
     return_value = (arr - np.mean(arr, axis=1, keepdims=True)) / np.std(arr, axis=1, ddof=1, keepdims=True)
     return return_value
+
+
+def numpy_fill(arr):
+    '''Solution provided by Divakar.'''
+    mask = np.isnan(arr)
+    idx = np.where(~mask, np.arange(mask.shape[1]), 0)
+    np.maximum.accumulate(idx, axis=1, out=idx)
+    out = arr[np.arange(idx.shape[0])[:, None], idx]
+    return out
+
+
+def cleansing_missing_value(df_selected, n_allow_missing_value=5, to_log=True):
+    mask = np.sum(df_selected.isna(), axis=0) <= n_allow_missing_value
+    df = df_selected.ix[:, mask].ffill().bfill()
+    df = df / df.iloc[0]
+    if to_log:
+        df = np.log(df)
+
+    return df
+
+
+
+class FeatureNew:
+    def __init__(self, configs):
+        self.name = configs.generate_name()
+        self.calc_length = configs.calc_length
+        self.m_days = configs.m_days
+        self.k_days = configs.k_days
+        self.delay_days = configs.delay_days
+        self.sampling_days = configs.sampling_days
+        self.possible_func = ['logy', 'std', 'stdnew', 'pos', 'mdd', 'fft']
+
+    def split_data_label(self, data_arr):
+        # log_p_arr shape : (m_days + k_days + 1, all dates)
+        assert len(data_arr) == self.m_days + self.k_days + self.delay_days + 1
+
+        data_ = data_arr[:(self.m_days + 1)]
+        label_ = data_arr[self.m_days:][self.delay_days:]
+        return data_, label_
+
+    def calc_func(self, arr, feature_nm, debug=False):
+        # 아래 함수 추가할때마다 추가해줄것...
+
+        func_nm, nd = feature_nm.split('_')
+        n = int(nd)
+
+        calc_length, m_days, k_days, delay_days = self.calc_length, self.m_days, self.k_days, self.delay_days
+        k_days_adj = k_days + delay_days
+
+        assert arr.shape[0] == calc_length + m_days + k_days_adj + 1
+        if debug:
+            # label 데이터 제거 후 산출
+            arr_debug = arr[:-k_days_adj]
+
+        # arr default: logp
+        if func_nm == 'logy':
+            result = log_y_nd(arr, n)[calc_length:]
+            if debug:
+                result_debug = log_y_nd(arr_debug, n)[calc_length:]
+        elif func_nm == 'std':
+            result = std_nd(arr, n)[calc_length:]
+            if debug:
+                result_debug = std_nd(arr_debug, n)[calc_length:]
+        elif func_nm == 'stdnew':
+            result = std_nd_new(arr, n)[calc_length:]
+            if debug:
+                result_debug = std_nd_new(arr_debug, n)[calc_length:]
+        elif func_nm == 'pos':
+            result = np.sign(log_y_nd(arr, n)[calc_length:])
+            if debug:
+                result_debug = np.sign(log_y_nd(arr_debug, n)[calc_length:])
+        elif func_nm == 'mdd':
+            # arr: data without calc data
+            result = mdd_nd(arr[calc_length:], n)
+            if debug:
+                result_debug = mdd_nd(arr_debug[calc_length:], n)
+        elif func_nm == 'fft':
+            # arr: data without calc data
+            result = fft(arr[calc_length:], n, m_days, k_days_adj)
+            if debug:
+                result_debug = fft(arr_debug[calc_length:], n, m_days, k_days_adj)
+
+        feature, label = self.split_data_label(result)
+        if debug:
+            n_error = np.sum(feature - result_debug)
+            if n_error != 0:
+                print("[debug: {}] data not matched.".format(func_nm))
+                raise AssertionError
+
+        # 라벨에 대한 고민. 5 sampling_days에서 logy_20을 구하는 경우,
+        # 5일 뒤의 logy_20일지 20일 뒤의 logy_20일지..
+        # 첫번째의 경우 label[::k_days], 두번째의 경우 label[::n]
+        return feature[::self.sampling_days], label[:(n+1):n]
+
+    def calc_features(self, log_p_arr, transpose=False, debug=False):
+        if transpose:
+            log_p_arr = np.transpose(log_p_arr)
+
+        # log_p_arr shape : (days per each date, codes_list)
+        features_dict = dict()
+        labels_dict = dict()
+        for func_nm in self.possible_func:
+            for n in [5, 10, 20, 60, 120]:
+                nm = '{}_{}'.format(func_nm, n)
+                features_dict[nm], labels_dict[nm] = self.calc_func(log_p_arr, nm, debug)
+
+        if transpose:
+            for key in features_dict.keys():
+                features_dict[key] = np.transpose(features_dict[key])
+
+            for key in labels_dict.keys():
+                labels_dict[key] = np.transpose(labels_dict[key])
+
+
+        return features_dict, labels_dict
+
+
+
 
 
 class Feature:

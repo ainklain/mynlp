@@ -16,7 +16,6 @@ def positional_encoding(dim, sentence_length):
     encoded_vec[1::2] = np.cos(encoded_vec[1::2])
     return tf.constant(encoded_vec.reshape([sentence_length, dim]), dtype=tf.float32)
 
-@tf.function
 def layer_norm(inputs, eps=1e-6):
     # LayerNorm(x + Sublayer(x))
     feature_shape = inputs.get_shape()[-1:]

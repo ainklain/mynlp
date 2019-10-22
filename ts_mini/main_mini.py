@@ -1,20 +1,20 @@
 
-from ts_mini import config_mini, model_mini, features_mini, data_process_v2_0_mini
+from ts_mini import config_mini, model_mini, features_mini, data_process_v2_1_mini
 from ts_mini.config_mini import Config
 from ts_mini.model_mini import TSModel
 from ts_mini.features_mini import Feature
-from ts_mini.data_process_v2_0_mini import DataScheduler
+from ts_mini.data_process_v2_1_mini import DataScheduler
 
 import os
 import numpy as np
 
 from importlib import reload
 reload(features_mini)
-reload(data_process_v2_0_mini)
+reload(data_process_v2_1_mini)
 
 
 def main(k_days, pred, univ_type, balancing_method):
-    # k_days = 5; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing'
+    # k_days = 20; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing'
     ts_configs = Config()
     ts_configs.set_kdays(k_days, pred=pred)
     if k_days == 5:
@@ -23,7 +23,7 @@ def main(k_days, pred, univ_type, balancing_method):
         ts_configs.m_days = 120
 
     ts_configs.balancing_method = balancing_method
-    ts_configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_sizeadj_decay_002'.format(k_days, univ_type, balancing_method, pred)  #: kr every
+    ts_configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_sizeadj_decay_000'.format(k_days, univ_type, balancing_method, pred)  #: kr every
     ts_configs.train_steps = 50
     ts_configs.eval_steps = 50
     ts_configs.early_stopping_count = 5
