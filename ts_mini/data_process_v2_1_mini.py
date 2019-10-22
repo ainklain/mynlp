@@ -401,23 +401,34 @@ class DataGeneratorDynamic:
                 self.data_code = pd.read_csv('./data/kr_sizeinfo_90.csv')
                 self.data_code = self.data_code[self.data_code.infocode > 0]
             elif univ_type == 'selected':
+                # selected universe (monthly)
+                univ = pd.read_csv('./data/kr_univ_monthly.csv')
+                univ = univ[univ.infocode > 0]
+
+                # month end / year end mapping table
+                date_mapping = pd.read_csv('./data/date.csv')
+                univ_mapping = pd.merge(univ, date_mapping, left_on='eval_d', right_on='work_m')
+
                 # size_data = pd.read_csv('./data/kr_sizeinfo_90.csv')
-                size_data = pd.read_csv('./data/kr_mktcap_daily.csv')
-                size_data.columns = ['eval_d', 'infocode', 'mktcap', 'size_port']
-                size_data = size_data[size_data.infocode > 0]
-                size_data['mktcap'] = size_data['mktcap'] / 1000.
-                date_ = pd.read_csv('./data/date.csv')
-                data_code = pd.read_csv('./data/kr_univ_monthly.csv')
-                data_code = data_code[data_code.infocode > 0]
+                if os.path.exists('./data/kr_mktcap_daily.csv'):
+                    # daily basis
+                    size_data = pd.read_csv('./data/kr_mktcap_daily.csv')
+                    size_data.columns = ['eval_d', 'infocode', 'mktcap', 'size_port']
+                    univ_w_size = pd.merge(univ_mapping, size_data,
+                                           left_on=['infocode', 'work_m'],
+                                           right_on=['infocode', 'eval_d'])
+                else:
+                    # year-end basis
+                    size_data = pd.read_csv('./data/kr_sizeinfo_90.csv')
+                    univ_w_size = pd.merge(univ_mapping, size_data,
+                                           left_on=['infocode', 'eval_y'],
+                                           right_on=['infocode', 'eval_d'])
 
-                w_date = pd.merge(data_code, date_, left_on='eval_d', right_on='work_m')
-                # data_code_w_size = pd.merge(w_date, size_data, left_on=['infocode', 'eval_y'], right_on=['infocode', 'eval_d'])
-                data_code_w_size = pd.merge(w_date, size_data, left_on=['infocode', 'work_m'], right_on=['infocode', 'eval_d'])
-                self.data_code = data_code_w_size.ix[:, ['eval_m', 'infocode', 'size_port', 'mktcap']]
-                self.data_code.columns = ['eval_d', 'infocode', 'size_port', 'mktcap']
+                univ_w_size = univ_w_size[univ_w_size.infocode > 0]
+                univ_w_size['mktcap'] = univ_w_size['mktcap'] / 1000.
+                self.univ = univ_w_size.ix[:, ['eval_m', 'infocode', 'size_port', 'mktcap']]
+                self.univ.columns = ['eval_d', 'infocode', 'size_port', 'mktcap']
                 self.size_data = size_data
-
-            self.base_d = None
 
             self.features_cls = features_cls
 
@@ -428,7 +439,8 @@ class DataGeneratorDynamic:
         features_cls = self.features_cls
 
         base_d = date_[date_i]
-        size_df = self.size_data[self.size_data.eval_d == base_d][['infocode', 'mktcap']].set_index('infocode')
+        size_d = self.size_data.eval_d[self.size_data.eval_d <= base_d].max()
+        size_df = self.size_data[self.size_data.eval_d == size_d][['infocode', 'mktcap']].set_index('infocode')
 
         # set local parameters
         m_days = features_cls.m_days

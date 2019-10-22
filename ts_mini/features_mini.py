@@ -83,6 +83,7 @@ class FeatureNew:
     def __init__(self, configs):
         self.name = configs.generate_name()
         self.calc_length = configs.calc_length
+        self.calc_length_label = configs.calc_length_label
         self.m_days = configs.m_days
         self.k_days = configs.k_days
         self.delay_days = configs.delay_days
@@ -90,11 +91,17 @@ class FeatureNew:
         self.possible_func = ['logy', 'std', 'stdnew', 'pos', 'mdd', 'fft']
 
     def split_data_label(self, data_arr):
+        # log_p_arr shape : (m_days + calc_len_label + 1, all dates)
         # log_p_arr shape : (m_days + k_days + 1, all dates)
-        assert len(data_arr) == self.m_days + self.k_days + self.delay_days + 1
+        # assert len(data_arr) == self.m_days + self.k_days + self.delay_days + 1
+        assert len(data_arr) >= self.m_days + 1
 
         data_ = data_arr[:(self.m_days + 1)]
-        label_ = data_arr[self.m_days:][self.delay_days:]
+        if len(data_arr) < self.m_days + self.k_days + self.delay_days + 1:
+            print('[FeatureNew.split_data_label] Not enough data for making label.')
+            label_ = None
+        else:
+            label_ = data_arr[self.m_days:][self.delay_days:]
         return data_, label_
 
     def calc_func(self, arr, feature_nm, debug=False):
@@ -106,10 +113,11 @@ class FeatureNew:
         calc_length, m_days, k_days, delay_days = self.calc_length, self.m_days, self.k_days, self.delay_days
         k_days_adj = k_days + delay_days
 
-        assert arr.shape[0] == calc_length + m_days + k_days_adj + 1
+        # assert arr.shape[0] == calc_length + m_days + k_days_adj + 1
+        assert arr.shape[0] >= calc_length + m_days + 1
         if debug:
             # label 데이터 제거 후 산출
-            arr_debug = arr[:-k_days_adj]
+            arr_debug = arr[:(calc_length + m_days + 1)]
 
         # arr default: logp
         if func_nm == 'logy':
@@ -135,7 +143,7 @@ class FeatureNew:
                 result_debug = mdd_nd(arr_debug[calc_length:], n)
         elif func_nm == 'fft':
             # arr: data without calc data
-            result = fft(arr[calc_length:], n, m_days, k_days_adj)
+            result = fft(arr[calc_length:][:(m_days + k_days_adj + 1)], n, m_days, k_days_adj)
             if debug:
                 result_debug = fft(arr_debug[calc_length:], n, m_days, k_days_adj)
 
@@ -149,7 +157,20 @@ class FeatureNew:
         # 라벨에 대한 고민. 5 sampling_days에서 logy_20을 구하는 경우,
         # 5일 뒤의 logy_20일지 20일 뒤의 logy_20일지..
         # 첫번째의 경우 label[::k_days], 두번째의 경우 label[::n]
-        return feature[::self.sampling_days], label[:(n+1):n]
+        if label is None:
+            label_ = None
+
+        if func_nm == 'fft':
+            if len(label) <= k_days:
+                label_ = None
+            else:
+                label_ = label[k_days]
+        else:
+            if len(label) <= n:
+                label_ = None
+            else:
+                label_ = label[n]
+        return feature[::self.sampling_days], label_
 
     def calc_features(self, log_p_arr, transpose=False, debug=False):
         if transpose:
@@ -159,9 +180,14 @@ class FeatureNew:
         features_dict = dict()
         labels_dict = dict()
         for func_nm in self.possible_func:
-            for n in [5, 10, 20, 60, 120]:
-                nm = '{}_{}'.format(func_nm, n)
-                features_dict[nm], labels_dict[nm] = self.calc_func(log_p_arr, nm, debug)
+            if func_nm == 'fft':
+                for n in [3, 6, 100]:
+                    nm = '{}_{}'.format(func_nm, n)
+                    features_dict[nm], labels_dict[nm] = self.calc_func(log_p_arr, nm, debug)
+            else:
+                for n in [5, 10, 20, 60, 120]:
+                    nm = '{}_{}'.format(func_nm, n)
+                    features_dict[nm], labels_dict[nm] = self.calc_func(log_p_arr, nm, debug)
 
         if transpose:
             for key in features_dict.keys():
@@ -169,7 +195,6 @@ class FeatureNew:
 
             for key in labels_dict.keys():
                 labels_dict[key] = np.transpose(labels_dict[key])
-
 
         return features_dict, labels_dict
 
