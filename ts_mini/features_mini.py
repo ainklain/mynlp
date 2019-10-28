@@ -15,7 +15,9 @@ def log_y_nd(log_p, n):
 
 
 def fft(log_p, n, m_days, k_days):
-    assert (len(log_p) == (m_days + k_days + 1)) or (len(log_p) == (m_days + 1))
+    assert (len(log_p) == (m_days + k_days + 1)) or (len(log_p) >= (m_days + 1))
+    if (len(log_p) < (m_days + k_days + 1)) and (len(log_p) > (m_days + 1)):
+        log_p = log_p[:(m_days + 1)]
 
     log_p_fft = np.fft.fft(log_p[:(m_days + 1)], axis=0)
     log_p_fft[n:-n] = 0
@@ -88,6 +90,7 @@ class FeatureNew:
         self.k_days = configs.k_days
         self.delay_days = configs.delay_days
         self.sampling_days = configs.sampling_days
+        # 아래 함수 추가할때마다 추가해줄것...
         self.possible_func = ['logy', 'std', 'stdnew', 'pos', 'mdd', 'fft']
 
     def split_data_label(self, data_arr):
@@ -105,7 +108,6 @@ class FeatureNew:
         return data_, label_
 
     def calc_func(self, arr, feature_nm, debug=False):
-        # 아래 함수 추가할때마다 추가해줄것...
 
         func_nm, nd = feature_nm.split('_')
         n = int(nd)
@@ -159,8 +161,8 @@ class FeatureNew:
         # 첫번째의 경우 label[::k_days], 두번째의 경우 label[::n]
         if label is None:
             label_ = None
-
-        if func_nm == 'fft':
+        # label 산출을 위한 최소한의 데이터가 없는 경우 (ex. predict)
+        elif func_nm == 'fft':
             if len(label) <= k_days:
                 label_ = None
             else:

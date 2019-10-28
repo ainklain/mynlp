@@ -1,87 +1,80 @@
 
 import pandas as pd
+import pickle
 import tensorflow as tf
+import time
 import numpy as np
 import os
 
 
 class DataScheduler:
     def __init__(self, configs, features_cls):
+        self.data_generator = DataGeneratorDynamic(features_cls, configs.data_type, configs.univ_type)
+
+        self.configs = configs
+        self.features_cls = features_cls
+
+        self._initialize(configs)
+
+    def _initialize(self, configs):
+        self.base_idx = configs.train_set_length
+        self.train_begin_idx = 0
+        self.eval_begin_idx = int(configs.train_set_length * configs.trainset_rate)
+        self.test_begin_idx = self.base_idx - configs.m_days
+        self.test_end_idx = self.base_idx + configs.retrain_days
+
+        self._make_path(configs)
+
+    def _make_path(self, configs):
+        # data path for fetching data
+        self.data_path = os.path.join(os.getcwd(), 'data', '{}_{}'.format(configs.univ_type, configs.sampling_days))
+        os.makedirs(self.data_path, exist_ok=True)
         # make a directory for outputs
         self.data_out_path = os.path.join(os.getcwd(), configs.data_out_path)
         os.makedirs(self.data_out_path, exist_ok=True)
 
-        # self.data_generator = DataGenerator(data_type)    # infocode
-        self.data_generator = DataGeneratorDynamic(features_cls, configs.data_type, configs.univ_type)
-        self.train_set_length = configs.train_set_length
-        self.retrain_days = configs.retrain_days
-        self.m_days = configs.m_days
-        self.k_days = configs.k_days
-        self.sampling_days = configs.sampling_days
-        self.balancing_method = configs.balancing_method
-
-        self.train_batch_size = configs.batch_size
-        self.eval_batch_size = configs.eval_batch_size
-        self.trainset_rate = configs.trainset_rate
-
-        self.features_cls = features_cls
-        self.buffer = dict()
-
-        self._initialize()
-
-    def _initialize(self):
-        self.base_idx = self.train_set_length
-
-        self.train_begin_idx = 0
-        self.eval_begin_idx = int(self.train_set_length * self.trainset_rate)
-        self.test_begin_idx = self.base_idx - self.m_days
-        self.test_end_idx = self.base_idx + self.retrain_days
-
     def set_idx(self, base_idx):
-        self.base_idx = base_idx
+        c = self.configs
 
-        self.train_begin_idx = np.max([0, base_idx - self.train_set_length])
-        self.eval_begin_idx = int(self.train_set_length * self.trainset_rate) + np.max([0, base_idx - self.train_set_length])
-        self.test_begin_idx = self.base_idx - self.m_days
-        self.test_end_idx = self.base_idx + self.retrain_days
+        self.base_idx = base_idx
+        self.train_begin_idx = np.max([0, base_idx - c.train_set_length])
+        self.eval_begin_idx = int(c.train_set_length * c.trainset_rate) + np.max([0, base_idx - c.train_set_length])
+        self.test_begin_idx = base_idx - c.m_days
+        self.test_end_idx = base_idx + c.retrain_days
 
     def get_data_params(self, mode='train'):
+        c = self.configs
         dg = self.data_generator
         data_params = dict()
-        data_params['sampling_days'] = self.sampling_days
-        data_params['m_days'] = self.m_days
-        data_params['k_days'] = self.k_days
-        data_params['calc_length'] = 250
-        data_params['univ_idx'] = self.test_begin_idx
-        # data_params['univ_idx'] = None
+
         if mode == 'train':
-            start_idx = self.train_begin_idx + self.m_days
-            end_idx = self.eval_begin_idx - self.k_days
+            start_idx = self.train_begin_idx + c.m_days
+            end_idx = self.eval_begin_idx - c.k_days
             data_params['balance_class'] = True
             data_params['label_type'] = 'trainable_label'   # trainable: calc_length 반영
             decaying_factor = 0.99   # 기간별 샘플 중요도
         elif mode == 'eval':
-            start_idx = self.eval_begin_idx + self.m_days
-            end_idx = self.test_begin_idx - self.k_days
+            start_idx = self.eval_begin_idx + c.m_days
+            end_idx = self.test_begin_idx - c.k_days
             data_params['balance_class'] = True
             data_params['label_type'] = 'trainable_label'   # trainable: calc_length 반영
             decaying_factor = 1.   # 기간별 샘플 중요도
         elif mode == 'test':
-            start_idx = self.test_begin_idx + self.m_days
+            start_idx = self.test_begin_idx + c.m_days
             # start_idx = self.test_begin_idx
             end_idx = self.test_end_idx
             data_params['balance_class'] = False
             data_params['label_type'] = 'test_label'        # test: 예측하고자 하는 것만 반영 (k_days)
             decaying_factor = 1.   # 기간별 샘플 중요도
         elif mode == 'test_insample':
-            start_idx = self.train_begin_idx + self.m_days
+            start_idx = self.train_begin_idx + c.m_days
             # start_idx = self.test_begin_idx
-            end_idx = self.test_begin_idx - self.k_days
+            end_idx = self.test_begin_idx - c.k_days
             data_params['balance_class'] = False
             data_params['label_type'] = 'test_label'        # test: 예측하고자 하는 것만 반영 (k_days)
             decaying_factor = 1.   # 기간별 샘플 중요도
         elif mode == 'predict':
-            start_idx = self.test_begin_idx + self.m_days
+            start_idx = self.test_begin_idx + c.m_days
             # start_idx = self.test_begin_idx
             end_idx = self.test_end_idx
             data_params['balance_class'] = False
@@ -94,32 +87,67 @@ class DataScheduler:
 
         return start_idx, end_idx, data_params, decaying_factor
 
+    def _fetch_data(self, date_i):
+        dg = self.data_generator
+        data_path = self.data_path
+        key_list = self.configs.key_list
+        configs = self.configs
+
+        file_nm = os.path.join(self.data_path, '{}.pkl'.format(date_i))
+        if os.path.exists(file_nm):
+            result = pickle.load(open(file_nm, 'rb'))
+        else:
+            result = dg.sample_data(date_i)
+            if result is False:
+                return None
+
+            pickle.dump(result, open(os.path.join(data_path, '{}.pkl'.format(date_i)), 'wb'))
+
+        features_dict, labels_dict, spot_dict = result
+
+        n_assets = len(spot_dict['asset_list'])
+        n_features = len(key_list)
+        M = configs.m_days // configs.sampling_days + 1
+
+        question = np.stack([features_dict[key] for key in key_list], axis=-1)
+        question = np.transpose(question, axes=(1, 0, 2))
+        assert question.shape == (n_assets, M, n_features)
+
+        answer = np.zeros([n_assets, 2, n_features], dtype=np.float32)
+
+        answer[:, 0, :] = question[:, -1, :]  # temporary
+        answer[:, 1, :] = np.stack(
+            [labels_dict[key] if labels_dict[key] is not None else np.zeros(n_assets) for key in key_list],
+            axis=-1)
+
+        return question[:], answer[:, :-1, :], answer[:, 1:, :], spot_dict
+
     def _dataset(self, mode='train'):
-        input_enc, output_dec, target_dec = [], [], []  # test/predict 인경우 list, train/eval인 경우 array
-        self.date_idx = []
-        features_list = []
+        c = self.configs
+
+        input_enc, output_dec, target_dec, additional_info = [], [], [], []
         additional_infos_list = []  # test/predict 인경우 list, train/eval인 경우 dict
-        sampling_wgt = []  # time decaying factor
         start_idx, end_idx, data_params, decaying_factor = self.get_data_params(mode)
+        features_list = c.key_list
 
-        n_loop = np.ceil((end_idx - start_idx) / self.sampling_days)
-        for i, d in enumerate(range(start_idx, end_idx, self.sampling_days)):
-            if d in self.buffer.keys():
-                tmp_ie, tmp_od, tmp_td, features_list, additional_info = self.buffer[d]
-            else:
-                if self.balancing_method in ['once', 'nothing']:
-                    _sampled_data = self.data_generator.sample_inputdata_split_new3(d, **data_params)
-                elif self.balancing_method == 'each':
-                    _sampled_data = self.data_generator.sample_inputdata_split_new2(d, **data_params)
-                else:
-                    raise NotImplementedError
+        idx_balance = c.key_list.index(c.balancing_key)
 
-                if _sampled_data is False:
-                    continue
-                else:
-                    tmp_ie, tmp_od, tmp_td, features_list, additional_info = _sampled_data
-                    additional_info['importance_wgt'] = np.array([decaying_factor ** (n_loop - i - 1) for _ in range(len(tmp_ie))], dtype=np.float32)
-                    self.buffer[d] = [tmp_ie, tmp_od, tmp_td, features_list, additional_info]
+        n_loop = np.ceil((end_idx - start_idx) / c.sampling_days)
+        for i, d in enumerate(range(start_idx, end_idx, c.sampling_days)):
+            fetch_data = self._fetch_data(d)
+            if fetch_data is None:
+                continue
+
+            tmp_ie, tmp_od, tmp_td, additional_info = fetch_data
+            additional_info['importance_wgt'] = np.array([decaying_factor ** (n_loop - i - 1)
+                                                          for _ in range(len(tmp_ie))], dtype=np.float32)
+
+            if data_params['balance_class'] is True and c.balancing_method == 'each':
+                idx_bal = self.balanced_index(tmp_td[:, 0, idx_balance])
+                tmp_ie, tmp_od, tmp_td = tmp_ie[idx_bal], tmp_od[idx_bal], tmp_td[idx_bal]
+                additional_info['size_factor'] = additional_info['size_factor'].iloc[idx_bal]
+                additional_info['size_factor_mktcap'] = additional_info['size_factor_mktcap'].iloc[idx_bal]
+                additional_info['importance_wgt'] = additional_info['importance_wgt'][idx_bal]
 
             input_enc.append(tmp_ie)
             output_dec.append(tmp_od)
@@ -135,41 +163,43 @@ class DataScheduler:
             output_dec = np.concatenate(output_dec, axis=0)
             target_dec = np.concatenate(target_dec, axis=0)
 
-            size_value = np.concatenate([additional_info['size_value'] for additional_info in additional_infos_list], axis=0)
-            mktcap = np.concatenate([additional_info['mktcap'] for additional_info in additional_infos_list], axis=0)
+            size_factor = np.concatenate([additional_info['size_factor'] for additional_info in additional_infos_list], axis=0)
+            size_factor_mktcap = np.concatenate([additional_info['size_factor_mktcap'] for additional_info in additional_infos_list], axis=0)
             importance_wgt = np.concatenate([additional_info['importance_wgt'] for additional_info in additional_infos_list], axis=0)
 
-            if self.balancing_method == 'once':
-                idx_label = features_list.index(self.features_cls.label_feature)
-                where_p = (np.squeeze(target_dec)[:, idx_label] > 0)
-                where_n = (np.squeeze(target_dec)[:, idx_label] <= 0)
-                n_max = np.max([np.sum(where_p), np.sum(where_n)])
-                idx_pos = np.concatenate([np.random.choice(np.where(where_p)[0], np.sum(where_p), replace=False),
-                                          np.random.choice(np.where(where_p)[0], n_max - np.sum(where_p),
-                                                           replace=True)])
-                idx_neg = np.concatenate([np.random.choice(np.where(where_n)[0], np.sum(where_n), replace=False),
-                                          np.random.choice(np.where(where_n)[0], n_max - np.sum(where_n),
-                                                           replace=True)])
-
-                idx_bal = np.concatenate([idx_pos, idx_neg])
+            if data_params['balance_class'] is True and c.balancing_method == 'once':
+                idx_bal = self.balanced_index(target_dec[:, 0, idx_balance])
                 input_enc, output_dec, target_dec = input_enc[idx_bal], output_dec[idx_bal], target_dec[idx_bal]
-                additional_infos['size_value'] = size_value[idx_bal]
-                additional_infos['mktcap'] = mktcap[idx_bal]
-                importance_wgt['importance_wgt'] = importance_wgt[idx_bal]
+                additional_infos['size_factor'] = size_factor[idx_bal]
+                additional_infos['size_factor_mktcap'] = size_factor_mktcap[idx_bal]
+                additional_infos['importance_wgt'] = importance_wgt[idx_bal]
             else:
-                additional_infos['size_value'] = size_value[:]
-                additional_infos['mktcap'] = mktcap[:]
+                additional_infos['size_factor'] = size_factor[:]
+                additional_infos['size_factor_mktcap'] = size_factor_mktcap[:]
                 additional_infos['importance_wgt'] = importance_wgt[:]
         else:
             additional_infos = additional_infos_list
 
+        start_date = self.date_[start_idx]
+        end_date = self.date_[end_idx]
 
-        start_date = self.data_generator.date_[start_idx]
-        end_date = self.data_generator.date_[end_idx]
         return input_enc, output_dec, target_dec, features_list, additional_infos, start_date, end_date
 
-    def balancing_data(self):
-        pass
+    def balanced_index(self, balance_arr):
+        where_p = (balance_arr > 0)
+        where_n = (balance_arr < 0)
+        if np.min([np.sum(where_p), np.sum(where_n)]) == 0:
+            return np.arange(len(balance_arr))
+            # return np.array(np.ones_like(balance_arr), dtype=bool)
+
+        n_max = np.max([np.sum(where_p), np.sum(where_n)])
+        idx_pos = np.concatenate([np.random.choice(np.where(where_p)[0], np.sum(where_p), replace=False),
+                                  np.random.choice(np.where(where_p)[0], n_max - np.sum(where_p), replace=True)])
+        idx_neg = np.concatenate([np.random.choice(np.where(where_n)[0], np.sum(where_n), replace=False),
+                                  np.random.choice(np.where(where_n)[0], n_max - np.sum(where_n), replace=True)])
+
+        idx_bal = np.concatenate([idx_pos, idx_neg])
+        return idx_bal
 
     def train(self,
               model,
@@ -205,9 +235,9 @@ class DataScheduler:
         assert np.sum(train_input_enc[:, -1, :] - train_output_dec[:, 0, :]) == 0
         assert np.sum(eval_input_enc[:, -1, :] - eval_output_dec[:, 0, :]) == 0
 
-        train_size_value = train_add_infos['size_value']
+        train_size_value = train_add_infos['size_factor']
         train_importance_wgt = train_add_infos['importance_wgt']
-        eval_size_value = eval_add_infos['size_value']
+        eval_size_value = eval_add_infos['size_factor']
         eval_importance_wgt = eval_add_infos['importance_wgt']
 
         # train_size_value = np.concatenate([add_info['size_value'] for add_info in train_add_infos], axis=0)
@@ -451,18 +481,18 @@ class DataGeneratorDynamic:
 
 
         len_data = calc_length + m_days
-        len_label = calc_length_label
+        len_label = calc_length_label + delay_days
         # k_days_adj = k_days + delay_days
         # len_label = k_days_adj
 
-        start_d = date_[(date_i - len_data)]
+        start_d = date_[max(0, date_i - len_data)]
         end_d = date_[min(date_i + len_label, len(date_) - 1)]
 
         # data cleansing
         select_where = ((df_pivoted.index >= start_d) & (df_pivoted.index <= end_d))
         df_logp = cleansing_missing_value(df_pivoted.ix[select_where, :], n_allow_missing_value=5, to_log=True)
 
-        if df_logp.empty:
+        if df_logp.empty or len(df_logp) <= calc_length + m_days:
             return False
 
         univ_list = sorted(list(set.intersection(set(df_logp.columns), set(size_df.index))))

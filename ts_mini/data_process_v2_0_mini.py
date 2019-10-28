@@ -18,7 +18,7 @@ class DataScheduler:
         os.makedirs(self.data_out_path, exist_ok=True)
 
         # self.data_generator = DataGenerator(data_type)    # infocode
-        self.data_generator = DataGeneratorDynamic(features_cls, data_type, univ_type=univ_type, use_beta=configs.use_beta, delayed_days=configs.delayed_days)    # infocode
+        self.data_generator = DataGeneratorDynamic(features_cls, data_type, univ_type=univ_type, use_beta=configs.use_beta, delayed_days=configs.delay_days)    # infocode
 
         self.train_set_length = configs.train_set_length
         self.retrain_days = configs.retrain_days

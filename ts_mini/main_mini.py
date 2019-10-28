@@ -1,16 +1,16 @@
 
-from ts_mini import config_mini, model_mini, features_mini, data_process_v2_1_mini
+from ts_mini import config_mini, model_mini, features_mini, data_process_v2_0_mini
 from ts_mini.config_mini import Config
 from ts_mini.model_mini import TSModel
 from ts_mini.features_mini import Feature
-from ts_mini.data_process_v2_1_mini import DataScheduler
+from ts_mini.data_process_v2_0_mini import DataScheduler
 
 import os
 import numpy as np
 
 from importlib import reload
 reload(features_mini)
-reload(data_process_v2_1_mini)
+reload(data_process_v2_0_mini)
 
 
 def main(k_days, pred, univ_type, balancing_method):

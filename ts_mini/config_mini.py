@@ -44,6 +44,25 @@ class Config:
         self.f_name = 'ts_model_v1.0'
         self.tokenize_as_morph = False
 
+    @property
+    def balancing_key(self):
+        return 'pos_{}'.format(self.k_days)
+
+    @property
+    def key_list(self):
+        key_list = []
+        if self.k_days == 20:
+            key_list += ['logy_{}'.format(n) for n in [20, 60, 120]]
+            key_list += ['std_{}'.format(n) for n in [20, 60, 120]]
+            key_list += ['mdd_{}'.format(n) for n in [20, 60, 120]]
+            key_list += ['stdnew_{}'.format(n) for n in [20, 60, 120]]
+            key_list += ['pos_{}'.format(n) for n in [20, 60]]
+
+            # label_keys = ['logy_{}'.format(n) for n in [20, 60, 120]]
+            # label_keys += ['stdnew_{}'.format(n) for n in [20, 60, 120]]
+            # label_keys += ['pos_{}'.format(n) for n in [20, 60]]
+        return key_list
+
     def set_features_info(self, k_days=5):
         if k_days == 5:
         # self.model_predictor_list = ['logy', 'pos_20', 'pos_60', 'pos_120', 'std', 'mdd', 'fft']
