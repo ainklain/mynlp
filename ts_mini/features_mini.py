@@ -80,7 +80,6 @@ def cleansing_missing_value(df_selected, n_allow_missing_value=5, to_log=True):
     return df
 
 
-
 class FeatureNew:
     def __init__(self, configs):
         self.name = configs.generate_name()
@@ -92,6 +91,8 @@ class FeatureNew:
         self.sampling_days = configs.sampling_days
         # 아래 함수 추가할때마다 추가해줄것...
         self.possible_func = ['logy', 'std', 'stdnew', 'pos', 'mdd', 'fft']
+        # v1.0 호환
+        self.features_structure = configs.features_structure
 
     def split_data_label(self, data_arr):
         # log_p_arr shape : (m_days + calc_len_label + 1, all dates)
@@ -200,6 +201,28 @@ class FeatureNew:
 
         return features_dict, labels_dict
 
+    def labels_for_mtl(self, features_list, labels, size_value, importance_wgt):
+        labels_mtl = dict()
+        for cls in self.features_structure.keys():
+            for key in self.features_structure[cls].keys():
+                n_arr = self.features_structure[cls][key]
+                if cls == 'classification':    # classification
+                    for n in n_arr:
+                        feature_nm = '{}_{}'.format(key, n)
+                        labels_mtl[feature_nm] = np.stack([labels[:, :, features_list.index(feature_nm)] > 0,
+                                                           labels[:, :, features_list.index(feature_nm)] <= 0],
+                                                          axis=-1) * 1.
+                else:
+                    labels_mtl[key] = np.stack([labels[:, :, features_list.index("{}_{}".format(key, n))]
+                                                for n in n_arr], axis=-1)
+
+                    if key == 'cslogy':
+                        labels_mtl['cslogy_idx'] = [features_list.index("{}_{}".format(key, n)) for n in n_arr]
+
+        labels_mtl['size_value'] = size_value
+        labels_mtl['importance_wgt'] = importance_wgt
+
+        return labels_mtl
 
 
 

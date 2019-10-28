@@ -9,6 +9,7 @@ import time
 from ts_mini.config_mini import Config
 from ts_mini.features_mini import FeatureNew
 from ts_mini.data_process_v2_1_mini import DataGeneratorDynamic, DataScheduler
+from ts_mini.model_mini import TSModel
 
 configs = Config()
 features_cls = FeatureNew(configs)
@@ -19,6 +20,12 @@ features_cls = FeatureNew(configs)
 ds = DataScheduler(configs, features_cls)
 ds.set_idx(6500)
 trainset = ds._dataset('train')
+evalset = ds._dataset('eval')
+
+model = TSModel(configs, features_cls, weight_scheme=configs.weight_scheme)
+
+ds.train(model, trainset, evalset)
+
 
 
 

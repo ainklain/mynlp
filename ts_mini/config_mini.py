@@ -15,7 +15,7 @@ class Config:
         self.trainset_rate = 0.8
         self.cost_rate = 0.003
 
-        self.batch_size = 256
+        self.train_batch_size = 256
         self.eval_batch_size = 64
         self.train_steps = 200000
         self.eval_steps = 50
@@ -27,9 +27,10 @@ class Config:
         self.univ_type = 'selected'     # all / selected
         self.balancing_method = 'each'  # each / once / nothing
         self.data_type = 'kr_stock'
+        self.weight_scheme = 'mw'       # mw / ew
 
         # features info
-        self.set_features_info()
+        self.set_features_info(self.k_days)
 
         self.shuffle_seek = 1000
         # self.model_hidden_size = 128
@@ -50,17 +51,27 @@ class Config:
 
     @property
     def key_list(self):
-        key_list = []
-        if self.k_days == 20:
-            key_list += ['logy_{}'.format(n) for n in [20, 60, 120]]
-            key_list += ['std_{}'.format(n) for n in [20, 60, 120]]
-            key_list += ['mdd_{}'.format(n) for n in [20, 60, 120]]
-            key_list += ['stdnew_{}'.format(n) for n in [20, 60, 120]]
-            key_list += ['pos_{}'.format(n) for n in [20, 60]]
+        # key_list = []
+        # if self.k_days == 20:
+        #     key_list += ['logy_{}'.format(n) for n in [20, 60, 120]]
+        #     key_list += ['std_{}'.format(n) for n in [20, 60, 120]]
+        #     key_list += ['mdd_{}'.format(n) for n in [20, 60, 120]]
+        #     key_list += ['stdnew_{}'.format(n) for n in [20, 60, 120]]
+        #     key_list += ['pos_{}'.format(n) for n in [20, 60]]
 
             # label_keys = ['logy_{}'.format(n) for n in [20, 60, 120]]
             # label_keys += ['stdnew_{}'.format(n) for n in [20, 60, 120]]
             # label_keys += ['pos_{}'.format(n) for n in [20, 60]]
+        key_list = self._parse_features_structure()
+        return key_list
+
+    def _parse_features_structure(self):
+        key_list = []
+        for key_cls in self.features_structure.keys():
+            for subkey in self.features_structure[key_cls].keys():
+                for nd in self.features_structure[key_cls][subkey]:
+                    key_list.append("{}_{}".format(subkey, nd))
+
         return key_list
 
     def set_features_info(self, k_days=5):
@@ -105,21 +116,22 @@ class Config:
 
         elif k_days == 20:
             # self.model_predictor_list = ['logy', 'pos_20', 'pos_60', 'pos_120', 'std', 'mdd', 'fft']
-            self.model_predictor_list = ['logy', 'cslogy', 'csstd', 'std', 'stdnew', 'mdd', 'fft', 'pos_20', 'pos_60']
+            # self.model_predictor_list = ['logy', 'cslogy', 'csstd', 'std', 'stdnew', 'mdd', 'fft', 'pos_20', 'pos_60']
+            self.model_predictor_list = ['logy', 'std', 'stdnew', 'mdd', 'fft', 'pos_20', 'pos_60']
             # self.model_predictor_list = ['std']
 
             self.features_structure = \
                 {'regression':
-                     {'logy': [20, 60, 120, 250],
+                     {'logy': [20, 60, 120],
                       'std': [20, 60, 120],
                       'stdnew': [20, 60],
                       'mdd': [20, 60, 120],
                       'fft': [100, 3],
-                      'cslogy': [20, 60],
-                      'csstd': [20, 60],
+                      # 'cslogy': [20, 60],
+                      # 'csstd': [20, 60],
                       },
                  'classification':
-                     {'pos': [20, 60, 120, 250]}}
+                     {'pos': [20, 60, 120]}}
 
         self.embedding_size = 0
         for cls in self.features_structure.keys():
@@ -149,4 +161,4 @@ class Config:
 
     def generate_name(self):
         return "M{}_K{}_COST{}_BS{}_LR{}_BM{}_UT{}".format(self.m_days, self.k_days, self.cost_rate,
-                                                      self.batch_size, self.learning_rate, self.balancing_method, self.univ_type)
+                                                      self.train_batch_size, self.learning_rate, self.balancing_method, self.univ_type)

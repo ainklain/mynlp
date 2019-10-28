@@ -211,6 +211,8 @@ class DataScheduler:
               early_stopping_count=10,
               model_name='ts_model_v1.0'):
 
+        c = self.configs
+
         # make directories for graph results (both train and test one)
         train_out_path = os.path.join(self.data_out_path, model_name, '{}'.format(self.base_idx))
         os.makedirs(train_out_path, exist_ok=True)
@@ -250,13 +252,13 @@ class DataScheduler:
         #     train_new_output[:, 0, :] = train_output_dec[:, 0, :]
         #     eval_new_output[:, 0, :] = eval_output_dec[:, 0, :]
         # elif weight_scheme == 'mw':
-        train_new_output[:, 0, :] = train_output_dec[:, 0, :] + train_size_value[:, 0, :]
-        eval_new_output[:, 0, :] = eval_output_dec[:, 0, :] + eval_size_value[:, 0, :]
+        train_new_output[:, 0, :] = train_output_dec[:, 0, :] + train_size_value.reshape([-1, 1])
+        eval_new_output[:, 0, :] = eval_output_dec[:, 0, :] + eval_size_value.reshape([-1, 1])
 
-        train_dataset = dataset_process(train_input_enc, train_new_output, train_target_dec, train_size_value, batch_size=self.train_batch_size, importance_wgt=train_importance_wgt)
-        eval_dataset = dataset_process(eval_input_enc, eval_new_output, eval_target_dec, eval_size_value, batch_size=self.eval_batch_size, importance_wgt=eval_importance_wgt, iter_num=1)
-        print("train step: {}  eval step: {}".format(len(train_input_enc) // self.train_batch_size,
-                                                     len(eval_input_enc) // self.eval_batch_size))
+        train_dataset = dataset_process(train_input_enc, train_new_output, train_target_dec, train_size_value, batch_size=c.train_batch_size, importance_wgt=train_importance_wgt)
+        eval_dataset = dataset_process(eval_input_enc, eval_new_output, eval_target_dec, eval_size_value, batch_size=c.eval_batch_size, importance_wgt=eval_importance_wgt, iter_num=1)
+        print("train step: {}  eval step: {}".format(len(train_input_enc) // c.train_batch_size,
+                                                     len(eval_input_enc) // c.eval_batch_size))
         for i, (features, labels, size_values, importance_wgt) in enumerate(train_dataset.take(train_steps)):
             print_loss = False
             if i % save_steps == 0:
@@ -264,7 +266,7 @@ class DataScheduler:
 
             if i % eval_steps == 0:
                 print_loss = True
-                model.evaluate_mtl(eval_dataset, features_list, steps=len(eval_input_enc) // self.eval_batch_size)
+                model.evaluate_mtl(eval_dataset, features_list, steps=len(eval_input_enc) // c.eval_batch_size)
 
                 print("[t: {} / i: {}] min_eval_loss:{} / count:{}".format(self.base_idx, i, model.eval_loss, model.eval_count))
                 if model.eval_count >= early_stopping_count:
