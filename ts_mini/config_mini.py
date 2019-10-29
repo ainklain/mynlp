@@ -12,7 +12,7 @@ class Config:
         self.trainset_rate = 0.8
         self.cost_rate = 0.003
 
-        self.batch_size = 256
+        self.batch_size = 128
         self.train_steps = 200000
         self.eval_steps = 50
         self.early_stopping_count = 10
@@ -82,8 +82,9 @@ class Config:
 
         elif k_days == 20:
             # self.model_predictor_list = ['logy', 'pos_20', 'pos_60', 'pos_120', 'std', 'mdd', 'fft']
-            self.model_predictor_list = ['logy', 'cslogy', 'csstd', 'std', 'stdnew', 'mdd', 'fft', 'pos_20', 'pos_60']
+            # self.model_predictor_list = ['logy', 'cslogy', 'csstd', 'std', 'stdnew', 'mdd', 'fft', 'pos_20', 'pos_60']
             # self.model_predictor_list = ['std']
+            self.model_predictor_list = ['cslogy', 'csstd', 'pos_20']
 
             self.features_structure = \
                 {'regression':

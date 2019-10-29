@@ -95,7 +95,7 @@ class DataScheduler:
         else:
             raise NotImplementedError
 
-        print("start idx:{} ({}) / end idx: {} ({})".format(start_idx, dg.date_[start_idx], end_idx, dg.date_[end_idx]))
+        # print("start idx:{} ({}) / end idx: {} ({})".format(start_idx, dg.date_[start_idx], end_idx, dg.date_[end_idx]))
 
         return start_idx, end_idx, data_params, decaying_factor
 
