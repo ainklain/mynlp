@@ -130,8 +130,8 @@ class Config:
                       'stdnew': [20, 60],
                       'mdd': [20, 60, 120],
                       'fft': [100, 3],
-                      # 'cslogy': [20, 60],
-                      # 'csstd': [20, 60],
+                      'cslogy': [20, 60],
+                      'csstd': [20, 60],
                       },
                  'classification':
                      {'pos': [20, 60, 120]}}

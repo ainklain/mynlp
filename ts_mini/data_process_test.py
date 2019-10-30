@@ -110,11 +110,33 @@ for date_i in range(4000, len(dg.date_), configs.sampling_days):
     file_nm = os.path.join(data_path, '{}.pkl'.format(date_i))
     if os.path.exists(file_nm):
         result = pickle.load(open(file_nm, 'rb'))
+        ori_pf = dg.features_cls.possible_func[:]
+        dg.features_cls.possible_func = ['cslogy', 'csstd']
+        result2 = dg.sample_data(date_i)
+        dg.features_cls.possible_func = ori_pf
+
+        features_dict, labels_dict, spot_dict = result
+        features_dict2, labels_dict2, spot_dict2 = result2
+        for key in spot_dict.keys():
+            if key == 'asset_list':
+                assert spot_dict[key] == spot_dict2[key]
+            else:
+                assert (spot_dict[key].values == spot_dict2[key].values).all()
+
+        for key in features_dict2.keys():
+            features_dict[key] = features_dict2[key]
+            labels_dict[key] = labels_dict2[key]
+
+        pickle.dump((features_dict, labels_dict, spot_dict), open(os.path.join(data_path, '{}.pkl'.format(date_i)), 'wb'))
     else:
         result = dg.sample_data(date_i)
         if result is False:
             continue
         pickle.dump(result, open(os.path.join(data_path, '{}.pkl'.format(date_i)), 'wb'))
+
+    loop_et = time.time()
+
+    print('[{} / {}] 1loop: {} sec'.format(date_i, dg.date_[date_i], loop_et - loop_st))
 
     features_dict, labels_dict, spot_dict = result
 
@@ -137,9 +159,6 @@ for date_i in range(4000, len(dg.date_), configs.sampling_days):
     target_dec.append(answer[:, 1:, :])
     additional_info.append(spot_dict)
 
-    loop_et = time.time()
-
-    print('[{} / {}] 1loop: {} sec'.format(date_i, dg.date_[date_i], loop_et - loop_st))
 
 
 

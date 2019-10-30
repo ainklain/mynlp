@@ -90,7 +90,7 @@ class FeatureNew:
         self.delay_days = configs.delay_days
         self.sampling_days = configs.sampling_days
         # 아래 함수 추가할때마다 추가해줄것...
-        self.possible_func = ['logy', 'std', 'stdnew', 'pos', 'mdd', 'fft']
+        self.possible_func = ['logy', 'std', 'stdnew', 'pos', 'mdd', 'fft', 'cslogy', 'csstd']
         # v1.0 호환
         self.features_structure = configs.features_structure
 
@@ -149,6 +149,16 @@ class FeatureNew:
             result = fft(arr[calc_length:][:(m_days + k_days_adj + 1)], n, m_days, k_days_adj)
             if debug:
                 result_debug = fft(arr_debug[calc_length:], n, m_days, k_days_adj)
+        elif func_nm == 'cslogy':
+            # arr: data without calc data
+            result = arr_to_cs(log_y_nd(arr, n)[calc_length:])
+            if debug:
+                result_debug = arr_to_cs(log_y_nd(arr_debug, n)[calc_length:])
+        elif func_nm == 'csstd':
+            # arr: data without calc data
+            result = arr_to_cs(std_nd_new(arr, n)[calc_length:])
+            if debug:
+                result_debug = arr_to_cs(std_nd_new(arr_debug, n)[calc_length:])
 
         feature, label = self.split_data_label(result)
         if debug:
@@ -272,8 +282,8 @@ class Performance:
             pred_arr[key] = np.zeros([len(true_y), n_tile])
             pred_arr_mw[key] = np.zeros([len(true_y), n_tile])
 
-        size_factor_list = [add_info['size_factor'] for add_info in additional_infos]
-        mktcap_list = [add_info['size_factor_mktcap'] for add_info in additional_infos]
+        size_factor_list = [np.array(add_info['size_factor'], dtype=np.float32).reshape([-1, 1, 1]) for add_info in additional_infos]
+        mktcap_list = [np.array(add_info['size_factor_mktcap'], dtype=np.float32).reshape([-1, 1, 1]) for add_info in additional_infos]
         assets_list = [add_info['asset_list'] for add_info in additional_infos]
 
         all_assets_list = list()
@@ -306,12 +316,12 @@ class Performance:
 
             # cost calculation
             assets = np.array(assets)
-            wgt_for_cost.ix[:, 'new_wgt_true'] = 0.0
-            wgt_for_cost.ix[assets, 'new_wgt_true'] = mktcap[:, 0, 0] / np.sum(mktcap[:, 0, 0])
+            wgt_for_cost.loc[:, 'new_wgt_true'] = 0.0
+            wgt_for_cost.loc[assets, 'new_wgt_true'] = mktcap[:, 0, 0] / np.sum(mktcap[:, 0, 0])
             turnover_true_mw[t] = np.sum(np.abs(wgt_for_cost['new_wgt_true'] - wgt_for_cost['old_wgt_true']))
             total_cost_true_mw[t] = total_cost_true_mw[t - 1] + turnover_true_mw[t] * self.cost_rate
-            wgt_for_cost.ix[:, 'old_wgt_true'] = 0.0
-            wgt_for_cost.ix[assets, 'old_wgt_true'] = ((1 + labels[:, 0, idx_y]) * mktcap[:, 0, 0]) / np.sum(
+            wgt_for_cost.loc[:, 'old_wgt_true'] = 0.0
+            wgt_for_cost.loc[assets, 'old_wgt_true'] = ((1 + labels[:, 0, idx_y]) * mktcap[:, 0, 0]) / np.sum(
                 (1 + labels[:, 0, idx_y]) * mktcap[:, 0, 0])
             truy_y_mw_adj[t] = np.sum(labels[:, 0, idx_y] * mktcap[:, 0, 0]) / np.sum(mktcap[:, 0, 0]) - turnover_true_mw[
                 t] * self.cost_rate
@@ -349,7 +359,7 @@ class Performance:
                             mktcap[crit_, 0, 0])
 
             # cost calculation
-            wgt_for_cost.ix[:, 'new_wgt_main'] = 0.0
+            wgt_for_cost.loc[:, 'new_wgt_main'] = 0.0
             for i_tile in range(n_tile):
                 low_q, high_q = 100 * (1. - (1. + i_tile) / n_tile), 100 * (1. - i_tile / n_tile)
                 low_crit, high_crit = np.percentile(value_['main'], q=[low_q, high_q])
@@ -358,17 +368,17 @@ class Performance:
                 else:
                     crit_main = ((value_['main'] >= low_crit) & (value_['main'] < high_crit))
 
-                wgt_for_cost.ix[assets[crit_main], 'new_wgt_main'] = mktcap[crit_main, 0, 0] * (1 + (2 - i_tile) * 0.2)
+                wgt_for_cost.loc[assets[crit_main], 'new_wgt_main'] = mktcap[crit_main, 0, 0] * (1 + (2 - i_tile) * 0.2)
 
             wgt_for_cost['new_wgt_main'] = wgt_for_cost['new_wgt_main'] / np.sum(wgt_for_cost['new_wgt_main'])
             turnover_main_mw[t] = np.sum(
                 np.abs(wgt_for_cost['new_wgt_main'] - wgt_for_cost['old_wgt_main']))
             total_cost_main_mw[t] = total_cost_main_mw[t - 1] + turnover_main_mw[t] * self.cost_rate
-            wgt_for_cost.ix[:, 'old_wgt_main'] = 0.0
-            wgt_for_cost.ix[assets, 'old_wgt_main'] = ((1 + labels[:, 0, idx_y]) * wgt_for_cost.ix[assets, 'new_wgt_main']) \
+            wgt_for_cost.loc[:, 'old_wgt_main'] = 0.0
+            wgt_for_cost.loc[assets, 'old_wgt_main'] = ((1 + labels[:, 0, idx_y]) * wgt_for_cost.loc[assets, 'new_wgt_main']) \
                                                       / np.sum(
-                (1 + labels[:, 0, idx_y]) * wgt_for_cost.ix[assets, 'new_wgt_main'])
-            pred_main_mw_adj[t] = np.sum(labels[:, 0, idx_y] * wgt_for_cost.ix[assets, 'new_wgt_main']) - turnover_main_mw[
+                (1 + labels[:, 0, idx_y]) * wgt_for_cost.loc[assets, 'new_wgt_main'])
+            pred_main_mw_adj[t] = np.sum(labels[:, 0, idx_y] * wgt_for_cost.loc[assets, 'new_wgt_main']) - turnover_main_mw[
                 t] * self.cost_rate
 
         for v_ in value_.keys():
@@ -496,8 +506,8 @@ class Performance:
             pred_arr[key] = np.zeros([len(true_y), 2])
             pred_arr_mw[key] = np.zeros([len(true_y), 2])
 
-        size_factor_list = [add_info['size_factor'] for add_info in additional_infos]
-        mktcap_list = [add_info['size_factor_mktcap'] for add_info in additional_infos]
+        size_factor_list = [np.array(add_info['size_factor'], dtype=np.float32).reshape([-1, 1, 1]) for add_info in additional_infos]
+        mktcap_list = [np.array(add_info['size_factor_mktcap'], dtype=np.float32).reshape([-1, 1, 1]) for add_info in additional_infos]
         assets_list = [add_info['asset_list'] for add_info in additional_infos]
 
         all_assets_list = list()
@@ -529,12 +539,12 @@ class Performance:
 
             # cost calculation
             assets = np.array(assets)
-            wgt_for_cost.ix[:, 'new_wgt_true'] = 0.0
-            wgt_for_cost.ix[assets, 'new_wgt_true'] = mktcap[:, 0, 0] / np.sum(mktcap[:, 0, 0])
+            wgt_for_cost.loc[:, 'new_wgt_true'] = 0.0
+            wgt_for_cost.loc[assets, 'new_wgt_true'] = mktcap[:, 0, 0] / np.sum(mktcap[:, 0, 0])
             turnover_true_mw[t] = np.sum(np.abs(wgt_for_cost['new_wgt_true'] - wgt_for_cost['old_wgt_true']))
             total_cost_true_mw[t] = total_cost_true_mw[t-1] + turnover_true_mw[t] * self.cost_rate
-            wgt_for_cost.ix[:, 'old_wgt_true'] = 0.0
-            wgt_for_cost.ix[assets, 'old_wgt_true'] = ((1 + labels[:, 0, idx_y]) * mktcap[:, 0, 0]) / np.sum((1 + labels[:, 0, idx_y]) * mktcap[:, 0, 0])
+            wgt_for_cost.loc[:, 'old_wgt_true'] = 0.0
+            wgt_for_cost.loc[assets, 'old_wgt_true'] = ((1 + labels[:, 0, idx_y]) * mktcap[:, 0, 0]) / np.sum((1 + labels[:, 0, idx_y]) * mktcap[:, 0, 0])
             truy_y_mw_adj[t] = np.sum(labels[:, 0, idx_y] * mktcap[:, 0, 0]) / np.sum(mktcap[:, 0, 0]) - turnover_true_mw[t] * self.cost_rate
 
             predictions = model.predict_mtl(features)
@@ -564,14 +574,14 @@ class Performance:
                 pred_arr_mw[v][t, 1] = np.sum(labels[crit2, 0, idx_y] * mktcap[crit2, 0, 0]) / np.sum(mktcap[crit2, 0, 0])
                 if v == 'main':
                     # cost calculation
-                    wgt_for_cost.ix[:, 'new_wgt_main'] = 0.0
-                    wgt_for_cost.ix[assets[crit2], 'new_wgt_main'] = mktcap[crit2, 0, 0] / np.sum(mktcap[crit2, 0, 0])
+                    wgt_for_cost.loc[:, 'new_wgt_main'] = 0.0
+                    wgt_for_cost.loc[assets[crit2], 'new_wgt_main'] = mktcap[crit2, 0, 0] / np.sum(mktcap[crit2, 0, 0])
                     turnover_main_mw[t] = np.sum(np.abs(wgt_for_cost['new_wgt_main'] - wgt_for_cost['old_wgt_main']))
                     total_cost_main_mw[t] = total_cost_main_mw[t-1] + turnover_main_mw[t] * self.cost_rate
-                    wgt_for_cost.ix[:, 'old_wgt_main'] = 0.0
-                    wgt_for_cost.ix[assets, 'old_wgt_main'] = ((1 + labels[:, 0, idx_y]) * wgt_for_cost.ix[assets, 'new_wgt_main']) \
-                                                              / np.sum((1 + labels[:, 0, idx_y]) * wgt_for_cost.ix[assets, 'new_wgt_main'])
-                    pred_main_mw_adj[t] = np.sum(labels[:, 0, idx_y] * wgt_for_cost.ix[assets, 'new_wgt_main']) - turnover_main_mw[t] * self.cost_rate
+                    wgt_for_cost.loc[:, 'old_wgt_main'] = 0.0
+                    wgt_for_cost.loc[assets, 'old_wgt_main'] = ((1 + labels[:, 0, idx_y]) * wgt_for_cost.loc[assets, 'new_wgt_main']) \
+                                                              / np.sum((1 + labels[:, 0, idx_y]) * wgt_for_cost.loc[assets, 'new_wgt_main'])
+                    pred_main_mw_adj[t] = np.sum(labels[:, 0, idx_y] * wgt_for_cost.loc[assets, 'new_wgt_main']) - turnover_main_mw[t] * self.cost_rate
 
         for v_ in value_.keys():
             data = pd.DataFrame(np.cumprod(1. + np.concatenate([true_y, true_y_mw, pred_arr[v_], pred_arr_mw[v_]], axis=-1), axis=0),
