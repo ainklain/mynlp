@@ -120,7 +120,7 @@ class Config:
         elif k_days == 20:
             # self.model_predictor_list = ['logy', 'pos_20', 'pos_60', 'pos_120', 'std', 'mdd', 'fft']
             # self.model_predictor_list = ['logy', 'cslogy', 'csstd', 'std', 'stdnew', 'mdd', 'fft', 'pos_20', 'pos_60']
-            self.model_predictor_list = ['logy', 'std', 'stdnew', 'mdd', 'fft', 'pos_20', 'pos_60']
+            self.model_predictor_list = ['logy', 'cslogy', 'std', 'stdnew', 'mdd', 'fft', 'pos_20', 'pos_60']
             # self.model_predictor_list = ['std']
 
             self.features_structure = \

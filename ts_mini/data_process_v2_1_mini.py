@@ -13,6 +13,7 @@ class DataScheduler:
 
         self.configs = configs
         self.features_cls = features_cls
+        self.retrain_days = configs.retrain_days
 
         self._initialize(configs)
 

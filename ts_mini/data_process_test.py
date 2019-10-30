@@ -17,7 +17,7 @@ features_cls = FeatureNew(configs)
 
 k_days = 20; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing'
 configs.balancing_method = balancing_method
-configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_v2_01'.format(k_days, univ_type, balancing_method, pred)
+configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_v2_02'.format(k_days, univ_type, balancing_method, pred)
 configs.train_steps = 100
 configs.eval_steps = 100
 configs.save_steps = 100
@@ -38,7 +38,7 @@ with open(os.path.join(ds.data_out_path, configs.f_name, 'config.txt'), 'w') as 
 if os.path.exists(os.path.join(ds.data_out_path, configs.f_name, configs.f_name + '.pkl')):
     model.load_model(os.path.join(ds.data_out_path, configs.f_name, configs.f_name))
 
-ds.set_idx(5000)
+ds.set_idx(6500)
 ii = 0
 jj = 0
 
@@ -64,7 +64,8 @@ while not ds.done:
     #     evalset = ds._dataset('eval')
 
     if ii > 0:
-        is_trained = ds.train(model, trainset, evalset)
+        is_trained = ds.train(model, trainset, evalset
+                              , model_name=os.path.join(ds.data_out_path, configs.f_name, configs.f_name))
 
         if is_trained is not False:
             model.save_model(os.path.join(ds.data_out_path, configs.f_name, configs.f_name, str(ds.base_idx), configs.f_name))
