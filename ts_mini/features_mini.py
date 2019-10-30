@@ -201,7 +201,7 @@ class FeatureNew:
 
         return features_dict, labels_dict
 
-    def labels_for_mtl(self, features_list, labels, size_value, importance_wgt):
+    def labels_for_mtl(self, features_list, labels, size_factor, importance_wgt):
         labels_mtl = dict()
         for cls in self.features_structure.keys():
             for key in self.features_structure[cls].keys():
@@ -219,11 +219,452 @@ class FeatureNew:
                     if key == 'cslogy':
                         labels_mtl['cslogy_idx'] = [features_list.index("{}_{}".format(key, n)) for n in n_arr]
 
-        labels_mtl['size_value'] = size_value
+        labels_mtl['size_factor'] = size_factor
         labels_mtl['importance_wgt'] = importance_wgt
 
         return labels_mtl
 
+
+class Performance:
+    def __init__(self, configs):
+        self.configs = configs
+        self.label_feature= configs.label_feature
+        self.pred_feature = configs.pred_feature
+        self.cost_rate = configs.cost_rate
+
+    def define_variables(self):
+        pass
+
+    def predict_plot_mtl_cross_section_test(self, model, dataset_list, save_dir, file_nm='test.png', ylog=False,
+                                            time_step=1):
+        if dataset_list is False:
+            return False
+
+        input_enc_list, output_dec_list, target_dec_list, features_list, additional_infos, start_date, end_date = dataset_list
+
+        idx_y = features_list.index(self.label_feature)
+
+        n_timesteps = int(np.ceil(len(input_enc_list) / time_step)) + 1
+        true_y = np.zeros([n_timesteps, 1])
+        true_y_mw = np.zeros([int(np.ceil(len(input_enc_list) / time_step)) + 1, 1])
+
+        n_tile = 5
+        pred_arr = dict()
+        pred_arr_mw = dict()
+        pred_arr['main'] = np.zeros([len(true_y), n_tile])
+        pred_arr_mw['main'] = np.zeros([len(true_y), n_tile])
+
+        pred_arr['ori'] = np.zeros([len(true_y), n_tile])
+        pred_arr_mw['ori'] = np.zeros([len(true_y), n_tile])
+
+        pred_arr['cap'] = np.zeros([len(true_y), n_tile])
+        pred_arr_mw['cap'] = np.zeros([len(true_y), n_tile])
+
+        turnover_true_mw = np.zeros_like(true_y_mw)
+        total_cost_true_mw = np.zeros_like(true_y_mw)
+        truy_y_mw_adj = np.zeros_like(true_y_mw)
+
+        turnover_main_mw = np.zeros_like(true_y_mw)
+        total_cost_main_mw = np.zeros_like(true_y_mw)
+        pred_main_mw_adj = np.zeros_like(true_y_mw)
+
+        for key in model.predictor.keys():
+            pred_arr[key] = np.zeros([len(true_y), n_tile])
+            pred_arr_mw[key] = np.zeros([len(true_y), n_tile])
+
+        size_factor_list = [add_info['size_factor'] for add_info in additional_infos]
+        mktcap_list = [add_info['size_factor_mktcap'] for add_info in additional_infos]
+        assets_list = [add_info['asset_list'] for add_info in additional_infos]
+
+        all_assets_list = list()
+        for assets in assets_list:
+            all_assets_list = list(set(all_assets_list + assets))
+
+        wgt_for_cost = pd.DataFrame({'old_wgt_true': np.zeros_like(all_assets_list),
+                                     'new_wgt_true': np.zeros_like(all_assets_list),
+                                     'old_wgt_main': np.zeros_like(all_assets_list),
+                                     'new_wgt_main': np.zeros_like(all_assets_list),
+                                     }, index=sorted(all_assets_list), dtype=np.float32)
+
+        for i, (input_enc_t, output_dec_t, target_dec_t, size_factor, mktcap, assets) \
+                in enumerate(
+            zip(input_enc_list, output_dec_list, target_dec_list, size_factor_list, mktcap_list, assets_list)):
+            if i % time_step != 0:
+                continue
+            t = i // time_step + 1
+            assert np.sum(input_enc_t[:, -1, idx_y] - output_dec_t[:, 0, idx_y]) == 0
+            new_output_t = np.zeros_like(output_dec_t)
+            new_output_t[:, 0, :] = output_dec_t[:, 0, :] + size_factor[:, 0, :]
+            new_output_t2 = np.zeros_like(output_dec_t)
+            new_output_t2[:, 0, :] = output_dec_t[:, 0, :] + mktcap[:, 0, :]
+
+            features = {'input': input_enc_t, 'output': new_output_t}
+            labels = target_dec_t
+
+            true_y[t] = np.mean(labels[:, 0, idx_y])
+            true_y_mw[t] = np.sum(labels[:, 0, idx_y] * mktcap[:, 0, 0]) / np.sum(mktcap[:, 0, 0])
+
+            # cost calculation
+            assets = np.array(assets)
+            wgt_for_cost.ix[:, 'new_wgt_true'] = 0.0
+            wgt_for_cost.ix[assets, 'new_wgt_true'] = mktcap[:, 0, 0] / np.sum(mktcap[:, 0, 0])
+            turnover_true_mw[t] = np.sum(np.abs(wgt_for_cost['new_wgt_true'] - wgt_for_cost['old_wgt_true']))
+            total_cost_true_mw[t] = total_cost_true_mw[t - 1] + turnover_true_mw[t] * self.cost_rate
+            wgt_for_cost.ix[:, 'old_wgt_true'] = 0.0
+            wgt_for_cost.ix[assets, 'old_wgt_true'] = ((1 + labels[:, 0, idx_y]) * mktcap[:, 0, 0]) / np.sum(
+                (1 + labels[:, 0, idx_y]) * mktcap[:, 0, 0])
+            truy_y_mw_adj[t] = np.sum(labels[:, 0, idx_y] * mktcap[:, 0, 0]) / np.sum(mktcap[:, 0, 0]) - turnover_true_mw[
+                t] * self.cost_rate
+
+            predictions = model.predict_mtl(features)
+            value_ = dict()
+            value_['main'] = predictions[self.pred_feature][:, 0, 0]
+
+            for feature in model.predictor.keys():
+                value_[feature] = predictions[feature][:, 0, 0]
+
+            predictions_ori = model.predict_mtl({'input': input_enc_t, 'output': output_dec_t})
+            value_['ori'] = predictions_ori[self.pred_feature][:, 0, 0]
+
+            predictions_cap = model.predict_mtl({'input': input_enc_t, 'output': new_output_t2})
+            value_['cap'] = predictions_cap[self.pred_feature][:, 0, 0]
+
+            for i_tile in range(n_tile):
+                low_q, high_q = 100 * (1. - (1. + i_tile) / n_tile), 100 * (1. - i_tile / n_tile)
+
+                for v in value_.keys():
+                    low_crit, high_crit = np.percentile(value_[v], q=[low_q, high_q])
+                    if high_q == 100:
+                        crit_ = (value_[v] >= low_crit)
+                    else:
+                        crit_ = ((value_[v] >= low_crit) & (value_[v] < high_crit))
+
+                    if v in ['logy', 'cslogy', 'fft', 'pos_5', 'pos_20', 'pos_60', 'pos_120', 'main', 'cap', 'ori']:
+                        pred_arr[v][t, i_tile] = np.mean(labels[crit_, 0, idx_y])
+                        pred_arr_mw[v][t, i_tile] = np.sum(labels[crit_, 0, idx_y] * mktcap[crit_, 0, 0]) / np.sum(
+                            mktcap[crit_, 0, 0])
+                    else:
+                        pred_arr[v][t, -(i_tile + 1)] = np.mean(labels[crit_, 0, idx_y])
+                        pred_arr_mw[v][t, -(i_tile + 1)] = np.sum(labels[crit_, 0, idx_y] * mktcap[crit_, 0, 0]) / np.sum(
+                            mktcap[crit_, 0, 0])
+
+            # cost calculation
+            wgt_for_cost.ix[:, 'new_wgt_main'] = 0.0
+            for i_tile in range(n_tile):
+                low_q, high_q = 100 * (1. - (1. + i_tile) / n_tile), 100 * (1. - i_tile / n_tile)
+                low_crit, high_crit = np.percentile(value_['main'], q=[low_q, high_q])
+                if high_q == 100:
+                    crit_main = (value_['main'] >= low_crit)
+                else:
+                    crit_main = ((value_['main'] >= low_crit) & (value_['main'] < high_crit))
+
+                wgt_for_cost.ix[assets[crit_main], 'new_wgt_main'] = mktcap[crit_main, 0, 0] * (1 + (2 - i_tile) * 0.2)
+
+            wgt_for_cost['new_wgt_main'] = wgt_for_cost['new_wgt_main'] / np.sum(wgt_for_cost['new_wgt_main'])
+            turnover_main_mw[t] = np.sum(
+                np.abs(wgt_for_cost['new_wgt_main'] - wgt_for_cost['old_wgt_main']))
+            total_cost_main_mw[t] = total_cost_main_mw[t - 1] + turnover_main_mw[t] * self.cost_rate
+            wgt_for_cost.ix[:, 'old_wgt_main'] = 0.0
+            wgt_for_cost.ix[assets, 'old_wgt_main'] = ((1 + labels[:, 0, idx_y]) * wgt_for_cost.ix[assets, 'new_wgt_main']) \
+                                                      / np.sum(
+                (1 + labels[:, 0, idx_y]) * wgt_for_cost.ix[assets, 'new_wgt_main'])
+            pred_main_mw_adj[t] = np.sum(labels[:, 0, idx_y] * wgt_for_cost.ix[assets, 'new_wgt_main']) - turnover_main_mw[
+                t] * self.cost_rate
+
+        for v_ in value_.keys():
+            data = pd.DataFrame(
+                np.cumprod(1. + np.concatenate([true_y, true_y_mw, pred_arr[v_], pred_arr_mw[v_]], axis=-1), axis=0),
+                columns=['true_y', 'true_y_mw'] + ['pred_q{}'.format(i + 1) for i in range(n_tile)]
+                        + ['pred_q{}_mw'.format(i + 1) for i in range(n_tile)])
+            data['pred_ls'] = np.cumprod(1. + np.mean(pred_arr[v_][:, :1], axis=1) - np.mean(pred_arr[v_][:, -1:], axis=1))
+            data['pred_ls2'] = np.cumprod(1. + np.mean(pred_arr[v_][:, :2], axis=1) - np.mean(pred_arr[v_][:, -2:], axis=1))
+            data['pred_ls_mw'] = np.cumprod(
+                1. + np.mean(pred_arr_mw[v_][:, :1], axis=1) - np.mean(pred_arr_mw[v_][:, -1:], axis=1))
+            data['pred_ls_mw2'] = np.cumprod(
+                1. + np.mean(pred_arr_mw[v_][:, :2], axis=1) - np.mean(pred_arr_mw[v_][:, -2:], axis=1))
+
+            if v_ == 'main':
+                data['true_cost'] = total_cost_true_mw
+                data['true_turnover'] = turnover_true_mw
+                data['true_y_mw_adj'] = np.cumprod(1. + truy_y_mw_adj, axis=0) - 1.
+                data['main_cost'] = total_cost_main_mw
+                data['main_turnover'] = turnover_main_mw
+                data['main_y_mw_adj'] = np.cumprod(1. + pred_main_mw_adj, axis=0) - 1.
+                data['diff_adj'] = np.cumprod(1. + pred_main_mw_adj - truy_y_mw_adj, axis=0) - 1.
+
+            # ################################ figure 1
+            # equal fig
+            fig = plt.figure()
+            fig.suptitle('{} ~ {}'.format(start_date, end_date))
+            if v_ == 'main':
+                grid = plt.GridSpec(ncols=2, nrows=3, figure=fig)
+                ax1 = fig.add_subplot(grid[0, 0])
+                ax2 = fig.add_subplot(grid[0, 1])
+                ax3 = fig.add_subplot(grid[1, 0])
+                ax4 = fig.add_subplot(grid[1, 1])
+                ax5 = fig.add_subplot(grid[2, :])
+            else:
+                ax1 = fig.add_subplot(221)
+                ax2 = fig.add_subplot(222)
+                ax3 = fig.add_subplot(223)
+                ax4 = fig.add_subplot(224)
+            ax1.plot(data[['true_y', 'pred_ls', 'pred_ls2', 'pred_q1', 'pred_q{}'.format(n_tile)]])
+            box = ax1.get_position()
+            ax1.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+            ax1.legend(['true_y', 'long-short', 'long-short2', 'long', 'short'], loc='center left', bbox_to_anchor=(1, 0.5))
+            if ylog:
+                ax1.set_yscale('log', basey=2)
+
+            ax2.plot(data[['true_y'] + ['pred_q{}'.format(i + 1) for i in range(n_tile)]])
+            box = ax2.get_position()
+            ax2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+            ax2.legend(['true_y'] + ['q{}'.format(i + 1) for i in range(n_tile)], loc='center left',
+                       bbox_to_anchor=(1, 0.5))
+            ax2.set_yscale('log', basey=2)
+
+            # value fig
+            ax3.plot(data[['true_y_mw', 'pred_ls_mw', 'pred_ls_mw2', 'pred_q1_mw', 'pred_q{}_mw'.format(n_tile)]])
+            box = ax3.get_position()
+            ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+            ax3.legend(['true_y(mw)', 'long-short', 'long-short2', 'long', 'short'], loc='center left',
+                       bbox_to_anchor=(1, 0.5))
+            if ylog:
+                ax3.set_yscale('log', basey=2)
+
+            ax4.plot(data[['true_y_mw'] + ['pred_q{}_mw'.format(i + 1) for i in range(n_tile)]])
+            box = ax4.get_position()
+            ax4.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+            ax4.legend(['true_y(mw)'] + ['q{}'.format(i + 1) for i in range(n_tile)], loc='center left',
+                       bbox_to_anchor=(1, 0.5))
+            ax4.set_yscale('log', basey=2)
+
+            if v_ == 'main':
+                data[['true_y_mw_adj', 'main_y_mw_adj']].plot(ax=ax5, colormap=cm.Set2)
+                box = ax5.get_position()
+                ax5.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax5.legend(['true_y_mw_adj', 'main_y_mw_adj'], loc='center left', bbox_to_anchor=(1, 0.8))
+                if ylog:
+                    ax5.set_yscale('log', basey=2)
+
+                ax5_2 = ax5.twinx()
+                data[['diff_adj']].plot(ax=ax5_2, colormap=cm.jet)
+                box = ax5_2.get_position()
+                ax5_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax5_2.legend(['diff_adj'], loc='center left', bbox_to_anchor=(1, 0.2))
+                if ylog:
+                    ax5_2.set_yscale('log', basey=2)
+
+            if file_nm is None:
+                save_file_name = '{}/{}'.format(save_dir, '_all.png')
+            else:
+                save_dir_v = os.path.join(save_dir, v_)
+                os.makedirs(save_dir_v, exist_ok=True)
+                file_nm_v = file_nm.replace(file_nm[-4:], "_{}{}".format(v_, file_nm[-4:]))
+                save_file_name = '{}/{}'.format(save_dir_v, file_nm_v)
+
+            fig.savefig(save_file_name)
+            # print("figure saved. (dir: {})".format(save_file_name))
+            plt.close(fig)
+
+
+    def predict_plot_mtl_cross_section_test_long(self, model, dataset_list, save_dir, file_nm='test.png', ylog=False, time_step=1, invest_rate=0.8):
+        if dataset_list is False:
+            return False
+        else:
+            input_enc_list, output_dec_list, target_dec_list, features_list, additional_infos, start_date, end_date = dataset_list
+
+        idx_y = features_list.index(self.label_feature)
+
+        true_y = np.zeros([int(np.ceil(len(input_enc_list) / time_step)) + 1, 1])
+        true_y_mw = np.zeros([int(np.ceil(len(input_enc_list) / time_step)) + 1, 1])
+
+        turnover_true_mw = np.zeros_like(true_y_mw)
+        total_cost_true_mw = np.zeros_like(true_y_mw)
+        truy_y_mw_adj = np.zeros_like(true_y_mw)
+
+        pred_arr = dict()
+        pred_arr_mw = dict()
+        pred_arr['main'] = np.zeros([len(true_y), 2])
+        pred_arr_mw['main'] = np.zeros([len(true_y), 2])
+
+        turnover_main_mw = np.zeros_like(true_y_mw)
+        total_cost_main_mw = np.zeros_like(true_y_mw)
+        pred_main_mw_adj = np.zeros_like(true_y_mw)
+
+
+        for key in model.predictor.keys():
+            pred_arr[key] = np.zeros([len(true_y), 2])
+            pred_arr_mw[key] = np.zeros([len(true_y), 2])
+
+        size_factor_list = [add_info['size_factor'] for add_info in additional_infos]
+        mktcap_list = [add_info['size_factor_mktcap'] for add_info in additional_infos]
+        assets_list = [add_info['asset_list'] for add_info in additional_infos]
+
+        all_assets_list = list()
+        for assets in assets_list:
+            all_assets_list = list(set(all_assets_list + assets))
+
+        wgt_for_cost = pd.DataFrame({'old_wgt_true': np.zeros_like(all_assets_list),
+                                     'new_wgt_true': np.zeros_like(all_assets_list),
+                                     'old_wgt_main': np.zeros_like(all_assets_list),
+                                     'new_wgt_main': np.zeros_like(all_assets_list),
+                                     }, index=sorted(all_assets_list), dtype=np.float32)
+
+        for i, (input_enc_t, output_dec_t, target_dec_t, size_factor, mktcap, assets) \
+                in enumerate(zip(input_enc_list, output_dec_list, target_dec_list, size_factor_list, mktcap_list, assets_list)):
+            if i % time_step != 0:
+                continue
+            t = i // time_step + 1
+            assert np.sum(input_enc_t[:, -1, idx_y] - output_dec_t[:, 0, idx_y]) == 0
+            new_output_t = np.zeros_like(output_dec_t)
+            new_output_t[:, 0, :] = output_dec_t[:, 0, :] + size_factor[:, 0, :]
+            new_output_t2 = np.zeros_like(output_dec_t)
+            new_output_t2[:, 0, :] = output_dec_t[:, 0, :] + mktcap[:, 0, :]
+
+            features = {'input': input_enc_t, 'output': new_output_t}
+            labels = target_dec_t
+
+            true_y[t] = np.mean(labels[:, 0, idx_y])
+            true_y_mw[t] = np.sum(labels[:, 0, idx_y] * mktcap[:, 0, 0]) / np.sum(mktcap[:, 0, 0])
+
+            # cost calculation
+            assets = np.array(assets)
+            wgt_for_cost.ix[:, 'new_wgt_true'] = 0.0
+            wgt_for_cost.ix[assets, 'new_wgt_true'] = mktcap[:, 0, 0] / np.sum(mktcap[:, 0, 0])
+            turnover_true_mw[t] = np.sum(np.abs(wgt_for_cost['new_wgt_true'] - wgt_for_cost['old_wgt_true']))
+            total_cost_true_mw[t] = total_cost_true_mw[t-1] + turnover_true_mw[t] * self.cost_rate
+            wgt_for_cost.ix[:, 'old_wgt_true'] = 0.0
+            wgt_for_cost.ix[assets, 'old_wgt_true'] = ((1 + labels[:, 0, idx_y]) * mktcap[:, 0, 0]) / np.sum((1 + labels[:, 0, idx_y]) * mktcap[:, 0, 0])
+            truy_y_mw_adj[t] = np.sum(labels[:, 0, idx_y] * mktcap[:, 0, 0]) / np.sum(mktcap[:, 0, 0]) - turnover_true_mw[t] * self.cost_rate
+
+            predictions = model.predict_mtl(features)
+            value_ = dict()
+            value_['main'] = predictions[self.pred_feature][:, 0, 0]
+
+            for feature in model.predictor.keys():
+                value_[feature] = predictions[feature][:, 0, 0]
+
+            low_crit_cslogy, high_crit_cslogy = np.percentile(value_['cslogy'], q=[100 * (1 - invest_rate), 100])
+
+            for v in value_.keys():
+                if v in ['logy', 'cslogy', 'fft', 'pos_5', 'pos_20', 'pos_60', 'pos_120', 'main']:
+                    low_q, high_q = 100 * (1 - invest_rate), 100
+                else:
+                    low_q, high_q = 0, 100 * invest_rate
+
+                low_crit, high_crit = np.percentile(value_[v], q=[low_q, high_q])
+
+                crit1 = ((value_[v] >= low_crit) & (value_[v] < high_crit)).numpy()
+                crit2 = ((value_[v] >= low_crit) & (value_[v] < high_crit)
+                         & (value_['cslogy'] >= low_crit_cslogy) & (value_['cslogy'] < high_crit_cslogy)).numpy()
+
+                pred_arr[v][t, 0] = np.mean(labels[crit1, 0, idx_y])
+                pred_arr_mw[v][t, 0] = np.sum(labels[crit1, 0, idx_y] * mktcap[crit1, 0, 0]) / np.sum(mktcap[crit1, 0, 0])
+                pred_arr[v][t, 1] = np.mean(labels[crit2, 0, idx_y])
+                pred_arr_mw[v][t, 1] = np.sum(labels[crit2, 0, idx_y] * mktcap[crit2, 0, 0]) / np.sum(mktcap[crit2, 0, 0])
+                if v == 'main':
+                    # cost calculation
+                    wgt_for_cost.ix[:, 'new_wgt_main'] = 0.0
+                    wgt_for_cost.ix[assets[crit2], 'new_wgt_main'] = mktcap[crit2, 0, 0] / np.sum(mktcap[crit2, 0, 0])
+                    turnover_main_mw[t] = np.sum(np.abs(wgt_for_cost['new_wgt_main'] - wgt_for_cost['old_wgt_main']))
+                    total_cost_main_mw[t] = total_cost_main_mw[t-1] + turnover_main_mw[t] * self.cost_rate
+                    wgt_for_cost.ix[:, 'old_wgt_main'] = 0.0
+                    wgt_for_cost.ix[assets, 'old_wgt_main'] = ((1 + labels[:, 0, idx_y]) * wgt_for_cost.ix[assets, 'new_wgt_main']) \
+                                                              / np.sum((1 + labels[:, 0, idx_y]) * wgt_for_cost.ix[assets, 'new_wgt_main'])
+                    pred_main_mw_adj[t] = np.sum(labels[:, 0, idx_y] * wgt_for_cost.ix[assets, 'new_wgt_main']) - turnover_main_mw[t] * self.cost_rate
+
+        for v_ in value_.keys():
+            data = pd.DataFrame(np.cumprod(1. + np.concatenate([true_y, true_y_mw, pred_arr[v_], pred_arr_mw[v_]], axis=-1), axis=0),
+                                columns=['true_y', 'true_y_mw', 'pred1', 'pred2', 'pred1_mw', 'pred2_mw'])
+
+            data['diff1'] = np.cumprod(1. + pred_arr[v_][:, :1] - true_y)
+            data['diff2'] = np.cumprod(1. + pred_arr[v_][:, -1:] - true_y)
+            data['diff1_mw'] = np.cumprod(1. + pred_arr_mw[v_][:, :1] - true_y_mw)
+            data['diff2_mw'] = np.cumprod(1. + pred_arr_mw[v_][:, -1:] - true_y_mw)
+
+            if v_ == 'main':
+                data['true_cost'] = total_cost_true_mw
+                data['true_turnover'] = turnover_true_mw
+                data['true_y_mw_adj'] = np.cumprod(1. + truy_y_mw_adj, axis=0) - 1.
+                data['main_cost'] = total_cost_main_mw
+                data['main_turnover'] = turnover_main_mw
+                data['main_y_mw_adj'] = np.cumprod(1. + pred_main_mw_adj, axis=0) - 1.
+                data['diff_adj'] = np.cumprod(1. + pred_main_mw_adj - truy_y_mw_adj, axis=0) - 1.
+
+
+            # ################################ figure 1
+            # equal fig
+            fig = plt.figure()
+            fig.suptitle('{} ~ {}'.format(start_date, end_date))
+            if v_ == 'main':
+                ax1 = fig.add_subplot(311)
+                ax2 = fig.add_subplot(312)
+                ax3 = fig.add_subplot(313)
+                # ax4 = fig.add_subplot(414)
+            else:
+                ax1 = fig.add_subplot(211)
+                ax2 = fig.add_subplot(212)
+
+            data[['true_y', 'pred1', 'pred2']].plot(ax=ax1, colormap=cm.Set2)
+            box = ax1.get_position()
+            ax1.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+            ax1.legend(['true_y', 'pred1', 'pred2'], loc='center left', bbox_to_anchor=(1, 0.8))
+            if ylog:
+                ax1.set_yscale('log', basey=2)
+
+            ax1_2 = ax1.twinx()
+            data[['diff1', 'diff2']].plot(ax=ax1_2, colormap=cm.jet)
+            box = ax1_2.get_position()
+            ax1_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+            ax1_2.legend(['diff1', 'diff2'], loc='center left', bbox_to_anchor=(1, 0.2))
+            if ylog:
+                ax1_2.set_yscale('log', basey=2)
+
+
+            data[['true_y_mw', 'pred1_mw', 'pred2_mw']].plot(ax=ax2, colormap=cm.Set2)
+            box = ax2.get_position()
+            ax2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+            ax2.legend(['true_y_mw', 'pred1_mw', 'pred2_mw'], loc='center left', bbox_to_anchor=(1, 0.8))
+            if ylog:
+                ax2.set_yscale('log', basey=2)
+
+            ax2_2 = ax2.twinx()
+            data[['diff1_mw', 'diff2_mw']].plot(ax=ax2_2, colormap=cm.jet)
+            box = ax2_2.get_position()
+            ax2_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+            ax2_2.legend(['diff1_mw', 'diff2_mw'], loc='center left', bbox_to_anchor=(1, 0.2))
+            if ylog:
+                ax2_2.set_yscale('log', basey=2)
+
+
+            if v_ == 'main':
+                data[['true_y_mw_adj', 'main_y_mw_adj']].plot(ax=ax3, colormap=cm.Set2)
+                box = ax3.get_position()
+                ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax3.legend(['true_y_mw_adj', 'main_y_mw_adj'], loc='center left', bbox_to_anchor=(1, 0.8))
+                if ylog:
+                    ax3.set_yscale('log', basey=2)
+
+                ax3_2 = ax3.twinx()
+                data[['diff_adj']].plot(ax=ax3_2, colormap=cm.jet)
+                box = ax3_2.get_position()
+                ax3_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax3_2.legend(['diff_adj'], loc='center left', bbox_to_anchor=(1, 0.2))
+                if ylog:
+                    ax3_2.set_yscale('log', basey=2)
+
+
+            if file_nm is None:
+                save_file_name = '{}/{}'.format(save_dir, '_all.png')
+            else:
+                save_dir_v = os.path.join(save_dir, v_)
+                os.makedirs(save_dir_v, exist_ok=True)
+                file_nm_v = file_nm.replace(file_nm[-4:], "_{}{}".format(v_, file_nm[-4:]))
+                save_file_name = '{}/{}'.format(save_dir_v, file_nm_v)
+
+            fig.savefig(save_file_name)
+            # print("figure saved. (dir: {})".format(save_file_name))
+            plt.close(fig)
 
 
 

@@ -7,7 +7,7 @@ import tensorflow as tf
 import sys
 
 from tensorflow.keras import Model
-from tensorflow.keras.layers import Dense, Dropout, Embedding, Conv2D
+from tensorflow.keras.layers import Dense, Dropout, Conv1D
 
 
 def positional_encoding(dim, sentence_length):
@@ -148,8 +148,14 @@ class Decoder(Model):
 
 
 class ConvModel(Model):
-    def __init__(self):
-        self.conv1 = Conv2D()
+    def __init__(self, embedding_size):
+        super().__init__()
+        self.conv1 = Conv1D(embedding_size, 1, activation='relu')
+
+    def call(self, inputs):
+        # (None, T, n_features) -> (None, T, embedding_size)
+        return self.conv1(inputs)
+
 
 
 class TSModel:
@@ -157,20 +163,21 @@ class TSModel:
     def __init__(self, configs, feature_cls, weight_scheme='ew'):
         self.weight_scheme = weight_scheme
 
-        self.input_seq_size = configs.m_days // configs.sampling_days
+        self.input_seq_size = configs.m_days // configs.sampling_days + 1
         # self.output_seq_size = configs.k_days // configs.sampling_days
         self.output_seq_size = 1
-        self.position_encode_in = positional_encoding(configs.embedding_size, self.input_seq_size)
-        self.position_encode_out = positional_encoding(configs.embedding_size, self.output_seq_size)
+        self.position_encode_in = positional_encoding(configs.d_model, self.input_seq_size)
+        self.position_encode_out = positional_encoding(configs.d_model, self.output_seq_size)
 
-        self.encoder = Encoder(dim_input=configs.embedding_size,
+        self.conv_embedding = ConvModel(embedding_size=configs.d_model)
+        self.encoder = Encoder(dim_input=configs.d_model,
                                model_hidden_size=configs.model_hidden_size,
                                ffn_hidden_size=configs.ffn_hidden_size,
                                heads=configs.attention_head_size,
                                num_layers=configs.layer_size)
 
-        self.decoder = Decoder(dim_input=configs.embedding_size,
-                               dim_output=configs.embedding_size,
+        self.decoder = Decoder(dim_input=configs.d_model,
+                               dim_output=configs.d_model,
                                model_hidden_size=configs.model_hidden_size,
                                ffn_hidden_size=configs.ffn_hidden_size,
                                heads=configs.attention_head_size,
@@ -211,19 +218,22 @@ class TSModel:
     def _initialize(self, configs):
         feature_temp = tf.zeros([1, self.input_seq_size, configs.embedding_size], dtype=tf.float32)
         # embed_temp = self.embedding(feature_temp)
-        enc_temp = self.encoder(feature_temp)
-        dec_temp = self.decoder(feature_temp, enc_temp)
+        embed_temp = self.conv_embedding(feature_temp)
+        enc_temp = self.encoder(embed_temp)
+        dec_temp = self.decoder(embed_temp, enc_temp)
 
         for key in self.predictor.keys():
             _ = self.predictor[key](dec_temp)
             self.optim_predictor_w[key] = self.predictor[key].get_weights()
 
+        self.optim_conv_embed_w = self.conv_embedding.get_weights()
         self.optim_encoder_w = self.encoder.get_weights()
         self.optim_decoder_w = self.decoder.get_weights()
 
         self._reset_eval_param()
 
     def weight_to_optim(self):
+        self.conv_embedding.set_weights(self.optim_conv_embed_w)
         self.encoder.set_weights(self.optim_encoder_w)
         self.decoder.set_weights(self.optim_decoder_w)
         for key in self.predictor.keys():
@@ -237,13 +247,13 @@ class TSModel:
 
     def train_mtl(self, features, labels_mtl, print_loss=False):
         with tf.GradientTape(persistent=True) as tape:
-            x_embed = features['input'] + self.position_encode_in
-            y_embed = features['output'] + self.position_encode_out
+            x_embed = self.conv_embedding(features['input']) + self.position_encode_in
+            y_embed = self.conv_embedding(features['output']) + self.position_encode_out
 
             encoder_output = self.encoder(x_embed, dropout=self.dropout_train)
             predict = self.decoder(y_embed, encoder_output, dropout=self.dropout_train)
 
-            var_lists = self.encoder.trainable_variables + self.decoder.trainable_variables
+            var_lists = self.conv_embedding.trainable_variables + self.encoder.trainable_variables + self.decoder.trainable_variables
 
             pred_each = dict()
             loss_each = dict()
@@ -253,7 +263,7 @@ class TSModel:
                 var_lists += self.predictor[key].trainable_variables
 
                 if self.weight_scheme == 'mw':
-                    adj_weight = labels_mtl['size_value'][:, :, 0] * 2.  # size value 평균이 0.5 이므로 기존이랑 스케일 맞추기 위해 2 곱
+                    adj_weight = labels_mtl['size_factor'][:, :, 0] * 2.  # size value 평균이 0.5 이므로 기존이랑 스케일 맞추기 위해 2 곱
 
                 else:
                     adj_weight = 1.
@@ -291,16 +301,16 @@ class TSModel:
 
     def evaluate_mtl(self, datasets, features_list, steps=-1):
         loss_avg = 0
-        for i, (features, labels, size_values, importance_wgt) in enumerate(datasets.take(steps)):
-            labels_mtl = self.feature_cls.labels_for_mtl(features_list, labels, size_values, importance_wgt)
+        for i, (features, labels, size_factors, importance_wgt) in enumerate(datasets.take(steps)):
+            labels_mtl = self.feature_cls.labels_for_mtl(features_list, labels, size_factors, importance_wgt)
 
-            x_embed = features['input'] + self.position_encode_in
-            y_embed = features['output'] + self.position_encode_out
+            x_embed = self.conv_embedding(features['input']) + self.position_encode_in
+            y_embed = self.conv_embedding(features['output']) + self.position_encode_out
 
             encoder_output = self.encoder(x_embed, dropout=0.)
             predict = self.decoder(y_embed, encoder_output, dropout=0.)
 
-            var_lists = self.encoder.trainable_variables + self.decoder.trainable_variables
+            var_lists = self.conv_embedding.trainable_variables + self.encoder.trainable_variables + self.decoder.trainable_variables
             pred_each = dict()
             loss_each = dict()
             loss = None
@@ -309,7 +319,7 @@ class TSModel:
                 var_lists += self.predictor[key].trainable_variables
 
                 if self.weight_scheme == 'mw':
-                    adj_weight = labels_mtl['size_value'][:, :, 0] * 2.
+                    adj_weight = labels_mtl['size_factor'][:, :, 0] * 2.
                 else:
                     adj_weight = 1.
 
@@ -356,8 +366,8 @@ class TSModel:
 
     def predict_mtl(self, feature):
 
-        x_embed = feature['input'] + self.position_encode_in
-        y_embed = feature['output'] + self.position_encode_out
+        x_embed = self.conv_embedding(feature['input']) + self.position_encode_in
+        y_embed = self.conv_embedding(feature['output']) + self.position_encode_out
 
         encoder_output = self.encoder(x_embed, dropout=0.)
         predict = self.decoder(y_embed, encoder_output, dropout=0.)
@@ -374,6 +384,7 @@ class TSModel:
             f_name = f_name + ".pkl"
 
         w_dict = {}
+        w_dict['conv_embedding'] = self.optim_conv_embed_w
         w_dict['encoder'] = self.optim_encoder_w
         w_dict['decoder'] = self.optim_decoder_w
         w_dict['predictor'] = self.optim_predictor_w
@@ -392,10 +403,12 @@ class TSModel:
         with open(f_name, 'rb') as f:
             w_dict = pickle.load(f)
 
+        self.optim_conv_embed_w = w_dict['conv_embedding']
         self.optim_encoder_w = w_dict['encoder']
         self.optim_decoder_w = w_dict['decoder']
         self.optim_predictor_w = w_dict['predictor']
 
+        self.conv_embedding.set_weights(self.optim_conv_embed_w)
         self.encoder.set_weights(self.optim_encoder_w)
         self.decoder.set_weights(self.optim_decoder_w)
         for key in self.optim_predictor_w.keys():

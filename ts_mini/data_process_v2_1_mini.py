@@ -109,7 +109,7 @@ class DataScheduler:
         n_features = len(key_list)
         M = configs.m_days // configs.sampling_days + 1
 
-        question = np.stack([features_dict[key] for key in key_list], axis=-1)
+        question = np.stack([features_dict[key] for key in key_list], axis=-1).astype(np.float32)
         question = np.transpose(question, axes=(1, 0, 2))
         assert question.shape == (n_assets, M, n_features)
 
@@ -205,10 +205,6 @@ class DataScheduler:
               model,
               trainset=None,
               evalset=None,
-              train_steps=1,
-              eval_steps=10,
-              save_steps=50,
-              early_stopping_count=10,
               model_name='ts_model_v1.0'):
 
         c = self.configs
@@ -234,16 +230,13 @@ class DataScheduler:
         train_input_enc, train_output_dec, train_target_dec, features_list, train_add_infos, _, _ = _train_dataset
         eval_input_enc, eval_output_dec, eval_target_dec, _, eval_add_infos, _, _ = _eval_dataset
 
-        assert np.sum(train_input_enc[:, -1, :] - train_output_dec[:, 0, :]) == 0
-        assert np.sum(eval_input_enc[:, -1, :] - eval_output_dec[:, 0, :]) == 0
+        assert np.max(np.abs(train_input_enc[:, -1, :] - train_output_dec[:, 0, :])) <= 1e-5
+        assert np.max(np.abs(eval_input_enc[:, -1, :] - eval_output_dec[:, 0, :])) <= 1e-5
 
-        train_size_value = train_add_infos['size_factor']
+        train_size_factor = train_add_infos['size_factor'].reshape([-1, 1, 1]).astype(np.float32)
         train_importance_wgt = train_add_infos['importance_wgt']
-        eval_size_value = eval_add_infos['size_factor']
+        eval_size_factor = eval_add_infos['size_factor'].reshape([-1, 1, 1]).astype(np.float32)
         eval_importance_wgt = eval_add_infos['importance_wgt']
-
-        # train_size_value = np.concatenate([add_info['size_value'] for add_info in train_add_infos], axis=0)
-        # eval_size_value = np.concatenate([add_info['size_value'] for add_info in eval_add_infos], axis=0)
 
         # K > 1인 경우 미래데이터 안 땡겨쓰게.
         train_new_output = np.zeros_like(train_output_dec)
@@ -252,24 +245,24 @@ class DataScheduler:
         #     train_new_output[:, 0, :] = train_output_dec[:, 0, :]
         #     eval_new_output[:, 0, :] = eval_output_dec[:, 0, :]
         # elif weight_scheme == 'mw':
-        train_new_output[:, 0, :] = train_output_dec[:, 0, :] + train_size_value.reshape([-1, 1])
-        eval_new_output[:, 0, :] = eval_output_dec[:, 0, :] + eval_size_value.reshape([-1, 1])
+        train_new_output[:, 0, :] = train_output_dec[:, 0, :] + train_size_factor[:, 0, :]
+        eval_new_output[:, 0, :] = eval_output_dec[:, 0, :] + eval_size_factor[:, 0, :]
 
-        train_dataset = dataset_process(train_input_enc, train_new_output, train_target_dec, train_size_value, batch_size=c.train_batch_size, importance_wgt=train_importance_wgt)
-        eval_dataset = dataset_process(eval_input_enc, eval_new_output, eval_target_dec, eval_size_value, batch_size=c.eval_batch_size, importance_wgt=eval_importance_wgt, iter_num=1)
+        train_dataset = dataset_process(train_input_enc, train_new_output, train_target_dec, train_size_factor, batch_size=c.train_batch_size, importance_wgt=train_importance_wgt)
+        eval_dataset = dataset_process(eval_input_enc, eval_new_output, eval_target_dec, eval_size_factor, batch_size=c.eval_batch_size, importance_wgt=eval_importance_wgt, iter_num=1)
         print("train step: {}  eval step: {}".format(len(train_input_enc) // c.train_batch_size,
                                                      len(eval_input_enc) // c.eval_batch_size))
-        for i, (features, labels, size_values, importance_wgt) in enumerate(train_dataset.take(train_steps)):
+        for i, (features, labels, size_factors, importance_wgt) in enumerate(train_dataset.take(c.train_steps)):
             print_loss = False
-            if i % save_steps == 0:
+            if i % c.save_steps == 0:
                 model.save_model(model_name)
 
-            if i % eval_steps == 0:
+            if i % c.eval_steps == 0:
                 print_loss = True
                 model.evaluate_mtl(eval_dataset, features_list, steps=len(eval_input_enc) // c.eval_batch_size)
 
                 print("[t: {} / i: {}] min_eval_loss:{} / count:{}".format(self.base_idx, i, model.eval_loss, model.eval_count))
-                if model.eval_count >= early_stopping_count:
+                if model.eval_count >= c.early_stopping_count:
                     print("[t: {} / i: {}] train finished.".format(self.base_idx, i))
                     model.weight_to_optim()
                     model.save_model(model_name)
@@ -299,10 +292,10 @@ class DataScheduler:
 
                     features_with_noise['input'] = features_with_noise['input'] * mask
 
-            labels_mtl = self.features_cls.labels_for_mtl(features_list, labels, size_values, importance_wgt)
+            labels_mtl = self.features_cls.labels_for_mtl(features_list, labels, size_factors, importance_wgt)
             model.train_mtl(features_with_noise, labels_mtl, print_loss=print_loss)
 
-    def test(self, model, dataset=None, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None, time_step=1):
+    def test(self, performer, model, dataset=None, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None, time_step=1):
         if out_dir is None:
             test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
         else:
@@ -318,9 +311,9 @@ class DataScheduler:
             if _dataset_list is False:
                 print('[test] no test data')
                 return False
-            self.features_cls.predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=test_out_path, file_nm=file_nm, ylog=ylog, time_step=time_step)
-            self.features_cls.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "2", file_nm=file_nm, ylog=ylog, time_step=time_step, invest_rate=0.8)
-            self.features_cls.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "3", file_nm=file_nm, ylog=ylog, time_step=time_step, invest_rate=0.6)
+            performer.predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=test_out_path, file_nm=file_nm, ylog=ylog, time_step=time_step)
+            performer.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "2", file_nm=file_nm, ylog=ylog, time_step=time_step, invest_rate=0.8)
+            performer.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "3", file_nm=file_nm, ylog=ylog, time_step=time_step, invest_rate=0.6)
 
         if save_type is not None:
             _dataset_list = self._dataset('predict')
@@ -335,13 +328,13 @@ class DataScheduler:
 
     def save_score_to_csv(self, model, dataset_list, out_dir=None):
         input_enc_list, output_dec_list, _, _, additional_infos, start_date, _ = dataset_list
-        size_value_list = [add_info['size_value'] for add_info in additional_infos]
+        size_factor_list = [add_info['size_factor'] for add_info in additional_infos]
         df_infos = pd.DataFrame(columns={'start_d', 'base_d', 'infocode', 'score'})
-        for i, (input_enc_t, output_dec_t, size_value) in enumerate(zip(input_enc_list, output_dec_list, size_value_list)):
+        for i, (input_enc_t, output_dec_t, size_factor) in enumerate(zip(input_enc_list, output_dec_list, size_factor_list)):
             assert np.sum(input_enc_t[:, -1, :] - output_dec_t[:, 0, :]) == 0
             assert np.sum(output_dec_t[:, 1:, :]) == 0
             new_output_t = np.zeros_like(output_dec_t)
-            new_output_t[:, 0, :] = output_dec_t[:, 0, :] + size_value[:, 0, :]
+            new_output_t[:, 0, :] = output_dec_t[:, 0, :] + size_factor[:, 0, :]
 
             features = {'input': input_enc_t, 'output': new_output_t}
             predictions = model.predict_mtl(features)
@@ -357,13 +350,13 @@ class DataScheduler:
             table_nm = 'kr_weekly_score_temp'
 
         input_enc_list, output_dec_list, _, _, additional_infos, start_date, _ = dataset_list
-        size_value_list = [add_info['size_value'] for add_info in additional_infos]
+        size_factor_list = [add_info['size_factor'] for add_info in additional_infos]
         df_infos = pd.DataFrame(columns={'start_d', 'base_d', 'infocode', 'score'})
-        for i, (input_enc_t, output_dec_t, size_value) in enumerate(zip(input_enc_list, output_dec_list, size_value_list)):
+        for i, (input_enc_t, output_dec_t, size_factor) in enumerate(zip(input_enc_list, output_dec_list, size_factor_list)):
             assert np.sum(input_enc_t[:, -1, :] - output_dec_t[:, 0, :]) == 0
             assert np.sum(output_dec_t[:, 1:, :]) == 0
             new_output_t = np.zeros_like(output_dec_t)
-            new_output_t[:, 0, :] = output_dec_t[:, 0, :] + size_value[:, 0, :]
+            new_output_t[:, 0, :] = output_dec_t[:, 0, :] + size_factor[:, 0, :]
             features = {'input': input_enc_t, 'output': new_output_t}
             predictions = model.predict_mtl(features)
             df_infos = pd.concat([df_infos, pd.DataFrame({
@@ -514,18 +507,18 @@ class DataGeneratorDynamic:
         return len(self.date_)
 
 
-def rearrange(input, output, target, size_value, importance_wgt):
+def rearrange(input, output, target, size_factor, importance_wgt):
     features = {"input": input, "output": output}
-    return features, target, size_value, importance_wgt
+    return features, target, size_factor, importance_wgt
 
 
 # 학습에 들어가 배치 데이터를 만드는 함수이다.
-def dataset_process(input_enc, output_dec, target_dec, size_value, batch_size, importance_wgt=None, shuffle=True, iter_num=None):
+def dataset_process(input_enc, output_dec, target_dec, size_factor, batch_size, importance_wgt=None, shuffle=True, iter_num=None):
     # Dataset을 생성하는 부분으로써 from_tensor_slices부분은
     # 각각 한 문장으로 자른다고 보면 된다.
     # train_input_enc, train_output_dec, train_target_dec
     # 3개를 각각 한문장으로 나눈다.
-    dataset = tf.data.Dataset.from_tensor_slices((input_enc, output_dec, target_dec, size_value, importance_wgt))
+    dataset = tf.data.Dataset.from_tensor_slices((input_enc, output_dec, target_dec, size_factor, importance_wgt))
 
     # 전체 데이터를 섞는다.
     if shuffle is True:

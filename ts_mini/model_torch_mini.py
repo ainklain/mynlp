@@ -86,9 +86,9 @@ class PosEncoding(nn.Module):
         self.pos_enc.weight = nn.Parameter(torch.from_numpy(pos_enc), requires_grad=False)
 
     def forward(self, input_len):
-        max_len = torch.max(input_len)
-        tensor = torch.cuda.LongTensor if input_len.is_cuda else torch.LongTensor
-        input_pos = tensor([list(range(1, len+1)) + [0]*(max_len-len) for len in input_len])
+        # max_len = torch.max(input_len)
+        # tensor = torch.cuda.LongTensor if input_len.is_cuda else torch.LongTensor
+        input_pos = torch.LongTensor([list(range(1, input_len+1))])
 
         return self.pos_enc(input_pos)
 
@@ -223,6 +223,21 @@ class PoswiseFeedForwardNet(nn.Module):
 
 
 # ####################### Layers ##########################
+class ConvEmbeddingLayer(nn.Module):
+    # input features의 수를 d_model만큼의 1d conv로 재생산
+
+    def __init__(self, n_features, d_model):
+        super(ConvEmbeddingLayer, self).__init__()
+        self.conv1 = nn.Conv1d(in_channels=n_features, out_channels=d_model, kernel_size=1)
+
+    def forward(self, inputs):
+        # input shape: (b_size, T, n_features)
+        inputs = inputs.contiguous().transpose(-2, -1)
+        # (b_size, n_features, T) -> (b_size, d_model, T)
+        outputs = self.conv1(inputs)
+        return outputs.contiguous().transpose(-2, -1)
+
+
 class EncoderLayer(nn.Module):
     def __init__(self, d_k, d_v, d_model, d_ff, n_heads, dropout=0.1):
         super(EncoderLayer, self).__init__()
@@ -311,26 +326,17 @@ def get_attn_subsequent_mask(seq):
 
 
 
-class TSModel:
+class TSModel(nn.Module):
     def __init__(self, configs, features_cls, weight_scheme='mw'):
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        super(TSModel, self).__init__()
+        self.cnn_embedding = ConvEmbeddingLayer(n_features=configs.n_features, d_model=configs.d_model)
+        self.encoder = Encoder(configs.n_layers, configs.d_k, configs.d_v, configs.d_model, configs.d_ff, configs.n_heads,
+                               configs.max_input_seq_len, configs.src_vocab_size, configs.dropout, configs.weighted_model)
+        self.decoder = Decoder(configs.n_layers, configs.d_k, configs.d_v, configs.d_model, configs.d_ff, configs.n_heads,
+                               configs.max_output_seq_len, configs.tgt_vocab_size, configs.dropout, configs.weighted_model)
+        self.tgt_proj = Linear(configs.d_model, configs.tgt_vocab_size, bias=False)
+        self.weighted_model = configs.weighted_model
 
 
 
@@ -342,10 +348,10 @@ class TSModel:
 
 class Encoder(nn.Module):
     def __init__(self, n_layers, d_k, d_v, d_model, d_ff, n_heads,
-                 max_seq_len, src_vocab_size, dropout=0.1, weighted=False):
+                 max_seq_len, dropout=0.1, weighted=False):
         super(Encoder, self).__init__()
         self.d_model = d_model
-        self.src_emb = nn.Embedding(src_vocab_size, d_model, padding_idx=data_utils.PAD,)
+        # self.src_emb = nn.Embedding(src_vocab_size, d_model, padding_idx=data_utils.PAD,)
         self.pos_emb = PosEncoding(max_seq_len * 10, d_model) # TODO: *10 fix
         self.dropout_emb = nn.Dropout(dropout)
         self.layer_type = EncoderLayer if not weighted else WeightedEncoderLayer
@@ -353,8 +359,8 @@ class Encoder(nn.Module):
             [self.layer_type(d_k, d_v, d_model, d_ff, n_heads, dropout) for _ in range(n_layers)])
 
     def forward(self, enc_inputs, enc_inputs_len, return_attn=False):
-        enc_outputs = self.src_emb(enc_inputs)
-        enc_outputs += self.pos_emb(enc_inputs_len) # Adding positional encoding TODO: note
+        # enc_outputs = self.src_emb(enc_inputs)
+        enc_outputs = enc_inputs + self.pos_emb(enc_inputs_len) # Adding positional encoding TODO: note
         enc_outputs = self.dropout_emb(enc_outputs)
 
         enc_self_attn_mask = get_attn_pad_mask(enc_inputs, enc_inputs)
@@ -369,10 +375,10 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
     def __init__(self, n_layers, d_k, d_v, d_model, d_ff, n_heads,
-                 max_seq_len, tgt_vocab_size, dropout=0.1, weighted=False):
+                 max_seq_len, dropout=0.1, weighted=False):
         super(Decoder, self).__init__()
         self.d_model = d_model
-        self.tgt_emb = nn.Embedding(tgt_vocab_size, d_model, padding_idx=data_utils.PAD, )
+        # self.tgt_emb = nn.Embedding(tgt_vocab_size, d_model, padding_idx=data_utils.PAD, )
         self.pos_emb = PosEncoding(max_seq_len * 10, d_model) # TODO: *10 fix
         self.dropout_emb = nn.Dropout(dropout)
         self.layer_type = DecoderLayer if not weighted else WeightedDecoderLayer
@@ -380,8 +386,8 @@ class Decoder(nn.Module):
             [self.layer_type(d_k, d_v, d_model, d_ff, n_heads, dropout) for _ in range(n_layers)])
 
     def forward(self, dec_inputs, dec_inputs_len, enc_inputs, enc_outputs, return_attn=False):
-        dec_outputs = self.tgt_emb(dec_inputs)
-        dec_outputs += self.pos_emb(dec_inputs_len) # Adding positional encoding # TODO: note
+        # dec_outputs = self.tgt_emb(dec_inputs)
+        dec_outputs = dec_inputs + self.pos_emb(dec_inputs_len) # Adding positional encoding # TODO: note
         dec_outputs = self.dropout_emb(dec_outputs)
 
         dec_self_attn_pad_mask = get_attn_pad_mask(dec_inputs, dec_inputs)
