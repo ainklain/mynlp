@@ -206,7 +206,8 @@ class DataScheduler:
               model,
               trainset=None,
               evalset=None,
-              model_name='ts_model_v1.0'):
+              model_name='ts_model_v1.0',
+              epoch=True):
 
         c = self.configs
 
@@ -253,12 +254,21 @@ class DataScheduler:
         eval_dataset = dataset_process(eval_input_enc, eval_new_output, eval_target_dec, eval_size_factor, batch_size=c.eval_batch_size, importance_wgt=eval_importance_wgt, iter_num=1)
         print("train step: {}  eval step: {}".format(len(train_input_enc) // c.train_batch_size,
                                                      len(eval_input_enc) // c.eval_batch_size))
-        for i, (features, labels, size_factors, importance_wgt) in enumerate(train_dataset.take(c.train_steps)):
+        if epoch:
+            train_steps = len(train_input_enc) // c.train_batch_size
+            eval_steps = train_steps
+            save_steps = train_steps
+        else:
+            train_steps = c.train_steps
+            eval_steps = c.eval_steps
+            save_steps = c.save_steps
+
+        for i, (features, labels, size_factors, importance_wgt) in enumerate(train_dataset.take(train_steps)):
             print_loss = False
-            if i % c.save_steps == 0:
+            if i % save_steps == 0:
                 model.save_model(model_name)
 
-            if i % c.eval_steps == 0:
+            if i % eval_steps == 0:
                 print_loss = True
                 model.evaluate_mtl(eval_dataset, features_list, steps=len(eval_input_enc) // c.eval_batch_size)
 
@@ -313,7 +323,7 @@ class DataScheduler:
                 print('[test] no test data')
                 return False
             performer.predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=test_out_path, file_nm=file_nm, ylog=ylog, time_step=time_step)
-            performer.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "2", file_nm=file_nm, ylog=ylog, time_step=time_step, invest_rate=0.8)
+            # performer.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "2", file_nm=file_nm, ylog=ylog, time_step=time_step, invest_rate=0.8)
             performer.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "3", file_nm=file_nm, ylog=ylog, time_step=time_step, invest_rate=0.6)
 
         if save_type is not None:
@@ -376,7 +386,7 @@ class DataScheduler:
         self.train_begin_idx += self.retrain_days
         self.eval_begin_idx += self.retrain_days
         self.test_begin_idx += self.retrain_days
-        self.test_end_idx = min(self.test_end_idx + self.retrain_days, self.data_generator.max_length - self.k_days - 1)
+        self.test_end_idx = min(self.test_end_idx + self.retrain_days, self.data_generator.max_length - self.configs.k_days - 1)
 
     def get_date(self):
         return self.date_[self.base_d]
@@ -388,7 +398,7 @@ class DataScheduler:
     @property
     def done(self):
         # if self.test_end_idx > self.data_generator.max_length:
-        if self.test_end_idx <= self.test_begin_idx:
+        if self.test_end_idx <= self.test_begin_idx + self.retrain_days:
             return True
         else:
             return False
@@ -494,7 +504,7 @@ class DataGeneratorDynamic:
         univ_list = sorted(list(set.intersection(set(df_logp.columns), set(size_df.index))))
 
         # calculate features
-        features_dict, labels_dict = features_cls.calc_features(df_logp.ix[:, univ_list].to_numpy(dtype=np.float32), transpose=False)
+        features_dict, labels_dict = features_cls.calc_features(df_logp.ix[:, univ_list].to_numpy(dtype=np.float32), transpose=False, debug=True)
 
         spot_dict = dict()
         spot_dict['asset_list'] = univ_list

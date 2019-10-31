@@ -238,7 +238,7 @@ class FeatureNew:
 class Performance:
     def __init__(self, configs):
         self.configs = configs
-        self.label_feature= configs.label_feature
+        self.label_feature = configs.label_feature
         self.pred_feature = configs.pred_feature
         self.cost_rate = configs.cost_rate
 
@@ -488,6 +488,10 @@ class Performance:
         true_y = np.zeros([int(np.ceil(len(input_enc_list) / time_step)) + 1, 1])
         true_y_mw = np.zeros([int(np.ceil(len(input_enc_list) / time_step)) + 1, 1])
 
+        turnover_true = np.zeros_like(true_y)
+        total_cost_true = np.zeros_like(true_y)
+        truy_y_adj = np.zeros_like(true_y)
+
         turnover_true_mw = np.zeros_like(true_y_mw)
         total_cost_true_mw = np.zeros_like(true_y_mw)
         truy_y_mw_adj = np.zeros_like(true_y_mw)
@@ -496,6 +500,11 @@ class Performance:
         pred_arr_mw = dict()
         pred_arr['main'] = np.zeros([len(true_y), 2])
         pred_arr_mw['main'] = np.zeros([len(true_y), 2])
+
+
+        turnover_main = np.zeros_like(true_y)
+        total_cost_main = np.zeros_like(true_y)
+        pred_main_adj = np.zeros_like(true_y)
 
         turnover_main_mw = np.zeros_like(true_y_mw)
         total_cost_main_mw = np.zeros_like(true_y_mw)

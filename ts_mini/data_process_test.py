@@ -15,13 +15,14 @@ configs = Config()
 features_cls = FeatureNew(configs)
 
 
-k_days = 20; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing'
+k_days = 20; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing';head=2
 configs.balancing_method = balancing_method
-configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_v2_02'.format(k_days, univ_type, balancing_method, pred)
+configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_h{}_v2_03'.format(k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100
 configs.eval_steps = 100
 configs.save_steps = 100
-configs.early_stopping_count = 5
+configs.attention_head_size = 8
+configs.early_stopping_count = 2
 configs.weight_scheme = 'mw'  # mw / ew
 config_str = configs.export()
 
@@ -38,7 +39,7 @@ with open(os.path.join(ds.data_out_path, configs.f_name, 'config.txt'), 'w') as 
 if os.path.exists(os.path.join(ds.data_out_path, configs.f_name, configs.f_name + '.pkl')):
     model.load_model(os.path.join(ds.data_out_path, configs.f_name, configs.f_name))
 
-ds.set_idx(6500)
+ds.set_idx(5000)
 ii = 0
 jj = 0
 
@@ -60,12 +61,13 @@ while not ds.done:
         testset = ds._dataset('test')
 
     # if trainset is None:
-    #     trainset = ds._dataset('train')1
+    #     trainset = ds._dataset('train')
     #     evalset = ds._dataset('eval')
 
     if ii > 0:
         is_trained = ds.train(model, trainset, evalset
-                              , model_name=os.path.join(ds.data_out_path, configs.f_name, configs.f_name))
+                              , model_name=os.path.join(ds.data_out_path, configs.f_name, configs.f_name)
+                              , epoch=True)
 
         if is_trained is not False:
             model.save_model(os.path.join(ds.data_out_path, configs.f_name, configs.f_name, str(ds.base_idx), configs.f_name))
