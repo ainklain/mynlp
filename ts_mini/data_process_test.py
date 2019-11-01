@@ -15,13 +15,13 @@ configs = Config()
 features_cls = FeatureNew(configs)
 
 
-k_days = 5; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing';head=2
+k_days = 5; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing';head=8
 configs.balancing_method = balancing_method
-configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_h{}_v2_03'.format(k_days, univ_type, balancing_method, pred, head)
+configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_h{}_v2_04'.format(k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100
 configs.eval_steps = 100
 configs.save_steps = 100
-configs.attention_head_size = 8
+configs.attention_head_size = head
 configs.early_stopping_count = 2
 configs.weight_scheme = 'mw'  # mw / ew
 config_str = configs.export()
