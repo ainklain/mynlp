@@ -15,7 +15,7 @@ configs = Config()
 features_cls = FeatureNew(configs)
 
 
-k_days = 20; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing';head=2
+k_days = 5; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing';head=2
 configs.balancing_method = balancing_method
 configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_h{}_v2_03'.format(k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100
@@ -108,7 +108,7 @@ key_lists = define_keys()
 # load and save data
 # for date_i in range(4000, len(dg.date_), configs.sampling_days):
 input_enc, output_dec, target_dec, additional_info = [], [], [], []
-for date_i in range(4000, len(dg.date_), configs.sampling_days):
+for date_i in range(1500, len(dg.date_), configs.sampling_days):
     loop_st = time.time()
     file_nm = os.path.join(data_path, '{}.pkl'.format(date_i))
     if os.path.exists(file_nm):
