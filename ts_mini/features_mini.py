@@ -80,6 +80,45 @@ def cleansing_missing_value(df_selected, n_allow_missing_value=5, to_log=True):
     return df
 
 
+def weight_scale(score, method='L_60'):
+    method = method.lower()
+    m_args = method.split('_')
+
+    scale = np.zeros_like(score)
+    # score값에 따라 기본 ew/mw weight * scale 해주는 값
+    if m_args[0] == 'bm':
+        scale[:] = 1.
+    else:
+        rank_ = np.argsort(-score)  # 값이 큰 순서
+        if m_args[0] == 'l':
+            # 상위 n_percent% 투자
+            # ex) 'L_60', 'L_80', ...
+            assert len(m_args[1:]) == 1
+            n_percent = int(m_args[1]) / 100
+            lower_bound = 0
+            upper_bound = int(len(rank_) * n_percent)
+            scale[rank_[lower_bound:upper_bound]] = 1.
+        elif m_args[0] == 'ls':
+            # 롱숏 ntile분위, 각분위 당 wgt_diff 씩 조정 배분
+            # ex) 'ls_5_20', 'LS_4_10', ...
+            assert len(m_args[1:]) == 2
+            ntile = int(m_args[1])
+            wgt_diff = int(m_args[2]) / 100
+            for i in range(ntile):
+                lower_bound = int(len(rank_) * (i / ntile))
+                upper_bound = int(len(rank_) * ((i + 1.) / ntile))
+                scale[rank_[lower_bound:upper_bound]] = (1 + wgt_diff * (ntile - 1) / 2) - wgt_diff * i
+        elif m_args[0] == 'each':
+            ntile = int(m_args[1])
+            scale = np.zeros([len(score), ntile])
+            for i in range(ntile):
+                lower_bound = int(len(rank_) * (i / ntile))
+                upper_bound = int(len(rank_) * ((i + 1.) / ntile))
+                scale[rank_[lower_bound:upper_bound], i] = 1.
+
+    return scale
+
+
 class FeatureNew:
     def __init__(self, configs):
         self.name = configs.generate_name()
@@ -242,9 +281,6 @@ class Performance:
         self.pred_feature = configs.pred_feature
         self.cost_rate = configs.cost_rate
 
-    def define_variables(self):
-        pass
-
     def define_variables(self, t_steps, assets, f_keys=None):
         var_dict = dict(y=np.zeros([t_steps, 1]),
                         turnover=np.zeros([t_steps, 1]),
@@ -260,7 +296,8 @@ class Performance:
         return var_dict
 
     def define_variables_ntile(self, t_steps, assets, n_tile, f_keys=None):
-        var_dict = dict(y=np.zeros([t_steps, n_tile]),
+        var_dict = dict(y=np.zeros([t_steps, 1]),
+                        y_each=np.zeros([t_steps, n_tile]),
                         turnover=np.zeros([t_steps, 1]),
                         total_cost=np.zeros([t_steps, 1]),
                         y_w_cost=np.zeros([t_steps, 1]),
@@ -269,33 +306,39 @@ class Performance:
                                          dtype=np.float32))  # column 0: old wgt, 1: new wgt
         if f_keys is not None:
             for key in f_keys:
-                var_dict[key] = np.zeros([t_steps, n_tile])
+                var_dict[key] = np.zeros([t_steps, 1])
+                var_dict[key + '_each'] = np.zeros([t_steps, n_tile])
 
         return var_dict
 
+
     # call by reference (var_dict를 파라미터로 받아서 업데이트)
-    def calculate_cost(self, t, var_dict, assets, label_y, mktcap, crit=None):
-        if crit is not None:
-            assets_selected = assets[crit]
-            mktcap = mktcap[crit]
-        else:
-            assets_selected = assets[:]
+    def calculate_cost(self, t, var_dict, assets, label_y):
+        # nickname
+        wgt_ = var_dict['wgt']
 
-        var_dict['wgt'].loc[:, 'new'] = 0.0
-        var_dict['wgt'].loc[assets_selected, 'new'] = mktcap / np.sum(mktcap)
-        var_dict['turnover'][t] = np.sum(np.abs(var_dict['wgt']['new'] - var_dict['wgt']['old']))
+        var_dict['turnover'][t] = np.sum(np.abs(wgt_['new'] - wgt_['old']))
         var_dict['total_cost'][t] = var_dict['total_cost'][t - 1] + var_dict['turnover'][t] * self.cost_rate
-        var_dict['wgt'].loc[:, 'old'] = 0.0
-        var_dict['wgt'].loc[assets, 'old'] = ((1 + label_y) * var_dict['wgt'].loc[assets, 'new']) / np.sum((1 + label_y) * var_dict['wgt'].loc[assets, 'new'])
-        var_dict['y_w_cost'][t] = np.sum(label_y * var_dict['wgt'].loc[assets, 'new']) - var_dict['turnover'][t] * self.cost_rate
-
+        wgt_.loc[:, 'old'] = 0.0
+        wgt_.loc[assets, 'old'] = ((1 + label_y) * wgt_.loc[assets, 'new']) / np.sum((1 + label_y) * wgt_.loc[assets, 'new'])
+        var_dict['y_w_cost'][t] = np.sum(label_y * wgt_.loc[assets, 'new']) - var_dict['turnover'][t] * self.cost_rate
 
     def predict_plot_mtl_cross_section_test(self, model, dataset_list, save_dir
                                             , file_nm='test.png'
                                             , ylog=False
                                             , t_stepsize=1
+                                            , ls_method='ls_5_20'
                                             , plot_all_features=True):
-        n_tile = 5
+        m_args = ls_method.split('_')
+        if m_args[0] == 'ls':
+            n_tile = int(m_args[1])
+            def_variables = self.define_variables_ntile
+            kw = {'n_tile': n_tile}
+        else:
+            n_tile = -1
+            def_variables = self.define_variables
+            kw = {}
+
         if dataset_list is False:
             return False
 
@@ -314,15 +357,15 @@ class Performance:
         # define variables to save values
         if plot_all_features:
             model_keys = list(model.predictor.keys())
-            plot_list = ['main'] + model_keys
+            features_for_plot = ['main'] + model_keys
         else:
             model_keys = None
-            plot_list = ['main']
+            features_for_plot = ['main']
 
-        ew_dict = dict(bm=self.define_variables_ntile(t_steps=t_steps, assets=all_assets_list, n_tile=n_tile),
-                       model=self.define_variables_ntile(t_steps=t_steps, assets=all_assets_list, n_tile=n_tile, f_keys=model_keys))
-        mw_dict = dict(bm=self.define_variables_ntile(t_steps=t_steps, assets=all_assets_list, n_tile=n_tile),
-                       model=self.define_variables_ntile(t_steps=t_steps, assets=all_assets_list, n_tile=n_tile, f_keys=model_keys))
+        ew_dict = dict(bm=self.define_variables(t_steps=t_steps, assets=all_assets_list),
+                       model=def_variables(t_steps=t_steps, assets=all_assets_list, f_keys=model_keys, **kw))
+        mw_dict = dict(bm=self.define_variables(t_steps=t_steps, assets=all_assets_list),
+                       model=def_variables(t_steps=t_steps, assets=all_assets_list, f_keys=model_keys, **kw))
 
         # nickname
         bm_ew = ew_dict['bm']
@@ -348,6 +391,7 @@ class Performance:
             label_y = labels[:, 0, idx_y]
             mc = mktcap[:, 0, 0]
 
+            assets = np.array(assets)
 
             # ############ For BenchMark ############
 
@@ -355,154 +399,220 @@ class Performance:
             bm_mw['y'][t] = np.sum(label_y * mc) / np.sum(mc)
 
             # cost calculation
-            assets = np.array(assets)
-            self.calculate_cost(t, bm_mw, assets, label_y, mc)
+            bm_ew['wgt'].loc[assets, 'new'] = 1. / len(assets)
+            self.calculate_cost(t, bm_ew, assets, label_y)
+
+            bm_mw['wgt'].loc[assets, 'new'] = mc / np.sum(mc)
+            self.calculate_cost(t, bm_mw, assets, label_y)
 
             # ############ For Model ############
             # prediction
             predictions = model.predict_mtl(features)
             value_ = dict()
 
-            for feature in plot_list:
-                if feature == 'main':
+            value_['cslogy'] = predictions['cslogy'][:, 0, 0]
+            for f_ in features_for_plot:
+                f_for_y = ('y' if f_ == 'main' else f_)
+                if f_ == 'main':
                     value_['main'] = predictions[self.pred_feature][:, 0, 0]
                 else:
-                    value_[feature] = predictions[feature][:, 0, 0]
+                    value_[f_] = predictions[f_][:, 0, 0]
 
+                if m_args[0] == 'ls':
+                    # ntile 별 수익률
+                    scale_n = weight_scale(value_[f_], method='each_{}'.format(n_tile))
+                    model_ew[f_for_y + '_each'][t, :] = np.matmul(label_y, scale_n) / np.sum(scale_n, axis=0)
+                    model_mw[f_for_y + '_each'][t, :] = np.matmul(label_y * mc, scale_n) / np.matmul(mc, scale_n)
+                    # or np.sum((label_y * mc).reshape([-1, 1]) * scale, axis=0) / np.sum(mc.reshape(-1, 1) * scale, axis=0)
 
+                    # pf 수익률
+                    scale = weight_scale(value_[f_], method=ls_method)
+                elif m_args[0] == 'l':
+                    scale1 = weight_scale(value_[f_], method=ls_method)
+                    scale = scale1 * weight_scale(value_['cslogy'], method=ls_method)
 
-            for i_tile in range(n_tile):
-                low_q, high_q = 100 * (1. - (1. + i_tile) / n_tile), 100 * (1. - i_tile / n_tile)
+                model_ew[f_for_y][t] = np.sum(label_y * scale) / np.sum(scale)
+                model_mw[f_for_y][t] = np.sum(label_y * mc * scale) / np.sum(mc * scale)
 
-                for v in plot_list:
-                    v_for_y = ('y' if v == 'main' else v)
-                    low_crit, high_crit = np.percentile(value_[v], q=[low_q, high_q])
-                    if high_q == 100:
-                        crit_ = (value_[v] >= low_crit)
-                    else:
-                        crit_ = ((value_[v] >= low_crit) & (value_[v] < high_crit))
+                # cost calculation
+                model_ew['wgt'].loc[assets, 'new'] = scale / np.sum(scale)
+                self.calculate_cost(t, model_ew, assets, label_y)
 
-                    model_ew[v_for_y][t, i_tile] = np.mean(label_y[crit_])
-                    model_mw[v_for_y][t, i_tile] = np.sum(label_y[crit_] * mc[crit_]) / np.sum(mc[crit_])
+                model_mw['wgt'].loc[assets, 'new'] = mc * scale / np.sum(mc * scale)
+                self.calculate_cost(t, model_mw, assets, label_y)
 
-            # cost calculation
-            wgt_for_cost.loc[:, 'new_wgt_main'] = 0.0
-            for i_tile in range(n_tile):
-                low_q, high_q = 100 * (1. - (1. + i_tile) / n_tile), 100 * (1. - i_tile / n_tile)
-                low_crit, high_crit = np.percentile(value_['main'], q=[low_q, high_q])
-                if high_q == 100:
-                    crit_main = (value_['main'] >= low_crit)
-                else:
-                    crit_main = ((value_['main'] >= low_crit) & (value_['main'] < high_crit))
+        for f_ in features_for_plot:
+            f_for_y = ('y' if f_ == 'main' else f_)
+            if m_args[0] == 'ls':
+                y_arr = np.concatenate([bm_ew['y'], bm_mw['y']
+                                        , model_ew[f_for_y]
+                                        , model_mw[f_for_y]
+                                        , model_ew[f_for_y + '_each']
+                                        , model_mw[f_for_y + '_each']], axis=-1)
+                data = pd.DataFrame(np.cumprod(1. + y_arr, axis=0)
+                                    , columns=['bm_ew', 'bm_mw', 'model_ew', 'model_mw']
+                                              + ['model_e{}'.format(i+1) for i in range(n_tile)]
+                                              + ['model_m{}'.format(i+1) for i in range(n_tile)])
+            else:
+                y_arr = np.concatenate([bm_ew['y'], bm_mw['y'], model_ew[f_for_y], model_mw[f_for_y]], axis=-1)
+                data = pd.DataFrame(np.cumprod(1. + y_arr, axis=0), columns=['bm_ew', 'bm_mw', 'model_ew', 'model_mw'])
+            data['diff'] = np.cumprod(1. + model_ew[f_for_y] - bm_ew['y'])
+            data['diff_mw'] = np.cumprod(1. + model_mw[f_for_y] - bm_mw['y'])
 
-                wgt_for_cost.loc[assets[crit_main], 'new_wgt_main'] = mktcap[crit_main, 0, 0] * (1 + (2 - i_tile) * 0.2)
-
-            wgt_for_cost['new_wgt_main'] = wgt_for_cost['new_wgt_main'] / np.sum(wgt_for_cost['new_wgt_main'])
-            turnover_main_mw[t] = np.sum(
-                np.abs(wgt_for_cost['new_wgt_main'] - wgt_for_cost['old_wgt_main']))
-            total_cost_main_mw[t] = total_cost_main_mw[t - 1] + turnover_main_mw[t] * self.cost_rate
-            wgt_for_cost.loc[:, 'old_wgt_main'] = 0.0
-            wgt_for_cost.loc[assets, 'old_wgt_main'] = ((1 + labels[:, 0, idx_y]) * wgt_for_cost.loc[assets, 'new_wgt_main']) \
-                                                      / np.sum(
-                (1 + labels[:, 0, idx_y]) * wgt_for_cost.loc[assets, 'new_wgt_main'])
-            pred_main_mw_adj[t] = np.sum(labels[:, 0, idx_y] * wgt_for_cost.loc[assets, 'new_wgt_main']) - turnover_main_mw[
-                t] * self.cost_rate
-
-        for v_ in value_.keys():
-            data = pd.DataFrame(
-                np.cumprod(1. + np.concatenate([true_y, true_y_mw, pred_arr[v_], pred_arr_mw[v_]], axis=-1), axis=0),
-                columns=['true_y', 'true_y_mw'] + ['pred_q{}'.format(i + 1) for i in range(n_tile)]
-                        + ['pred_q{}_mw'.format(i + 1) for i in range(n_tile)])
-            data['pred_ls'] = np.cumprod(1. + np.mean(pred_arr[v_][:, :1], axis=1) - np.mean(pred_arr[v_][:, -1:], axis=1))
-            data['pred_ls2'] = np.cumprod(1. + np.mean(pred_arr[v_][:, :2], axis=1) - np.mean(pred_arr[v_][:, -2:], axis=1))
-            data['pred_ls_mw'] = np.cumprod(
-                1. + np.mean(pred_arr_mw[v_][:, :1], axis=1) - np.mean(pred_arr_mw[v_][:, -1:], axis=1))
-            data['pred_ls_mw2'] = np.cumprod(
-                1. + np.mean(pred_arr_mw[v_][:, :2], axis=1) - np.mean(pred_arr_mw[v_][:, -2:], axis=1))
-
-            if v_ == 'main':
-                data['true_cost'] = total_cost_true_mw
-                data['true_turnover'] = turnover_true_mw
-                data['true_y_mw_adj'] = np.cumprod(1. + truy_y_mw_adj, axis=0) - 1.
-                data['main_cost'] = total_cost_main_mw
-                data['main_turnover'] = turnover_main_mw
-                data['main_y_mw_adj'] = np.cumprod(1. + pred_main_mw_adj, axis=0) - 1.
-                data['diff_adj'] = np.cumprod(1. + pred_main_mw_adj - truy_y_mw_adj, axis=0) - 1.
+            if f_ == 'main':
+                data['bm_cost'] = bm_mw['total_cost']
+                data['bm_turnover'] = bm_mw['turnover']
+                data['bm_y_w_cost'] = np.cumprod(1. + bm_mw['y_w_cost'], axis=0) - 1.
+                data['model_cost'] = model_mw['total_cost']
+                data['model_turnover'] = model_mw['turnover']
+                data['model_y_w_cost'] = np.cumprod(1. + model_mw['y_w_cost'], axis=0) - 1.
+                data['diff_w_cost'] = np.cumprod(1. + model_mw['y_w_cost'] - bm_mw['y_w_cost'], axis=0) - 1.
 
             # ################################ figure 1
-            # equal fig
-            fig = plt.figure()
-            fig.suptitle('{} ~ {}'.format(start_date, end_date))
-            if v_ == 'main':
-                grid = plt.GridSpec(ncols=2, nrows=3, figure=fig)
-                ax1 = fig.add_subplot(grid[0, 0])
-                ax2 = fig.add_subplot(grid[0, 1])
-                ax3 = fig.add_subplot(grid[1, 0])
-                ax4 = fig.add_subplot(grid[1, 1])
-                ax5 = fig.add_subplot(grid[2, :])
-            else:
-                ax1 = fig.add_subplot(221)
-                ax2 = fig.add_subplot(222)
-                ax3 = fig.add_subplot(223)
-                ax4 = fig.add_subplot(224)
-            ax1.plot(data[['true_y', 'pred_ls', 'pred_ls2', 'pred_q1', 'pred_q{}'.format(n_tile)]])
-            box = ax1.get_position()
-            ax1.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-            ax1.legend(['true_y', 'long-short', 'long-short2', 'long', 'short'], loc='center left', bbox_to_anchor=(1, 0.5))
-            if ylog:
-                ax1.set_yscale('log', basey=2)
-
-            ax2.plot(data[['true_y'] + ['pred_q{}'.format(i + 1) for i in range(n_tile)]])
-            box = ax2.get_position()
-            ax2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-            ax2.legend(['true_y'] + ['q{}'.format(i + 1) for i in range(n_tile)], loc='center left',
-                       bbox_to_anchor=(1, 0.5))
-            ax2.set_yscale('log', basey=2)
-
-            # value fig
-            ax3.plot(data[['true_y_mw', 'pred_ls_mw', 'pred_ls_mw2', 'pred_q1_mw', 'pred_q{}_mw'.format(n_tile)]])
-            box = ax3.get_position()
-            ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-            ax3.legend(['true_y(mw)', 'long-short', 'long-short2', 'long', 'short'], loc='center left',
-                       bbox_to_anchor=(1, 0.5))
-            if ylog:
-                ax3.set_yscale('log', basey=2)
-
-            ax4.plot(data[['true_y_mw'] + ['pred_q{}_mw'.format(i + 1) for i in range(n_tile)]])
-            box = ax4.get_position()
-            ax4.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-            ax4.legend(['true_y(mw)'] + ['q{}'.format(i + 1) for i in range(n_tile)], loc='center left',
-                       bbox_to_anchor=(1, 0.5))
-            ax4.set_yscale('log', basey=2)
-
-            if v_ == 'main':
-                data[['true_y_mw_adj', 'main_y_mw_adj']].plot(ax=ax5, colormap=cm.Set2)
-                box = ax5.get_position()
-                ax5.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-                ax5.legend(['true_y_mw_adj', 'main_y_mw_adj'], loc='center left', bbox_to_anchor=(1, 0.8))
+            if m_args[0] == 'ls':
+                # equal fig
+                fig = plt.figure()
+                fig.suptitle('{} ~ {}'.format(start_d, end_d))
+                if f_ == 'main':
+                    grid = plt.GridSpec(ncols=2, nrows=3, figure=fig)
+                    ax1 = fig.add_subplot(grid[0, 0])
+                    ax2 = fig.add_subplot(grid[0, 1])
+                    ax3 = fig.add_subplot(grid[1, 0])
+                    ax4 = fig.add_subplot(grid[1, 1])
+                    ax5 = fig.add_subplot(grid[2, :])
+                else:
+                    ax1 = fig.add_subplot(221)
+                    ax2 = fig.add_subplot(222)
+                    ax3 = fig.add_subplot(223)
+                    ax4 = fig.add_subplot(224)
+                ax1.plot(data[['bm_ew', 'model_ew', 'model_e1', 'model_e{}'.format(n_tile)]])
+                box = ax1.get_position()
+                ax1.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax1.legend(['true_y', 'long-short', 'long', 'short'], loc='center left', bbox_to_anchor=(1, 0.5))
                 if ylog:
-                    ax5.set_yscale('log', basey=2)
+                    ax1.set_yscale('log', basey=2)
 
-                ax5_2 = ax5.twinx()
-                data[['diff_adj']].plot(ax=ax5_2, colormap=cm.jet)
-                box = ax5_2.get_position()
-                ax5_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-                ax5_2.legend(['diff_adj'], loc='center left', bbox_to_anchor=(1, 0.2))
+                ax2.plot(data[['bm_ew'] + ['model_e{}'.format(i + 1) for i in range(n_tile)]])
+                box = ax2.get_position()
+                ax2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax2.legend(['true_y'] + ['q{}'.format(i + 1) for i in range(n_tile)], loc='center left',
+                           bbox_to_anchor=(1, 0.5))
+                ax2.set_yscale('log', basey=2)
+
+                # value fig
+                ax3.plot(data[['bm_mw', 'model_mw', 'model_m1', 'model_m{}'.format(n_tile)]])
+                box = ax3.get_position()
+                ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax3.legend(['true_y(mw)', 'long-short', 'long', 'short'], loc='center left',
+                           bbox_to_anchor=(1, 0.5))
                 if ylog:
-                    ax5_2.set_yscale('log', basey=2)
+                    ax3.set_yscale('log', basey=2)
 
-            if file_nm is None:
-                save_file_name = '{}/{}'.format(save_dir, '_all.png')
-            else:
-                save_dir_v = os.path.join(save_dir, v_)
-                os.makedirs(save_dir_v, exist_ok=True)
-                file_nm_v = file_nm.replace(file_nm[-4:], "_{}{}".format(v_, file_nm[-4:]))
-                save_file_name = '{}/{}'.format(save_dir_v, file_nm_v)
+                ax4.plot(data[['bm_mw'] + ['model_m{}'.format(i + 1) for i in range(n_tile)]])
+                box = ax4.get_position()
+                ax4.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax4.legend(['true_y(mw)'] + ['q{}'.format(i + 1) for i in range(n_tile)], loc='center left',
+                           bbox_to_anchor=(1, 0.5))
+                ax4.set_yscale('log', basey=2)
 
-            fig.savefig(save_file_name)
-            # print("figure saved. (dir: {})".format(save_file_name))
-            plt.close(fig)
+                if f_ == 'main':
+                    data[['bm_y_w_cost', 'model_y_w_cost']].plot(ax=ax5, colormap=cm.Set2)
+                    box = ax5.get_position()
+                    ax5.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                    ax5.legend(['bm_y_w_cost', 'model_y_w_cost'], loc='center left', bbox_to_anchor=(1, 0.8))
+                    if ylog:
+                        ax5.set_yscale('log', basey=2)
 
+                    ax5_2 = ax5.twinx()
+                    data[['diff_w_cost']].plot(ax=ax5_2, colormap=cm.jet)
+                    box = ax5_2.get_position()
+                    ax5_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                    ax5_2.legend(['diff_w_cost'], loc='center left', bbox_to_anchor=(1, 0.2))
+                    if ylog:
+                        ax5_2.set_yscale('log', basey=2)
+
+                if file_nm is None:
+                    save_file_name = '{}/{}'.format(save_dir, '_all.png')
+                else:
+                    save_dir_v = os.path.join(save_dir, f_)
+                    os.makedirs(save_dir_v, exist_ok=True)
+                    file_nm_v = file_nm.replace(file_nm[-4:], "_{}{}".format(f_, file_nm[-4:]))
+                    save_file_name = '{}/{}'.format(save_dir_v, file_nm_v)
+
+                fig.savefig(save_file_name)
+                # print("figure saved. (dir: {})".format(save_file_name))
+                plt.close(fig)
+
+            elif m_args[0] == 'l':
+                # equal fig
+                fig = plt.figure()
+                fig.suptitle('{} ~ {}'.format(start_d, end_d))
+                if f_ == 'main':
+                    ax1 = fig.add_subplot(311)
+                    ax2 = fig.add_subplot(312)
+                    ax3 = fig.add_subplot(313)
+                    # ax4 = fig.add_subplot(414)
+                else:
+                    ax1 = fig.add_subplot(211)
+                    ax2 = fig.add_subplot(212)
+
+                data[['bm_ew', 'model_ew']].plot(ax=ax1, colormap=cm.Set2)
+                box = ax1.get_position()
+                ax1.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax1.legend(['bm_ew', 'model_ew'], loc='center left', bbox_to_anchor=(1, 0.8))
+                if ylog:
+                    ax1.set_yscale('log', basey=2)
+
+                ax1_2 = ax1.twinx()
+                data[['diff']].plot(ax=ax1_2, colormap=cm.jet)
+                box = ax1_2.get_position()
+                ax1_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax1_2.legend(['diff'], loc='center left', bbox_to_anchor=(1, 0.2))
+                if ylog:
+                    ax1_2.set_yscale('log', basey=2)
+
+                data[['bm_mw', 'model_mw']].plot(ax=ax2, colormap=cm.Set2)
+                box = ax2.get_position()
+                ax2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax2.legend(['bm_mw', 'model_mw'], loc='center left', bbox_to_anchor=(1, 0.8))
+                if ylog:
+                    ax2.set_yscale('log', basey=2)
+
+                ax2_2 = ax2.twinx()
+                data[['diff_mw']].plot(ax=ax2_2, colormap=cm.jet)
+                box = ax2_2.get_position()
+                ax2_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax2_2.legend(['diff_mw'], loc='center left', bbox_to_anchor=(1, 0.2))
+                if ylog:
+                    ax2_2.set_yscale('log', basey=2)
+
+                if f_ == 'main':
+                    data[['bm_y_w_cost', 'model_y_w_cost']].plot(ax=ax3, colormap=cm.Set2)
+                    box = ax3.get_position()
+                    ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                    ax3.legend(['bm_y_w_cost', 'model_y_w_cost'], loc='center left', bbox_to_anchor=(1, 0.8))
+                    if ylog:
+                        ax3.set_yscale('log', basey=2)
+
+                    ax3_2 = ax3.twinx()
+                    data[['diff_w_cost']].plot(ax=ax3_2, colormap=cm.jet)
+                    box = ax3_2.get_position()
+                    ax3_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                    ax3_2.legend(['diff_w_cost'], loc='center left', bbox_to_anchor=(1, 0.2))
+                    if ylog:
+                        ax3_2.set_yscale('log', basey=2)
+
+                if file_nm is None:
+                    save_file_name = '{}/{}'.format(save_dir, '_all.png')
+                else:
+                    save_dir_v = os.path.join(save_dir, f_)
+                    os.makedirs(save_dir_v, exist_ok=True)
+                    file_nm_v = file_nm.replace(file_nm[-4:], "_{}{}".format(f_, file_nm[-4:]))
+                    save_file_name = '{}/{}'.format(save_dir_v, file_nm_v)
+
+                fig.savefig(save_file_name)
+                # print("figure saved. (dir: {})".format(save_file_name))
+                plt.close(fig)
 
     def predict_plot_mtl_cross_section_test_long(self, model, dataset_list, save_dir
                                                  , file_nm='test.png'

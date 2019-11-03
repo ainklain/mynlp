@@ -306,7 +306,7 @@ class DataScheduler:
             labels_mtl = self.features_cls.labels_for_mtl(features_list, labels, size_factors, importance_wgt)
             model.train_mtl(features_with_noise, labels_mtl, print_loss=print_loss)
 
-    def test(self, performer, model, dataset=None, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None, time_step=1):
+    def test(self, performer, model, dataset=None, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None, t_stepsize=1):
         if out_dir is None:
             test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
         else:
@@ -322,9 +322,12 @@ class DataScheduler:
             if _dataset_list is False:
                 print('[test] no test data')
                 return False
-            performer.predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=test_out_path, file_nm=file_nm, ylog=ylog, time_step=time_step)
+            performer.predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=test_out_path, file_nm=file_nm
+                                                          , ylog=ylog, t_stepsize=t_stepsize, ls_method='ls_5_20', plot_all_features=True)
+            performer.predict_plot_mtl_cross_section_test(model, _dataset_list, save_dir=test_out_path + "2", file_nm=file_nm,
+                                                          ylog=ylog, t_stepsize=t_stepsize, ls_method='l_60', plot_all_features=True)
             # performer.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "2", file_nm=file_nm, ylog=ylog, time_step=time_step, invest_rate=0.8)
-            performer.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "3", file_nm=file_nm, ylog=ylog, t_stepsize=time_step, invest_rate=0.6)
+            # performer.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "3", file_nm=file_nm, ylog=ylog, t_stepsize=time_step, invest_rate=0.6)
 
         if save_type is not None:
             _dataset_list = self._dataset('predict')

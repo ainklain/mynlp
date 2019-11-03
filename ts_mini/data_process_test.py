@@ -79,7 +79,7 @@ while not ds.done:
             ylog=False,
             # save_type='csv',
             table_nm='kr_weekly_score_temp',
-            time_step=configs.k_days // configs.sampling_days)
+            t_stepsize=configs.k_days // configs.sampling_days)
 
     ii += 1
 
