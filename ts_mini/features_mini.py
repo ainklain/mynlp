@@ -453,20 +453,26 @@ class Performance:
                                     , columns=['bm_ew', 'bm_mw', 'model_ew', 'model_mw']
                                               + ['model_e{}'.format(i+1) for i in range(n_tile)]
                                               + ['model_m{}'.format(i+1) for i in range(n_tile)])
+                data['model_ls_ew'] = np.cumprod(1. + np.mean(model_ew[f_for_y + '_each'][:, :1], axis=1) - np.mean(model_ew[f_for_y + '_each'][:, -1:], axis=1))
+                data['model_ls_mw'] = np.cumprod(1. + np.mean(model_mw[f_for_y + '_each'][:, :1], axis=1) - np.mean(model_mw[f_for_y + '_each'][:, -1:], axis=1))
+
             else:
                 y_arr = np.concatenate([bm_ew['y'], bm_mw['y'], model_ew[f_for_y], model_mw[f_for_y]], axis=-1)
                 data = pd.DataFrame(np.cumprod(1. + y_arr, axis=0), columns=['bm_ew', 'bm_mw', 'model_ew', 'model_mw'])
-            data['diff'] = np.cumprod(1. + model_ew[f_for_y] - bm_ew['y'])
+            data['diff_ew'] = np.cumprod(1. + model_ew[f_for_y] - bm_ew['y'])
             data['diff_mw'] = np.cumprod(1. + model_mw[f_for_y] - bm_mw['y'])
 
             if f_ == 'main':
                 data['bm_cost'] = bm_mw['total_cost']
                 data['bm_turnover'] = bm_mw['turnover']
-                data['bm_y_w_cost'] = np.cumprod(1. + bm_mw['y_w_cost'], axis=0) - 1.
+                data['bm_y_w_cost_ew'] = np.cumprod(1. + bm_ew['y_w_cost'], axis=0) - 1.
+                data['bm_y_w_cost_mw'] = np.cumprod(1. + bm_mw['y_w_cost'], axis=0) - 1.
                 data['model_cost'] = model_mw['total_cost']
                 data['model_turnover'] = model_mw['turnover']
-                data['model_y_w_cost'] = np.cumprod(1. + model_mw['y_w_cost'], axis=0) - 1.
-                data['diff_w_cost'] = np.cumprod(1. + model_mw['y_w_cost'] - bm_mw['y_w_cost'], axis=0) - 1.
+                data['model_y_w_cost_ew'] = np.cumprod(1. + model_ew['y_w_cost'], axis=0) - 1.
+                data['model_y_w_cost_mw'] = np.cumprod(1. + model_mw['y_w_cost'], axis=0) - 1.
+                data['diff_w_cost_ew'] = np.cumprod(1. + model_ew['y_w_cost'] - bm_ew['y_w_cost'], axis=0) - 1.
+                data['diff_w_cost_mw'] = np.cumprod(1. + model_mw['y_w_cost'] - bm_mw['y_w_cost'], axis=0) - 1.
 
             # ################################ figure 1
             if m_args[0] == 'ls':
@@ -485,10 +491,10 @@ class Performance:
                     ax2 = fig.add_subplot(222)
                     ax3 = fig.add_subplot(223)
                     ax4 = fig.add_subplot(224)
-                ax1.plot(data[['bm_ew', 'model_ew', 'model_e1', 'model_e{}'.format(n_tile)]])
+                ax1.plot(data[['bm_ew', 'model_ew', 'model_ls_ew', 'model_e1', 'model_e{}'.format(n_tile)]])
                 box = ax1.get_position()
                 ax1.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-                ax1.legend(['true_y', 'long-short', 'long', 'short'], loc='center left', bbox_to_anchor=(1, 0.5))
+                ax1.legend(['bm_ew', 'model_ew', 'long-short', 'long', 'short'], loc='center left', bbox_to_anchor=(1, 0.5))
                 if ylog:
                     ax1.set_yscale('log', basey=2)
 
@@ -500,10 +506,10 @@ class Performance:
                 ax2.set_yscale('log', basey=2)
 
                 # value fig
-                ax3.plot(data[['bm_mw', 'model_mw', 'model_m1', 'model_m{}'.format(n_tile)]])
+                ax3.plot(data[['bm_mw', 'model_mw', 'model_ls_ew', 'model_m1', 'model_m{}'.format(n_tile)]])
                 box = ax3.get_position()
                 ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-                ax3.legend(['true_y(mw)', 'long-short', 'long', 'short'], loc='center left',
+                ax3.legend(['bm_mw', 'model_mw', 'long-short', 'long', 'short'], loc='center left',
                            bbox_to_anchor=(1, 0.5))
                 if ylog:
                     ax3.set_yscale('log', basey=2)
@@ -516,18 +522,18 @@ class Performance:
                 ax4.set_yscale('log', basey=2)
 
                 if f_ == 'main':
-                    data[['bm_y_w_cost', 'model_y_w_cost']].plot(ax=ax5, colormap=cm.Set2)
+                    data[['bm_y_w_cost_ew', 'model_y_w_cost_ew', 'bm_y_w_cost_mw', 'model_y_w_cost_mw']].plot(ax=ax5, colormap=cm.Set2)
                     box = ax5.get_position()
                     ax5.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-                    ax5.legend(['bm_y_w_cost', 'model_y_w_cost'], loc='center left', bbox_to_anchor=(1, 0.8))
+                    ax5.legend(['bm_y_w_cost_ew', 'model_y_w_cost_ew', 'bm_y_w_cost_mw', 'model_y_w_cost_mw'], loc='center left', bbox_to_anchor=(1, 0.8))
                     if ylog:
                         ax5.set_yscale('log', basey=2)
 
                     ax5_2 = ax5.twinx()
-                    data[['diff_w_cost']].plot(ax=ax5_2, colormap=cm.jet)
+                    data[['diff_w_cost_ew', 'diff_w_cost_mw']].plot(ax=ax5_2, colormap=cm.jet)
                     box = ax5_2.get_position()
                     ax5_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-                    ax5_2.legend(['diff_w_cost'], loc='center left', bbox_to_anchor=(1, 0.2))
+                    ax5_2.legend(['diff_w_cost_ew', 'diff_w_cost_mw'], loc='center left', bbox_to_anchor=(1, 0.2))
                     if ylog:
                         ax5_2.set_yscale('log', basey=2)
 
@@ -564,10 +570,10 @@ class Performance:
                     ax1.set_yscale('log', basey=2)
 
                 ax1_2 = ax1.twinx()
-                data[['diff']].plot(ax=ax1_2, colormap=cm.jet)
+                data[['diff_ew']].plot(ax=ax1_2, colormap=cm.jet)
                 box = ax1_2.get_position()
                 ax1_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-                ax1_2.legend(['diff'], loc='center left', bbox_to_anchor=(1, 0.2))
+                ax1_2.legend(['diff_ew'], loc='center left', bbox_to_anchor=(1, 0.2))
                 if ylog:
                     ax1_2.set_yscale('log', basey=2)
 
@@ -587,18 +593,18 @@ class Performance:
                     ax2_2.set_yscale('log', basey=2)
 
                 if f_ == 'main':
-                    data[['bm_y_w_cost', 'model_y_w_cost']].plot(ax=ax3, colormap=cm.Set2)
+                    data[['bm_y_w_cost_ew', 'model_y_w_cost_ew','bm_y_w_cost_mw', 'model_y_w_cost_mw']].plot(ax=ax3, colormap=cm.Set2)
                     box = ax3.get_position()
                     ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-                    ax3.legend(['bm_y_w_cost', 'model_y_w_cost'], loc='center left', bbox_to_anchor=(1, 0.8))
+                    ax3.legend(['bm_y_w_cost_ew', 'model_y_w_cost_ew','bm_y_w_cost_mw', 'model_y_w_cost_mw'], loc='center left', bbox_to_anchor=(1, 0.8))
                     if ylog:
                         ax3.set_yscale('log', basey=2)
 
                     ax3_2 = ax3.twinx()
-                    data[['diff_w_cost']].plot(ax=ax3_2, colormap=cm.jet)
+                    data[['diff_w_cost_ew', 'diff_w_cost_mw']].plot(ax=ax3_2, colormap=cm.jet)
                     box = ax3_2.get_position()
                     ax3_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-                    ax3_2.legend(['diff_w_cost'], loc='center left', bbox_to_anchor=(1, 0.2))
+                    ax3_2.legend(['diff_w_cost_ew', 'diff_w_cost_mw'], loc='center left', bbox_to_anchor=(1, 0.2))
                     if ylog:
                         ax3_2.set_yscale('log', basey=2)
 
