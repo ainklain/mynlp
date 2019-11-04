@@ -23,10 +23,9 @@ def main(k_days, pred, univ_type, balancing_method):
         ts_configs.m_days = 120
 
     ts_configs.balancing_method = balancing_method
-    # ts_configs.f_name = 'kr_{}_rand_{}_{}_{}_{}_sizeadj_decay_005'.format('mw', k_days, univ_type, balancing_method, pred)  #: kr every
-    ts_configs.f_name = 'kr_mw_rand_20_selected_nothing_cslogy_sizeadj_decay_005'
-    ts_configs.train_steps = 100
-    ts_configs.eval_steps = 100
+    ts_configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_sizeadj_decay_000'.format(k_days, univ_type, balancing_method, pred)  #: kr every
+    ts_configs.train_steps = 50
+    ts_configs.eval_steps = 50
     ts_configs.early_stopping_count = 5
     ts_configs.weight_scheme = 'mw'  # mw / ew
     config_str = ts_configs.export()

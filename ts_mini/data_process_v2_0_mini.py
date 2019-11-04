@@ -18,7 +18,7 @@ class DataScheduler:
         os.makedirs(self.data_out_path, exist_ok=True)
 
         # self.data_generator = DataGenerator(data_type)    # infocode
-        self.data_generator = DataGeneratorDynamic(features_cls, data_type, univ_type=univ_type, use_beta=configs.use_beta, delayed_days=configs.delayed_days)    # infocode
+        self.data_generator = DataGeneratorDynamic(features_cls, data_type, univ_type=univ_type, use_beta=configs.use_beta, delayed_days=configs.delay_days)    # infocode
 
         self.train_set_length = configs.train_set_length
         self.retrain_days = configs.retrain_days
@@ -284,8 +284,8 @@ class DataScheduler:
                 print('[test] no test data')
                 return False
             self.features_cls.predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=test_out_path, file_nm=file_nm, ylog=ylog, time_step=time_step)
-            self.features_cls.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "2", file_nm=file_nm, ylog=ylog, time_step=time_step, invest_rate=0.8)
-            self.features_cls.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "3", file_nm=file_nm, ylog=ylog, time_step=time_step, invest_rate=0.6)
+            self.features_cls.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "2", file_nm=file_nm, ylog=ylog, t_stepsize=time_step, invest_rate=0.8)
+            self.features_cls.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "3", file_nm=file_nm, ylog=ylog, t_stepsize=time_step, invest_rate=0.6)
 
         if save_type is not None:
             _dataset_list = self._dataset('predict')
