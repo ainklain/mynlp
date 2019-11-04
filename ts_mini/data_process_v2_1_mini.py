@@ -5,7 +5,25 @@ import tensorflow as tf
 import time
 import numpy as np
 import os
-from dbmanager import SqlManager
+# from dbmanager import SqlManager
+
+
+def cleansing_missing_value(df_selected, n_allow_missing_value=5, to_log=True):
+    mask = np.sum(df_selected.isna(), axis=0) <= n_allow_missing_value
+    df = df_selected.ix[:, mask].ffill().bfill()
+    df = df / df.iloc[0]
+    if to_log:
+        df = np.log(df)
+
+    return df
+
+
+def done_decorator(f):
+    def decorated(*args, **kwargs):
+        print("{} ...ing".format(f.__name__))
+        f(*args, **kwargs)
+        print("{} ...done".format(f.__name__))
+    return decorated
 
 
 class DataScheduler:
@@ -408,24 +426,6 @@ class DataScheduler:
             return False
 
 
-def cleansing_missing_value(df_selected, n_allow_missing_value=5, to_log=True):
-    mask = np.sum(df_selected.isna(), axis=0) <= n_allow_missing_value
-    df = df_selected.ix[:, mask].ffill().bfill()
-    df = df / df.iloc[0]
-    if to_log:
-        df = np.log(df)
-
-    return df
-
-
-def done_decorator(f):
-    def decorated(*args, **kwargs):
-        print("{} ...ing".format(f.__name__))
-        f(*args, **kwargs)
-        print("{} ...done".format(f.__name__))
-    return decorated
-
-
 class PrepareDataFromDB:
     def __init__(self, data_type='kr_stock'):
         self.sqlm = SqlManager()
@@ -578,6 +578,163 @@ class PrepareDataFromDB:
         self.sqlm.set_db_name('qinv')
         df = self.sqlm.db_read(sql_)
         df.to_csv('./data/kr_mktcap_daily.csv')
+
+
+class DataSamplerMarket:
+    def __init__(self, configs, features_cls):
+        self.configs = configs
+        self.data_type = 'kr_market'
+        self.data_generator_mm = DataGeneratorMarket(features_cls, data_type='kr_market')
+
+        self._initialize(configs)
+
+    def _initialize(self, configs):
+        self.base_idx = 1250
+        self.train_begin_idx = 250
+        self.eval_begin_idx = 250 + int(1000 * configs.trainset_rate)
+        self.test_begin_idx = self.base_idx - configs.m_days
+        self.test_end_idx = self.base_idx + configs.retrain_days
+
+        self._make_path(configs)
+
+    def _make_path(self, configs):
+        # make a directory for outputs
+        self.data_out_path = os.path.join(os.getcwd(), configs.data_out_path)
+        os.makedirs(self.data_out_path, exist_ok=True)
+
+    def get_data_params(self, mode='train'):
+        c = self.configs
+        data_params = dict()
+
+        if mode == 'train':
+            start_idx = self.train_begin_idx + c.m_days
+            end_idx = self.eval_begin_idx - c.k_days
+            data_params['balance_class'] = True
+            data_params['label_type'] = 'trainable_label'   # trainable: calc_length 반영
+            decaying_factor = 0.99   # 기간별 샘플 중요도
+        elif mode == 'eval':
+            start_idx = self.eval_begin_idx + c.m_days
+            end_idx = self.test_begin_idx - c.k_days
+            data_params['balance_class'] = True
+            data_params['label_type'] = 'trainable_label'   # trainable: calc_length 반영
+            decaying_factor = 1.   # 기간별 샘플 중요도
+        elif mode == 'test':
+            start_idx = self.test_begin_idx + c.m_days
+            # start_idx = self.test_begin_idx
+            end_idx = self.test_end_idx
+            data_params['balance_class'] = False
+            data_params['label_type'] = 'test_label'        # test: 예측하고자 하는 것만 반영 (k_days)
+            decaying_factor = 1.   # 기간별 샘플 중요도
+        elif mode == 'test_insample':
+            start_idx = self.train_begin_idx + c.m_days
+            # start_idx = self.test_begin_idx
+            end_idx = self.test_begin_idx - c.k_days
+            data_params['balance_class'] = False
+            data_params['label_type'] = 'test_label'        # test: 예측하고자 하는 것만 반영 (k_days)
+            decaying_factor = 1.   # 기간별 샘플 중요도
+        elif mode == 'predict':
+            start_idx = self.test_begin_idx + c.m_days
+            # start_idx = self.test_begin_idx
+            end_idx = self.test_end_idx
+            data_params['balance_class'] = False
+            data_params['label_type'] = None            # label 없이 과거데이터만으로 스코어 산출
+            decaying_factor = 1.   # 기간별 샘플 중요도
+        else:
+            raise NotImplementedError
+
+        print("start idx:{} ({}) / end idx: {} ({})".format(start_idx, self.date_[start_idx], end_idx, self.date_[end_idx]))
+
+        return start_idx, end_idx, data_params, decaying_factor
+
+    def _fetch_data(self, base_d):
+        # q, a가 주식과는 transpose관계. 여기- [T, ts, features] // 주식- [assets, T, features]
+        c = self.configs
+        dgmm = self.data_generator_mm
+        key_list = c.key_list
+
+        date_i = self.date_.index(base_d)
+
+        result = dgmm.sample_data(base_d)
+        if result is False:
+            return None
+
+        features_dict, labels_dict = result
+
+        n_features = len(key_list)
+        M = c.m_days // c.sampling_days + 1
+        ts_list = list(dgmm.data_df.columns)
+        question = np.stack([features_dict[key] for key in key_list], axis=-1).astype(np.float32)
+        assert question.shape == (M, len(ts_list), n_features)
+
+        answer = np.zeros([1, len(ts_list), n_features], dtype=np.float32)
+
+        answer[0, :, :] = question[-1, :, :]
+        if labels_dict[c.label_feature] is not None:
+            label_ = labels_dict[c.label_feature][ts_list.index('kospi')]
+        else:
+            label_ = 0
+
+        return question[:], answer[:], label_
+
+    def _dataset(self, mode='train'):
+        c = self.configs
+
+        input_enc, output_dec, target_dec, additional_info = [], [], [], []
+        start_idx, end_idx, data_params, decaying_factor = self.get_data_params(mode)
+        features_list = c.key_list
+
+        idx_balance = c.key_list.index(c.balancing_key)
+
+        n_loop = np.ceil((end_idx - start_idx) / c.sampling_days)
+        for i, d in enumerate(range(start_idx, end_idx, c.sampling_days)):
+            base_d = self.date_[d]
+            fetch_data = self._fetch_data(base_d)
+            if fetch_data is None:
+                continue
+
+            tmp_ie, tmp_od, tmp_td = fetch_data
+            addi_info = decaying_factor ** (n_loop - i - 1)
+
+            if data_params['balance_class'] is True and c.balancing_method == 'each':
+                idx_bal = self.balanced_index(tmp_td[:, 0, idx_balance])
+                tmp_ie, tmp_od, tmp_td = tmp_ie[idx_bal], tmp_od[idx_bal], tmp_td[idx_bal]
+
+            input_enc.append(tmp_ie)
+            output_dec.append(tmp_od)
+            target_dec.append(tmp_td)
+            additional_info.append(addi_info)
+
+        if len(input_enc) == 0:
+            return False
+
+        if mode in ['train', 'eval']:
+            additional_infos = dict()
+            input_enc = np.concatenate(input_enc, axis=0)
+            output_dec = np.concatenate(output_dec, axis=0)
+            target_dec = np.concatenate(target_dec, axis=0)
+
+            importance_wgt = np.concatenate([additional_info['importance_wgt'] for additional_info in additional_infos_list], axis=0)
+
+            if data_params['balance_class'] is True and c.balancing_method == 'once':
+                idx_bal = self.balanced_index(target_dec[:, 0, idx_balance])
+                input_enc, output_dec, target_dec = input_enc[idx_bal], output_dec[idx_bal], target_dec[idx_bal]
+                additional_infos['importance_wgt'] = importance_wgt[idx_bal]
+            else:
+                additional_infos['importance_wgt'] = importance_wgt[:]
+        else:
+            additional_infos = additional_infos_list
+
+        start_date = self.date_[start_idx]
+        end_date = self.date_[end_idx]
+
+        return input_enc, output_dec, target_dec, features_list, additional_infos, start_date, end_date
+
+    def get_date(self):
+        return self.date_[self.base_d]
+
+    @property
+    def date_(self):
+        return self.data_generator_mm.date_
 
 
 class DataGeneratorMarket:
