@@ -5,12 +5,13 @@ import tensorflow as tf
 import time
 import numpy as np
 import os
+from dbmanager import SqlManager
 
 
 class DataScheduler:
     def __init__(self, configs, features_cls):
         self.data_generator = DataGeneratorDynamic(features_cls, configs.data_type, configs.univ_type)
-
+        self.data_market = DataGeneratorMarket(features_cls, configs.data_type_mm)
         self.configs = configs
         self.features_cls = features_cls
         self.retrain_days = configs.retrain_days
@@ -232,8 +233,8 @@ class DataScheduler:
         train_input_enc, train_output_dec, train_target_dec, features_list, train_add_infos, _, _ = _train_dataset
         eval_input_enc, eval_output_dec, eval_target_dec, _, eval_add_infos, _, _ = _eval_dataset
 
-        assert np.max(np.abs(train_input_enc[:, -1, :] - train_output_dec[:, 0, :])) <= 1e-5
-        assert np.max(np.abs(eval_input_enc[:, -1, :] - eval_output_dec[:, 0, :])) <= 1e-5
+        assert np.max(np.abs(train_input_enc[:, -1, :] - train_output_dec[:, 0, :])) == 0
+        assert np.max(np.abs(eval_input_enc[:, -1, :] - eval_output_dec[:, 0, :])) == 0
 
         train_size_factor = train_add_infos['size_factor'].reshape([-1, 1, 1]).astype(np.float32)
         train_importance_wgt = train_add_infos['importance_wgt']
@@ -301,9 +302,7 @@ class DataScheduler:
 
                     features_with_noise['input'] = features_with_noise['input'] * mask
 
-            # randomly flip label
-
-
+            # randomly flip label: not implemented
 
             labels_mtl = self.features_cls.labels_for_mtl(features_list, labels, size_factors, importance_wgt)
             model.train_mtl(features_with_noise, labels_mtl, print_loss=print_loss)
@@ -419,6 +418,220 @@ def cleansing_missing_value(df_selected, n_allow_missing_value=5, to_log=True):
     return df
 
 
+def done_decorator(f):
+    def decorated(*args, **kwargs):
+        print("{} ...ing".format(f.__name__))
+        f(*args, **kwargs)
+        print("{} ...done".format(f.__name__))
+    return decorated
+
+
+class PrepareDataFromDB:
+    def __init__(self, data_type='kr_stock'):
+        self.sqlm = SqlManager()
+        self.data_type = data_type
+
+    def get_all_csv(self):
+        if self.data_type == 'kr_stock':
+            # date
+            self.get_datetable()
+            # return data
+            self.get_kr_close_y(90)
+            # factor wgt & univ
+            self.get_factorwgt_and_univ('CAP_300_100')  # 'CAP_100_150'
+            # mktcap
+            self.get_mktcap_daily()
+
+    def run_procedure(self):
+        # universe
+        print('[proc] EquityUniverse start')
+        self.sqlm.set_db_name('qinv')
+        self.sqlm.db_execute('EXEC qinv..SP_EquityUniverse')
+        print('[proc] EquityUniverse done')
+
+        # date
+        print('[proc] EquityTradeDateDaily start')
+        self.sqlm.set_db_name('qinv')
+        self.sqlm.db_execute('EXEC qinv..SP_EquityTradeDateDaily')
+        print('[proc] EquityTradeDateDaily done')
+
+        # EquityReturnDaily
+        print('[proc] EquityReturnDaily start')
+        self.sqlm.set_db_name('qinv')
+        self.sqlm.db_execute('EXEC qinv..SP_batch_EquityReturnDaily')
+        print('[proc] EquityReturnDaily done')
+
+        # EquityMarketValueMonthly
+        print('[proc] EquityMarketValueMonthly start')
+        self.sqlm.set_db_name('qinv')
+        self.sqlm.db_execute('EXEC qinv..SP_EquityMarketValueMonthly')
+        print('[proc] EquityMarketValueMonthly done')
+
+    @done_decorator
+    def get_kr_close_y(self, top_npercent=90):
+        sql_ = """
+        select date_, infocode, y
+            from (
+                select distinct infocode
+                    from (
+                        select infocode
+                            from qinv..EquityUniverse 
+                            where region = 'KR' 
+                            and typecode = 'eq'
+                    ) U
+                    cross apply (
+                        select eval_d, size_port
+                            from qinv..EquityMarketValueMonthly 
+                            where infocode = u.infocode
+                            and month(eval_d) = 12
+                            and size_port <= {}
+                    ) M
+            ) U
+            cross apply (
+                select marketdate as date_, y
+                    from qinv..equityreturndaily 
+                    where infocode = u.infocode
+            ) A
+            order by date_, infocode
+        """.format(top_npercent)
+        self.sqlm.set_db_name('qinv')
+        df = self.sqlm.db_read(sql_)
+        df.to_csv('./data/kr_close_y_{}.csv'.format(top_npercent))
+
+    @done_decorator
+    def get_factorwgt_and_univ(self, univ_nm='CAP_300_100'):
+        sql_ = """
+        select work_d as eval_d, univ_nm, gicode, infocode, stock_weight as wgt
+        from passive..active_factor_univ_weight 
+        where univ_nm = '{}'
+        order by work_d, stock_weight desc""".format(univ_nm)
+        self.sqlm.set_db_name('passive')
+        df = self.sqlm.db_read(sql_)
+        df.to_csv('./data/factor_wgt.csv')
+
+        df.ix[:, ['eval_d', 'infocode']].to_csv('./data/kr_univ_monthly.csv')
+
+    @done_decorator
+    def get_datetable(self):
+        sql_ = """
+        select  *
+            from (
+                select eval_d as eval_m, work_d as work_m
+                    from qdb..T_CALENDAR_EVAL_D
+                    where is_m_end = 'y'
+            ) M
+            join (
+                select eval_d as eval_y, work_d as work_y
+                    from qdb..T_CALENDAR_EVAL_D
+                    where is_y_end = 'y'
+            ) Y
+            on datediff(month, eval_y, eval_m) <= 12 and eval_m > eval_y"""
+        self.sqlm.set_db_name('qdb')
+        df = self.sqlm.db_read(sql_)
+        df.to_csv('./data/date.csv')
+
+    @done_decorator
+    def get_mktcap_daily(self):
+        sql_ = """
+        select d.eval_d
+            , U.infocode
+            , N.NUMSHRS * P.CLOSE_ / 1000 AS mktcap
+            , NTILE(100) OVER (PARTITION BY d.eval_d, u.REGION ORDER BY N.NUMSHRS * P.CLOSE_ DESC) AS size
+            from  (
+                select eval_d
+                from qinv..DateTable where is_m_end = 1 and eval_d <= getdate()
+            ) D
+            cross apply (
+                select * 
+                    from qinv..EquityUniverse U
+                    where region = 'KR' AND typecode = 'EQ'
+                    and u.StartDate <= d.eval_d and u.EndDate >= d.eval_d
+            ) U
+            cross apply (
+            select *
+                from qinv..EquityTradeDate T
+                where t.infocode = u.infocode
+                and t.eval_d = d.eval_d
+            ) T
+            cross apply (
+                select *
+                    from (
+                        select p.INFOCODE, P.MarketDate, P.CLOSE_, P.VOLUME
+                                , case when REGION = 'US' AND p.close_ >= 5 then 0 
+                                    when REGION = 'KR' AND p.close_ >= 2000 then 0 
+                                    when REGION = 'JP' AND p.close_ >= 200 then 0 else 1 end as penny_flag
+                                , case when p.Marketdate >= dateadd(day, -31, t.eval_d) then 1 else 0 end as is_active
+                            from qai..ds2primqtprc p
+                            where p.infocode = u.Infocode
+                                and p.MarketDate = T.buy_d
+                    ) P
+                    WHERE penny_flag = 0 and is_active = 1
+            ) P
+            cross apply (
+                select	top 1 N.*
+                    from qai..DS2NumShares N
+                    where n.infocode = u.infocode
+                    and EventDate <= d.eval_d
+                    order by EventDate desc
+            ) N
+        """
+        self.sqlm.set_db_name('qinv')
+        df = self.sqlm.db_read(sql_)
+        df.to_csv('./data/kr_mktcap_daily.csv')
+
+
+class DataGeneratorMarket:
+    def __init__(self, features_cls, data_type='kr_market'):
+        self.features_cls = features_cls
+        if data_type == 'kr_market':
+            data_path = './data/data_for_metarl.csv'
+            data_df_temp = pd.read_csv(data_path).set_index('eval_d')
+
+            self.date_ = list(data_df_temp.index)
+            features_mm = ['mkt_rf', 'smb', 'hml', 'rmw', 'wml', 'call_rate', 'kospi', 'usdkrw']
+            self.data_df = pd.DataFrame(data_df_temp.ix[:, features_mm], dtype=np.float32)
+
+    def sample_data(self, base_d, debug=True):
+        # get attributes to local variables
+        date_ = self.date_
+        data_df = self.data_df
+        features_cls = self.features_cls
+
+        date_i = date_.index(base_d)
+
+        # set local parameters
+        m_days = features_cls.m_days
+        k_days = features_cls.k_days
+        calc_length = features_cls.calc_length
+        calc_length_label = features_cls.calc_length_label
+        delay_days = features_cls.delay_days
+
+        len_data = calc_length + m_days
+        len_label = calc_length_label + delay_days
+        # k_days_adj = k_days + delay_days
+        # len_label = k_days_adj
+
+        start_d = date_[max(0, date_i - len_data)]
+        end_d = date_[min(date_i + len_label, len(date_) - 1)]
+
+        # data cleansing
+        select_where = ((data_df.index >= start_d) & (data_df.index <= end_d))
+        selected_df = (1 + data_df.ix[select_where, :]).cumprod()
+        df_logp = np.log(selected_df / selected_df.iloc[0])
+
+        if df_logp.empty or len(df_logp) <= calc_length + m_days:
+            return False
+
+        # calculate features
+        features_dict, labels_dict = features_cls.calc_features(df_logp.to_numpy(dtype=np.float32), transpose=False, debug=debug)
+
+        return features_dict, labels_dict
+
+    @property
+    def max_length(self):
+        return len(self.date_)
+
+
 class DataGeneratorDynamic:
     def __init__(self, features_cls, data_type='kr_stock', univ_type='selected'):
         if data_type == 'kr_stock':
@@ -473,7 +686,7 @@ class DataGeneratorDynamic:
 
             self.features_cls = features_cls
 
-    def sample_data(self, date_i):
+    def sample_data(self, date_i, debug=True):
         # get attributes to local variables
         date_ = self.date_
         df_pivoted = self.df_pivoted_all
@@ -509,7 +722,7 @@ class DataGeneratorDynamic:
         univ_list = sorted(list(set.intersection(set(df_logp.columns), set(size_df.index))))
 
         # calculate features
-        features_dict, labels_dict = features_cls.calc_features(df_logp.ix[:, univ_list].to_numpy(dtype=np.float32), transpose=False, debug=True)
+        features_dict, labels_dict = features_cls.calc_features(df_logp.ix[:, univ_list].to_numpy(dtype=np.float32), transpose=False, debug=debug)
 
         spot_dict = dict()
         spot_dict['asset_list'] = univ_list

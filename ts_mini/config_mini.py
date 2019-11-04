@@ -9,7 +9,6 @@ class Config:
         self.calc_length = 250
         self.calc_length_label = 120
         self.delay_days = 1
-        self.set_kdays(self.k_days)
 
         self.sampling_days = 5          # get data every 'sampling_days' days
         self.trainset_rate = 0.8
@@ -30,8 +29,8 @@ class Config:
         self.data_type = 'kr_stock'
         self.weight_scheme = 'mw'       # mw / ew
 
-        # features info
-        self.set_features_info(self.k_days)
+        # # features info
+        # self.set_features_info(self.k_days)
 
         self.shuffle_seek = 1000
         self.d_model = 64
@@ -47,6 +46,20 @@ class Config:
         self.checkpoint_path = './ckpt/'
         self.f_name = 'ts_model_v1.0'
         self.tokenize_as_morph = False
+
+        self.set_kdays(self.k_days)
+
+        # MARKET MODEL
+        self.data_type_mm = 'kr_market'
+        self.d_model_mm = 32
+        self.model_hidden_size_mm = self.d_model_mm
+        self.ffn_hidden_size_mm = 32
+        self.attention_head_size_mm = 4
+        self.layer_size_mm = 2
+        self.learning_rate_mm = 1e-4
+        self.dropout_mm = 0.5
+        self.embedding_size_mm = 10
+
 
     @property
     def balancing_key(self):
@@ -143,8 +156,8 @@ class Config:
         for cls in self.features_structure.keys():
             for key in self.features_structure[cls].keys():
                 self.embedding_size += len(self.features_structure[cls][key])
-                
-        self.model_hidden_size = self.embedding_size
+
+        # self.model_hidden_size = self.embedding_size
 
     def set_kdays(self, k_days, pred='pos'):
         self.k_days = k_days

@@ -15,10 +15,10 @@ configs = Config()
 features_cls = FeatureNew(configs)
 
 
-k_days = 5; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing';head=8
+k_days = 20; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing';head=8
 configs.set_kdays(k_days)
 configs.balancing_method = balancing_method
-configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_h{}_v2_05'.format(k_days, univ_type, balancing_method, pred, head)
+configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_h{}_v2_07'.format(k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100
 configs.eval_steps = 100
 configs.save_steps = 100
@@ -91,7 +91,6 @@ while not ds.done:
 
 
 
-
 #data generator TEST
 
 dg_st = time.time()
@@ -116,7 +115,7 @@ for date_i in range(1500, len(dg.date_), configs.sampling_days):
         result = pickle.load(open(file_nm, 'rb'))
         ori_pf = dg.features_cls.possible_func[:]
         dg.features_cls.possible_func = ['cslogy', 'csstd']
-        result2 = dg.sample_data(date_i)
+        result2 = dg.sample_data(date_i, debug=True)
         dg.features_cls.possible_func = ori_pf
 
         features_dict, labels_dict, spot_dict = result
@@ -133,7 +132,7 @@ for date_i in range(1500, len(dg.date_), configs.sampling_days):
 
         pickle.dump((features_dict, labels_dict, spot_dict), open(os.path.join(data_path, '{}.pkl'.format(date_i)), 'wb'))
     else:
-        result = dg.sample_data(date_i)
+        result = dg.sample_data(date_i, debug=True)
         if result is False:
             continue
         pickle.dump(result, open(os.path.join(data_path, '{}.pkl'.format(date_i)), 'wb'))

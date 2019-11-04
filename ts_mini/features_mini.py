@@ -228,7 +228,7 @@ class FeatureNew:
         if transpose:
             log_p_arr = np.transpose(log_p_arr)
 
-        # log_p_arr shape : (days per each date, codes_list)
+        # log_p_arr shape : [n_days per each base_d, codes_list]
         features_dict = dict()
         labels_dict = dict()
         for func_nm in self.possible_func:
@@ -310,7 +310,6 @@ class Performance:
                 var_dict[key + '_each'] = np.zeros([t_steps, n_tile])
 
         return var_dict
-
 
     # call by reference (var_dict를 파라미터로 받아서 업데이트)
     def calculate_cost(self, t, var_dict, assets, label_y):
@@ -399,9 +398,11 @@ class Performance:
             bm_mw['y'][t] = np.sum(label_y * mc) / np.sum(mc)
 
             # cost calculation
+            bm_ew['wgt'].loc[:, 'new'] = 0
             bm_ew['wgt'].loc[assets, 'new'] = 1. / len(assets)
             self.calculate_cost(t, bm_ew, assets, label_y)
 
+            bm_mw['wgt'].loc[:, 'new'] = 0
             bm_mw['wgt'].loc[assets, 'new'] = mc / np.sum(mc)
             self.calculate_cost(t, bm_mw, assets, label_y)
 
@@ -431,6 +432,7 @@ class Performance:
                     scale1 = weight_scale(value_[f_], method=ls_method)
                     scale = scale1 * weight_scale(value_['cslogy'], method=ls_method)
                 elif m_args[0] == 'limit-LS':
+                    pass
 
 
 
@@ -438,9 +440,11 @@ class Performance:
                 model_mw[f_for_y][t] = np.sum(label_y * mc * scale) / np.sum(mc * scale)
 
                 # cost calculation
+                model_ew['wgt'].loc[:, 'new'] = 0
                 model_ew['wgt'].loc[assets, 'new'] = scale / np.sum(scale)
                 self.calculate_cost(t, model_ew, assets, label_y)
 
+                model_mw['wgt'].loc[:, 'new'] = 0
                 model_mw['wgt'].loc[assets, 'new'] = mc * scale / np.sum(mc * scale)
                 self.calculate_cost(t, model_mw, assets, label_y)
 
@@ -466,16 +470,20 @@ class Performance:
             data['diff_mw'] = np.cumprod(1. + model_mw[f_for_y] - bm_mw['y'])
 
             if f_ == 'main':
-                data['bm_cost'] = bm_mw['total_cost']
-                data['bm_turnover'] = bm_mw['turnover']
-                data['bm_y_w_cost_ew'] = np.cumprod(1. + bm_ew['y_w_cost'], axis=0) - 1.
-                data['bm_y_w_cost_mw'] = np.cumprod(1. + bm_mw['y_w_cost'], axis=0) - 1.
-                data['model_cost'] = model_mw['total_cost']
-                data['model_turnover'] = model_mw['turnover']
-                data['model_y_w_cost_ew'] = np.cumprod(1. + model_ew['y_w_cost'], axis=0) - 1.
-                data['model_y_w_cost_mw'] = np.cumprod(1. + model_mw['y_w_cost'], axis=0) - 1.
-                data['diff_w_cost_ew'] = np.cumprod(1. + model_ew['y_w_cost'] - bm_ew['y_w_cost'], axis=0) - 1.
-                data['diff_w_cost_mw'] = np.cumprod(1. + model_mw['y_w_cost'] - bm_mw['y_w_cost'], axis=0) - 1.
+                data['bm_cost_ew'] = bm_ew['total_cost']
+                data['bm_cost_mw'] = bm_mw['total_cost']
+                data['bm_turnover_ew'] = bm_ew['turnover']
+                data['bm_turnover_mw'] = bm_mw['turnover']
+                data['bm_y_w_cost_ew'] = np.cumprod(1. + bm_ew['y_w_cost'], axis=0)
+                data['bm_y_w_cost_mw'] = np.cumprod(1. + bm_mw['y_w_cost'], axis=0)
+                data['model_cost_ew'] = model_ew['total_cost']
+                data['model_cost_mw'] = model_mw['total_cost']
+                data['model_turnover_ew'] = model_ew['turnover']
+                data['model_turnover_mw'] = model_mw['turnover']
+                data['model_y_w_cost_ew'] = np.cumprod(1. + model_ew['y_w_cost'], axis=0)
+                data['model_y_w_cost_mw'] = np.cumprod(1. + model_mw['y_w_cost'], axis=0)
+                data['diff_w_cost_ew'] = np.cumprod(1. + model_ew['y_w_cost'] - bm_ew['y_w_cost'], axis=0)
+                data['diff_w_cost_mw'] = np.cumprod(1. + model_mw['y_w_cost'] - bm_mw['y_w_cost'], axis=0)
 
             # ################################ figure 1
             if m_args[0] == 'ls':
@@ -483,12 +491,13 @@ class Performance:
                 fig = plt.figure()
                 fig.suptitle('{} ~ {}'.format(start_d, end_d))
                 if f_ == 'main':
-                    grid = plt.GridSpec(ncols=2, nrows=3, figure=fig)
+                    grid = plt.GridSpec(ncols=2, nrows=4, figure=fig)
                     ax1 = fig.add_subplot(grid[0, 0])
                     ax2 = fig.add_subplot(grid[0, 1])
                     ax3 = fig.add_subplot(grid[1, 0])
                     ax4 = fig.add_subplot(grid[1, 1])
                     ax5 = fig.add_subplot(grid[2, :])
+                    ax6 = fig.add_subplot(grid[3, :])
                 else:
                     ax1 = fig.add_subplot(221)
                     ax2 = fig.add_subplot(222)
@@ -500,6 +509,10 @@ class Performance:
                 ax1.legend(['bm_ew', 'model_ew', 'long-short', 'long', 'short'], loc='center left', bbox_to_anchor=(1, 0.5))
                 if ylog:
                     ax1.set_yscale('log', basey=2)
+                # print max point
+                x_pt1 = np.argmax(data['model_ew'].values)
+                y_pt1 = data['model_ew'].iloc[x_pt1]
+                ax1.annotate("{:.3f}".format(y_pt1), xy=(x_pt1 - 0.5, y_pt1))
 
                 ax2.plot(data[['bm_ew'] + ['model_e{}'.format(i + 1) for i in range(n_tile)]])
                 box = ax2.get_position()
@@ -516,6 +529,10 @@ class Performance:
                            bbox_to_anchor=(1, 0.5))
                 if ylog:
                     ax3.set_yscale('log', basey=2)
+                # print max point
+                x_pt3 = np.argmax(data['model_mw'].values)
+                y_pt3 = data['model_mw'].iloc[x_pt3]
+                ax3.annotate("{:.3f}".format(y_pt3), xy=(x_pt3 - 0.5, y_pt3))
 
                 ax4.plot(data[['bm_mw'] + ['model_m{}'.format(i + 1) for i in range(n_tile)]])
                 box = ax4.get_position()
@@ -540,6 +557,29 @@ class Performance:
                     if ylog:
                         ax5_2.set_yscale('log', basey=2)
 
+                    # print max point
+                    x_pt_ew = np.argmax(data['diff_w_cost_ew'].values)
+                    y_pt_ew = data['diff_w_cost_ew'].iloc[x_pt_ew]
+                    x_pt_mw = np.argmax(data['diff_w_cost_mw'].values)
+                    y_pt_mw = data['diff_w_cost_mw'].iloc[x_pt_mw]
+                    ax5_2.annotate("{:.3f}".format(y_pt_ew), xy=(x_pt_ew - 0.5, y_pt_ew))
+                    ax5_2.annotate("{:.3f}".format(y_pt_mw), xy=(x_pt_mw - 0.5, y_pt_mw))
+
+                    data[['bm_cost_ew', 'bm_cost_mw', 'model_cost_ew', 'model_cost_mw']].plot(ax=ax6, colormap=cm.Set2)
+                    box = ax6.get_position()
+                    ax6.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                    ax6.legend(['bm_cost_ew', 'bm_cost_mw', 'model_cost_ew', 'model_cost_mw'], loc='center left', bbox_to_anchor=(1, 0.3))
+                    if ylog:
+                        ax6.set_yscale('log', basey=2)
+
+                    # ax6_2 = ax6.twinx()
+                    # data[['bm_turnover_ew', 'bm_turnover_mw', 'model_turnover_ew', 'model_turnover_mw']].plot(ax=ax6_2, colormap=cm.jet)
+                    # box = ax6_2.get_position()
+                    # ax6_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                    # ax6_2.legend(['bm_turnover_ew', 'bm_turnover_mw', 'model_turnover_ew', 'model_turnover_mw'], loc='center left', bbox_to_anchor=(1, 0.2))
+                    # if ylog:
+                    #     ax6_2.set_yscale('log', basey=2)
+
                 if file_nm is None:
                     save_file_name = '{}/{}'.format(save_dir, '_all.png')
                 else:
@@ -557,10 +597,10 @@ class Performance:
                 fig = plt.figure()
                 fig.suptitle('{} ~ {}'.format(start_d, end_d))
                 if f_ == 'main':
-                    ax1 = fig.add_subplot(311)
-                    ax2 = fig.add_subplot(312)
-                    ax3 = fig.add_subplot(313)
-                    # ax4 = fig.add_subplot(414)
+                    ax1 = fig.add_subplot(411)
+                    ax2 = fig.add_subplot(412)
+                    ax3 = fig.add_subplot(413)
+                    ax4 = fig.add_subplot(414)
                 else:
                     ax1 = fig.add_subplot(211)
                     ax2 = fig.add_subplot(212)
@@ -580,6 +620,11 @@ class Performance:
                 if ylog:
                     ax1_2.set_yscale('log', basey=2)
 
+                # print max point
+                x_pt1 = np.argmax(data['diff_ew'].values)
+                y_pt1 = data['diff_ew'].iloc[x_pt1]
+                ax1_2.annotate("{:.3f}".format(y_pt1), xy=(x_pt1 - 0.5, y_pt1))
+
                 data[['bm_mw', 'model_mw']].plot(ax=ax2, colormap=cm.Set2)
                 box = ax2.get_position()
                 ax2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
@@ -594,6 +639,11 @@ class Performance:
                 ax2_2.legend(['diff_mw'], loc='center left', bbox_to_anchor=(1, 0.2))
                 if ylog:
                     ax2_2.set_yscale('log', basey=2)
+
+                # print max point
+                x_pt2 = np.argmax(data['diff_mw'].values)
+                y_pt2 = data['diff_mw'].iloc[x_pt2]
+                ax2_2.annotate("{:.3f}".format(y_pt2), xy=(x_pt2 - 0.5, y_pt2))
 
                 if f_ == 'main':
                     data[['bm_y_w_cost_ew', 'model_y_w_cost_ew', 'bm_y_w_cost_mw', 'model_y_w_cost_mw']].plot(ax=ax3, colormap=cm.Set2)
@@ -610,6 +660,29 @@ class Performance:
                     ax3_2.legend(['diff_w_cost_ew', 'diff_w_cost_mw'], loc='center left', bbox_to_anchor=(1, 0.2))
                     if ylog:
                         ax3_2.set_yscale('log', basey=2)
+
+                    # print max point
+                    x_pt_ew = np.argmax(data['diff_w_cost_ew'].values)
+                    y_pt_ew = data['diff_w_cost_ew'].iloc[x_pt_ew]
+                    x_pt_mw = np.argmax(data['diff_w_cost_mw'].values)
+                    y_pt_mw = data['diff_w_cost_mw'].iloc[x_pt_mw]
+                    ax3_2.annotate("{:.3f}".format(y_pt_ew), xy=(x_pt_ew - 0.5, y_pt_ew))
+                    ax3_2.annotate("{:.3f}".format(y_pt_mw), xy=(x_pt_mw - 0.5, y_pt_mw))
+
+                    data[['bm_cost_ew', 'bm_cost_mw', 'model_cost_ew', 'model_cost_mw']].plot(ax=ax4, colormap=cm.Set2)
+                    box = ax4.get_position()
+                    ax4.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                    ax4.legend(['bm_cost_ew', 'bm_cost_mw', 'model_cost_ew', 'model_cost_mw'], loc='center left', bbox_to_anchor=(1, 0.5))
+                    if ylog:
+                        ax4.set_yscale('log', basey=2)
+
+                    # ax4_2 = ax4.twinx()
+                    # data[['bm_turnover_ew', 'bm_turnover_mw', 'model_turnover_ew', 'model_turnover_mw']].plot(ax=ax4_2, colormap=cm.jet)
+                    # box = ax4_2.get_position()
+                    # ax4_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                    # ax4_2.legend(['bm_turnover_ew', 'bm_turnover_mw', 'model_turnover_ew', 'model_turnover_mw'], loc='center left', bbox_to_anchor=(1, 0.2))
+                    # if ylog:
+                    #     ax4_2.set_yscale('log', basey=2)
 
                 if file_nm is None:
                     save_file_name = '{}/{}'.format(save_dir, '_all.png')
@@ -629,6 +702,7 @@ class Performance:
                                                  , t_stepsize=1
                                                  , invest_rate=0.8
                                                  , plot_all_features=True):
+        # to be deleted (use predict_plot_mtl_cross_section_test)
         if dataset_list is False:
             return False
 
@@ -819,6 +893,7 @@ class Performance:
 
 
 class Feature:
+    # to be deleted (use FeatureNew)
     def __init__(self, configs):
         self._init_features(configs)
 
