@@ -16,6 +16,7 @@ features_cls = FeatureNew(configs)
 
 
 k_days = 5; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing';head=8
+configs.set_kdays(k_days)
 configs.balancing_method = balancing_method
 configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_h{}_v2_05'.format(k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100

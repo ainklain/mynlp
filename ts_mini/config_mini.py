@@ -81,13 +81,13 @@ class Config:
         if k_days == 5:
         # self.model_predictor_list = ['logy', 'pos_20', 'pos_60', 'pos_120', 'std', 'mdd', 'fft']
         #     self.model_predictor_list = ['logy', 'cslogy_5', 'pos_5', 'pos_10', 'pos_20', 'std', 'mdd', 'fft']
-        #     self.model_predictor_list = ['logy', 'cslogy', 'csstd', 'std', 'stdnew', 'mdd', 'fft', 'pos_5', 'pos_20']
-            self.model_predictor_list = ['cslogy', 'csstd', 'pos_5']
+            self.model_predictor_list = ['logy', 'cslogy', 'csstd', 'std', 'stdnew', 'mdd', 'fft', 'pos_5', 'pos_20']
+            # self.model_predictor_list = ['cslogy', 'csstd', 'pos_5']
 
             self.features_structure = \
                 {'regression':
                      # {'logy': [20, 60, 120, 250],
-                     {'logy': [5, 10, 20, 60, 120, 250],
+                     {'logy': [5, 10, 20, 60, 120],
                       'std': [20, 60, 120],
                       'stdnew': [5, 20],
                       'mdd': [20, 60, 120],
@@ -106,7 +106,7 @@ class Config:
 
             self.features_structure = \
                 {'regression':
-                     {'logy': [10, 20, 60, 120, 250],
+                     {'logy': [10, 20, 60, 120],
                       'std': [10, 20, 60],
                       'stdnew': [10, 20],
                       'mdd': [20, 60, 120],
@@ -115,17 +115,16 @@ class Config:
                       'csstd': [10, 20],
                       },
                  'classification':
-                     {'pos': [10, 20, 60, 120, 250]}}
+                     {'pos': [10, 20, 60, 120]}}
 
         elif k_days == 20:
             # self.model_predictor_list = ['logy', 'pos_20', 'pos_60', 'pos_120', 'std', 'mdd', 'fft']
             # self.model_predictor_list = ['logy', 'cslogy', 'csstd', 'std', 'stdnew', 'mdd', 'fft', 'pos_20', 'pos_60']
-<<<<<<< HEAD
-=======
+
             self.model_predictor_list = ['logy', 'cslogy', 'std', 'stdnew', 'mdd', 'fft', 'pos_20', 'pos_60']
->>>>>>> issue_faster
+
             # self.model_predictor_list = ['std']
-            self.model_predictor_list = ['cslogy', 'csstd', 'pos_20']
+            # self.model_predictor_list = ['cslogy', 'csstd', 'pos_20']
 
             self.features_structure = \
                 {'regression':

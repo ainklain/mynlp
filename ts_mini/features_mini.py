@@ -430,6 +430,9 @@ class Performance:
                 elif m_args[0] == 'l':
                     scale1 = weight_scale(value_[f_], method=ls_method)
                     scale = scale1 * weight_scale(value_['cslogy'], method=ls_method)
+                elif m_args[0] == 'limit-LS':
+
+
 
                 model_ew[f_for_y][t] = np.sum(label_y * scale) / np.sum(scale)
                 model_mw[f_for_y][t] = np.sum(label_y * mc * scale) / np.sum(mc * scale)
@@ -506,7 +509,7 @@ class Performance:
                 ax2.set_yscale('log', basey=2)
 
                 # value fig
-                ax3.plot(data[['bm_mw', 'model_mw', 'model_ls_ew', 'model_m1', 'model_m{}'.format(n_tile)]])
+                ax3.plot(data[['bm_mw', 'model_mw', 'model_ls_mw', 'model_m1', 'model_m{}'.format(n_tile)]])
                 box = ax3.get_position()
                 ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
                 ax3.legend(['bm_mw', 'model_mw', 'long-short', 'long', 'short'], loc='center left',
@@ -593,10 +596,10 @@ class Performance:
                     ax2_2.set_yscale('log', basey=2)
 
                 if f_ == 'main':
-                    data[['bm_y_w_cost_ew', 'model_y_w_cost_ew','bm_y_w_cost_mw', 'model_y_w_cost_mw']].plot(ax=ax3, colormap=cm.Set2)
+                    data[['bm_y_w_cost_ew', 'model_y_w_cost_ew', 'bm_y_w_cost_mw', 'model_y_w_cost_mw']].plot(ax=ax3, colormap=cm.Set2)
                     box = ax3.get_position()
                     ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-                    ax3.legend(['bm_y_w_cost_ew', 'model_y_w_cost_ew','bm_y_w_cost_mw', 'model_y_w_cost_mw'], loc='center left', bbox_to_anchor=(1, 0.8))
+                    ax3.legend(['bm_y_w_cost_ew', 'model_y_w_cost_ew', 'bm_y_w_cost_mw', 'model_y_w_cost_mw'], loc='center left', bbox_to_anchor=(1, 0.8))
                     if ylog:
                         ax3.set_yscale('log', basey=2)
 

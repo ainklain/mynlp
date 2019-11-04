@@ -281,7 +281,6 @@ class DataScheduler:
 
             features_with_noise = {'input': None, 'output': features['output']}
 
-
             # add random noise
             if np.random.random() <= 0.4:
                 # normal with mu=0 and sig=sigma
@@ -292,7 +291,6 @@ class DataScheduler:
 
             features_with_noise['input'] = features['input'] + eps
 
-
             # randomly masked input data
             if np.random.random() <= 0.1:
                 t_size = features['input'].shape[1]
@@ -302,6 +300,10 @@ class DataScheduler:
                     mask[:, mask_i, :] = 0
 
                     features_with_noise['input'] = features_with_noise['input'] * mask
+
+            # randomly flip label
+
+
 
             labels_mtl = self.features_cls.labels_for_mtl(features_list, labels, size_factors, importance_wgt)
             model.train_mtl(features_with_noise, labels_mtl, print_loss=print_loss)
