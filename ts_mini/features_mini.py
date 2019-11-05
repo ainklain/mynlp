@@ -747,6 +747,7 @@ class Performance:
                              , t_stepsize=1
                              , ls_method='ls_5_20'
                              , plot_all_features=True):
+        # file_nm = 'test.png'; ylog = False; t_stepsize = 4; ls_method = 'ls_5_20'; plot_all_features = True
         m_args = ls_method.split('_')
         if m_args[0] == 'ls':
             n_tile = int(m_args[1])
@@ -762,7 +763,7 @@ class Performance:
 
         results = list()
 
-        ie_list, od_list, td_list, features_list, add_infos, start_d, end_d = dataset_list
+        ie_list, od_list, _, features_list, add_infos, start_d, end_d = dataset_list
         size_factor_list = [np.array(add_info['size_factor'], dtype=np.float32).reshape([-1, 1, 1]) for add_info in add_infos]
         mktcap_list = [np.array(add_info['size_factor_mktcap'], dtype=np.float32).reshape([-1, 1, 1]) for add_info in add_infos]
         # assets_list = [add_info['asset_list'] for add_info in add_infos]
@@ -793,12 +794,13 @@ class Performance:
         model_ew = ew_dict['model']
         model_mw = mw_dict['model']
 
-        for i, (ie_t, od_t, td_t, size_, mktcap, add_info) \
-                in enumerate(zip(ie_list, od_list, td_list, size_factor_list, mktcap_list, add_infos)):
+        for i, (ie_t, od_t, size_, mktcap, add_info) \
+                in enumerate(zip(ie_list, od_list, size_factor_list, mktcap_list, add_infos)):
+            # ie_t, od_t, size_, mktcap, add_info = ie_list[0], od_list[0], size_factor_list[0], mktcap_list[0],  add_infos[0]
             if i % t_stepsize != 0:
                 continue
             t = i // t_stepsize + 1
-            print('{} / {}'.format(add_info['factor_d'], add_info['test_d']))
+            print('{} / {}'.format(add_info['factor_d'], add_info['model_d']))
             # data format
             assert np.sum(ie_t[:, -1, idx_y] - od_t[:, 0, idx_y]) == 0
             new_output_t = np.zeros_like(od_t)
@@ -807,8 +809,7 @@ class Performance:
             new_output_t2[:, 0, :] = od_t[:, 0, :] + mktcap[:, 0, :]
 
             features = {'input': ie_t, 'output': new_output_t}
-            labels = td_t
-            label_y = labels[:, 0, idx_y]
+            label_y = np.array(add_info['next_y'])
             mc = mktcap[:, 0, 0]
 
             assets = np.array(add_info['asset_list'])

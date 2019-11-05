@@ -147,6 +147,12 @@ class DataScheduler:
         nearest_idx = np.array([self.date_.index(d_) for d_ in nearest_d_list])
         return nearest_d_list, nearest_idx
 
+    def next_d_from_m_end(self, m_end_date_list):
+        date_arr = np.array(self.date_ + ['9999-12-31'])  # 에러 방지용
+        next_d_list = [date_arr[date_arr > d_][0] for d_ in m_end_date_list]
+        next_idx = np.array([list(date_arr).index(d_) for d_ in next_d_list])
+        return next_d_list, next_idx
+
     def _dataset_t(self, base_d):
         univ = self.data_generator.univ
 
@@ -160,7 +166,7 @@ class DataScheduler:
 
         input_enc, output_dec, target_dec, additional_info = fetch_data
         additional_info['factor_d'] = base_d
-        additional_info['test_d'] = recent_d
+        additional_info['model_d'] = recent_d
         additional_info['univ'] = univ[univ.eval_m == base_d]
         additional_info['importance_wgt'] = np.array([1 for _ in range(len(input_enc))], dtype=np.float32)
 
@@ -169,6 +175,10 @@ class DataScheduler:
     def _dataset_monthly(self, mode='test'):
         assert mode in ['test', 'test_insample', 'predict']
         c = self.configs
+        dg = self.data_generator
+        prc_df = dg.df_pivoted_all
+        univ = dg.univ
+
         # parameter setting
         input_enc, output_dec, target_dec = [], [], []
         additional_infos = []  # test/predict 인경우 list, train/eval인 경우 dict
@@ -178,23 +188,41 @@ class DataScheduler:
         idx_balance = c.key_list.index(c.balancing_key)
 
         # month end data setting
-        univ = self.data_generator.univ
         factor_d_list = list(univ.eval_m.unique())
         nearest_d_list, nearest_idx = self.nearest_d_from_m_end(factor_d_list)
+        selected = (nearest_idx >= start_idx) & (nearest_idx <= end_idx)
+        model_idx_arr = nearest_idx[selected]
+        # factor_d_arr = np.array(factor_d_list)[selected]
+        # model_d_arr = np.array(nearest_d_list)[selected]
 
-        factor_d_arr = np.array(factor_d_list)[(nearest_idx >= start_idx) & (nearest_idx <= end_idx)]
-        test_d_arr = nearest_idx[(nearest_idx >= start_idx) & (nearest_idx <= end_idx)]
+        # 수익률 산출용 (매월 마지막일 기준 스코어 산출-> 그 다음날 종가기준매매)
+        next_d_list, next_idx = self.next_d_from_m_end(factor_d_list)
+        # next_d_arr = np.array(next_d_list)[selected]
 
         n_loop = np.ceil((end_idx - start_idx) / c.sampling_days)
-        for i, d in enumerate(test_d_arr):
-            fetch_data = self._fetch_data(d)
+        for idx in model_idx_arr:
+            fetch_data = self._fetch_data(idx)
             if fetch_data is None:
                 continue
 
+            i = list(nearest_idx).index(idx)
             tmp_ie, tmp_od, tmp_td, additional_info = fetch_data
-            additional_info['factor_d'] = factor_d_arr[i]
-            additional_info['test_d'] = nearest_d_list[i]
-            additional_info['univ'] = univ[univ.eval_m == factor_d_arr[i]]
+
+            # next y
+            assets = additional_info['asset_list']
+
+            if next_d_list[i+1] == '9999-12-31':
+                next_y = prc_df.loc[next_d_list[i], assets]
+                next_y[:] = 0.
+            else:
+                next_y = prc_df.loc[next_d_list[i+1], assets] / prc_df.loc[next_d_list[i], assets] - 1
+
+
+            additional_info['next_y'] = next_y
+            additional_info['factor_d'] = factor_d_list[i]
+            additional_info['model_d'] = nearest_d_list[i]
+            additional_info['inv_d'] = next_d_list[i]
+            additional_info['univ'] = univ[univ.eval_m == factor_d_list[i]]
             additional_info['importance_wgt'] = np.array([decaying_factor ** (n_loop - i - 1)
                                                           for _ in range(len(tmp_ie))], dtype=np.float32)
 
@@ -413,6 +441,9 @@ class DataScheduler:
             performer.predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=test_out_path, file_nm=file_nm
                                                           , ylog=ylog, t_stepsize=t_stepsize, ls_method='ls_5_20', plot_all_features=True)
             performer.predict_plot_mtl_cross_section_test(model, _dataset_list, save_dir=test_out_path + "2", file_nm=file_nm,
+                                                          ylog=ylog, t_stepsize=t_stepsize, ls_method='l_60', plot_all_features=True)
+            _dataset_list_mm = self._dataset_monthly('test')
+            performer.predict_plot_monthly(model, _dataset_list_mm, save_dir=test_out_path + "_mm", file_nm=file_nm,
                                                           ylog=ylog, t_stepsize=t_stepsize, ls_method='l_60', plot_all_features=True)
             # performer.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "2", file_nm=file_nm, ylog=ylog, time_step=time_step, invest_rate=0.8)
             # performer.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "3", file_nm=file_nm, ylog=ylog, t_stepsize=time_step, invest_rate=0.6)

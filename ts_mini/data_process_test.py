@@ -17,7 +17,7 @@ configs = Config()
 k_days = 20; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing';head=8
 configs.set_kdays(k_days)
 configs.balancing_method = balancing_method
-configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_h{}_v2_08'.format(k_days, univ_type, balancing_method, pred, head)
+configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_h{}_v2_09'.format(k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100
 configs.eval_steps = 100
 configs.save_steps = 100
