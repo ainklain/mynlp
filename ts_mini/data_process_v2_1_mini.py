@@ -5,7 +5,6 @@ import tensorflow as tf
 import time
 import numpy as np
 import os
-# from dbmanager import SqlManager
 
 
 def cleansing_missing_value(df_selected, n_allow_missing_value=5, to_log=True):
@@ -142,10 +141,80 @@ class DataScheduler:
 
         return question[:], answer[:, :-1, :], answer[:, 1:, :], spot_dict
 
+    def nearest_d_from_m_end(self, m_end_date_list):
+        date_arr = np.array(self.date_)
+        nearest_d_list = [date_arr[date_arr <= d_][-1] for d_ in m_end_date_list]
+        nearest_idx = np.array([self.date_.index(d_) for d_ in nearest_d_list])
+        return nearest_d_list, nearest_idx
+
+    def _dataset_t(self, base_d):
+        univ = self.data_generator.univ
+
+        features_list = self.configs.key_list
+        recent_d, recent_idx = self.nearest_d_from_m_end([base_d])
+        recent_d, recent_idx = recent_d[0], recent_idx[0]
+
+        fetch_data = self._fetch_data(recent_idx)
+        if fetch_data is None:
+            return False
+
+        input_enc, output_dec, target_dec, additional_info = fetch_data
+        additional_info['factor_d'] = base_d
+        additional_info['test_d'] = recent_d
+        additional_info['univ'] = univ[univ.eval_m == base_d]
+        additional_info['importance_wgt'] = np.array([1 for _ in range(len(input_enc))], dtype=np.float32)
+
+        return input_enc, output_dec, target_dec, features_list, additional_info
+
+    def _dataset_monthly(self, mode='test'):
+        assert mode in ['test', 'test_insample', 'predict']
+        c = self.configs
+        # parameter setting
+        input_enc, output_dec, target_dec = [], [], []
+        additional_infos = []  # test/predict 인경우 list, train/eval인 경우 dict
+        start_idx, end_idx, data_params, decaying_factor = self.get_data_params(mode)
+        features_list = c.key_list
+
+        idx_balance = c.key_list.index(c.balancing_key)
+
+        # month end data setting
+        univ = self.data_generator.univ
+        factor_d_list = list(univ.eval_m.unique())
+        nearest_d_list, nearest_idx = self.nearest_d_from_m_end(factor_d_list)
+
+        factor_d_arr = np.array(factor_d_list)[(nearest_idx >= start_idx) & (nearest_idx <= end_idx)]
+        test_d_arr = nearest_idx[(nearest_idx >= start_idx) & (nearest_idx <= end_idx)]
+
+        n_loop = np.ceil((end_idx - start_idx) / c.sampling_days)
+        for i, d in enumerate(test_d_arr):
+            fetch_data = self._fetch_data(d)
+            if fetch_data is None:
+                continue
+
+            tmp_ie, tmp_od, tmp_td, additional_info = fetch_data
+            additional_info['factor_d'] = factor_d_arr[i]
+            additional_info['test_d'] = nearest_d_list[i]
+            additional_info['univ'] = univ[univ.eval_m == factor_d_arr[i]]
+            additional_info['importance_wgt'] = np.array([decaying_factor ** (n_loop - i - 1)
+                                                          for _ in range(len(tmp_ie))], dtype=np.float32)
+
+            input_enc.append(tmp_ie)
+            output_dec.append(tmp_od)
+            target_dec.append(tmp_td)
+            additional_infos.append(additional_info)
+
+        if len(input_enc) == 0:
+            return False
+
+        start_date = self.date_[start_idx]
+        end_date = self.date_[end_idx]
+
+        return input_enc, output_dec, target_dec, features_list, additional_infos, start_date, end_date
+
     def _dataset(self, mode='train'):
         c = self.configs
 
-        input_enc, output_dec, target_dec, additional_info = [], [], [], []
+        input_enc, output_dec, target_dec = [], [], []
         additional_infos_list = []  # test/predict 인경우 list, train/eval인 경우 dict
         start_idx, end_idx, data_params, decaying_factor = self.get_data_params(mode)
         features_list = c.key_list
@@ -428,6 +497,7 @@ class DataScheduler:
 
 class PrepareDataFromDB:
     def __init__(self, data_type='kr_stock'):
+        from dbmanager import SqlManager
         self.sqlm = SqlManager()
         self.data_type = data_type
 
@@ -496,20 +566,29 @@ class PrepareDataFromDB:
         """.format(top_npercent)
         self.sqlm.set_db_name('qinv')
         df = self.sqlm.db_read(sql_)
-        df.to_csv('./data/kr_close_y_{}.csv'.format(top_npercent))
+        df.to_csv('./data/kr_close_y_{}.csv'.format(top_npercent), index=False)
 
     @done_decorator
     def get_factorwgt_and_univ(self, univ_nm='CAP_300_100'):
         sql_ = """
-        select work_d as eval_d, univ_nm, gicode, infocode, stock_weight as wgt
-        from passive..active_factor_univ_weight 
-        where univ_nm = '{}'
-        order by work_d, stock_weight desc""".format(univ_nm)
+        select m.work_d as work_m, univ_nm, gicode, infocode, wgt
+            from (
+                select work_d, univ_nm, gicode, infocode, stock_weight as wgt
+                    from passive..active_factor_univ_weight 
+                    where work_d >= '2001-08-01' and univ_nm = '{}'
+            ) A
+            join (
+                select eval_d, work_d 
+                    from qdb..T_CALENDAR_EVAL_D
+                    where is_m_end = 'y'
+            ) M
+            on datediff(month, a.work_d, m.eval_d) = 0
+            order by m.work_d, a.wgt desc""".format(univ_nm)
         self.sqlm.set_db_name('passive')
         df = self.sqlm.db_read(sql_)
-        df.to_csv('./data/factor_wgt.csv')
+        df.to_csv('./data/factor_wgt.csv', index=False)
 
-        df.ix[:, ['eval_d', 'infocode']].to_csv('./data/kr_univ_monthly.csv')
+        df.ix[:, ['work_m', 'infocode']].to_csv('./data/kr_univ_monthly.csv', index=False)
 
     @done_decorator
     def get_datetable(self):
@@ -528,7 +607,7 @@ class PrepareDataFromDB:
             on datediff(month, eval_y, eval_m) <= 12 and eval_m > eval_y"""
         self.sqlm.set_db_name('qdb')
         df = self.sqlm.db_read(sql_)
-        df.to_csv('./data/date.csv')
+        df.to_csv('./data/date.csv', index=False)
 
     @done_decorator
     def get_mktcap_daily(self):
@@ -538,8 +617,7 @@ class PrepareDataFromDB:
             , N.NUMSHRS * P.CLOSE_ / 1000 AS mktcap
             , NTILE(100) OVER (PARTITION BY d.eval_d, u.REGION ORDER BY N.NUMSHRS * P.CLOSE_ DESC) AS size
             from  (
-                select eval_d
-                from qinv..DateTable where is_m_end = 1 and eval_d <= getdate()
+                select eval_d from qdb..T_CALENDAR_EVAL_D where eval_d = work_d and eval_d <= getdate()
             ) D
             cross apply (
                 select * 
@@ -577,7 +655,7 @@ class PrepareDataFromDB:
         """
         self.sqlm.set_db_name('qinv')
         df = self.sqlm.db_read(sql_)
-        df.to_csv('./data/kr_mktcap_daily.csv')
+        df.to_csv('./data/kr_mktcap_daily.csv', index=False)
 
 
 class DataSamplerMarket:
@@ -792,19 +870,20 @@ class DataGeneratorMarket:
 class DataGeneratorDynamic:
     def __init__(self, features_cls, data_type='kr_stock', univ_type='selected'):
         if data_type == 'kr_stock':
+            # 가격데이터
             data_path = './data/kr_close_y_90.csv'
             data_df_temp = pd.read_csv(data_path)
             data_df_temp = data_df_temp[data_df_temp.infocode > 0]
-
+            # 가격데이터 날짜 오류 수정
             date_temp = data_df_temp[['date_', 'infocode']].groupby('date_').count()
             date_temp = date_temp[date_temp.infocode >= 10]
             date_temp.columns = ['cnt']
-
+            # 수익률 계산
             self.date_ = list(date_temp.index)
             data_df = pd.merge(date_temp, data_df_temp, on='date_')  # 최소 10종목 이상 존재 하는 날짜만
             data_df['y'] = data_df['y'] + 1
             data_df['cum_y'] = data_df[['date_', 'infocode', 'y']].groupby('infocode').cumprod(axis=0)
-
+            #
             self.df_pivoted_all = data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
             self.df_pivoted_all.columns = self.df_pivoted_all.columns.droplevel(0).to_numpy(dtype=np.int32)
 
@@ -813,12 +892,14 @@ class DataGeneratorDynamic:
                 self.data_code = self.data_code[self.data_code.infocode > 0]
             elif univ_type == 'selected':
                 # selected universe (monthly)
-                univ = pd.read_csv('./data/kr_univ_monthly.csv')
+                # univ = pd.read_csv('./data/kr_univ_monthly.csv')
+                univ = pd.read_csv('./data/factor_wgt.csv')
                 univ = univ[univ.infocode > 0]
+
 
                 # month end / year end mapping table
                 date_mapping = pd.read_csv('./data/date.csv')
-                univ_mapping = pd.merge(univ, date_mapping, left_on='eval_d', right_on='work_m')
+                univ_mapping = pd.merge(univ, date_mapping, left_on='work_m', right_on='work_m')
 
                 # size_data = pd.read_csv('./data/kr_sizeinfo_90.csv')
                 if os.path.exists('./data/kr_mktcap_daily.csv'):
@@ -837,8 +918,8 @@ class DataGeneratorDynamic:
 
                 univ_w_size = univ_w_size[univ_w_size.infocode > 0]
                 univ_w_size['mktcap'] = univ_w_size['mktcap'] / 1000.
-                self.univ = univ_w_size.ix[:, ['eval_m', 'infocode', 'size_port', 'mktcap']]
-                self.univ.columns = ['eval_d', 'infocode', 'size_port', 'mktcap']
+                self.univ = univ_w_size.ix[:, ['eval_m', 'infocode', 'gicode', 'size_port', 'mktcap', 'wgt']]
+                self.univ.columns = ['eval_m', 'infocode', 'gicode', 'size_port', 'mktcap', 'wgt']
                 self.size_data = size_data
 
             self.features_cls = features_cls
@@ -846,10 +927,14 @@ class DataGeneratorDynamic:
     def sample_data(self, date_i, debug=True):
         # get attributes to local variables
         date_ = self.date_
+        univ = self.univ
         df_pivoted = self.df_pivoted_all
         features_cls = self.features_cls
 
         base_d = date_[date_i]
+        univ_d = univ.eval_m[univ.eval_m <= base_d].max()
+        univ_code = list(univ[univ.eval_m == univ_d].infocode)
+
         size_d = self.size_data.eval_d[self.size_data.eval_d <= base_d].max()
         size_df = self.size_data[self.size_data.eval_d == size_d][['infocode', 'mktcap']].set_index('infocode')
 
@@ -876,12 +961,16 @@ class DataGeneratorDynamic:
         if df_logp.empty or len(df_logp) <= calc_length + m_days:
             return False
 
-        univ_list = sorted(list(set.intersection(set(df_logp.columns), set(size_df.index))))
+        univ_list = sorted(list(set.intersection(set(univ_code), set(df_logp.columns), set(size_df.index))))
+        if len(univ_list) < 10:
+            return False
+        print('[{}] univ size: {}'.format(base_d, len(univ_list)))
 
         # calculate features
         features_dict, labels_dict = features_cls.calc_features(df_logp.ix[:, univ_list].to_numpy(dtype=np.float32), transpose=False, debug=debug)
 
         spot_dict = dict()
+        spot_dict['base_d'] = base_d
         spot_dict['asset_list'] = univ_list
         spot_dict['size_factor'] = size_df.loc[univ_list].mktcap.rank() / len(univ_list)
         spot_dict['size_factor_mktcap'] = size_df.loc[univ_list]

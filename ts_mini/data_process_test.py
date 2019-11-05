@@ -12,13 +12,12 @@ from ts_mini.data_process_v2_1_mini import DataGeneratorDynamic, DataScheduler
 from ts_mini.model_v2_0_mini import TSModel
 
 configs = Config()
-features_cls = FeatureNew(configs)
 
 
 k_days = 20; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing';head=8
 configs.set_kdays(k_days)
 configs.balancing_method = balancing_method
-configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_h{}_v2_07'.format(k_days, univ_type, balancing_method, pred, head)
+configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_h{}_v2_08'.format(k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100
 configs.eval_steps = 100
 configs.save_steps = 100
@@ -28,6 +27,7 @@ configs.weight_scheme = 'mw'  # mw / ew
 config_str = configs.export()
 
 # scheduler test
+features_cls = FeatureNew(configs)
 
 ds = DataScheduler(configs, features_cls)
 performer = Performance(configs)
@@ -40,7 +40,7 @@ with open(os.path.join(ds.data_out_path, configs.f_name, 'config.txt'), 'w') as 
 if os.path.exists(os.path.join(ds.data_out_path, configs.f_name, configs.f_name + '.pkl')):
     model.load_model(os.path.join(ds.data_out_path, configs.f_name, configs.f_name))
 
-ds.set_idx(5000)
+ds.set_idx(6500)
 ii = 0
 jj = 0
 
@@ -48,6 +48,8 @@ trainset = ds._dataset('train')
 evalset = ds._dataset('eval')
 testset_insample = ds._dataset('test_insample')
 testset = ds._dataset('test')
+testset_mm = ds._dataset_monthly('test')
+
 
 while not ds.done:
     if ii > 100 or (ii > 1 and model.eval_loss > 10000):
@@ -60,6 +62,7 @@ while not ds.done:
         evalset = ds._dataset('eval')
         testset_insample = ds._dataset('test_insample')
         testset = ds._dataset('test')
+        testset_m = ds._dataset_monthly('test')
 
     # if trainset is None:
     #     trainset = ds._dataset('train')
@@ -85,9 +88,10 @@ while not ds.done:
     ii += 1
 
 
-
-
-
+# recent value extraction
+recent_month_end = '2019-10-31'
+dataset_t = ds._dataset_t(recent_month_end)
+x = performer.extract_portfolio(model, dataset_t)
 
 
 
@@ -104,7 +108,7 @@ data_path = './data/{}_{}'.format(configs.univ_type, configs.sampling_days)
 os.makedirs(data_path, exist_ok=True)
 
 # feature_keys, label_keys = define_keys()
-key_lists = define_keys()
+# key_lists = define_keys()
 # load and save data
 # for date_i in range(4000, len(dg.date_), configs.sampling_days):
 input_enc, output_dec, target_dec, additional_info = [], [], [], []
