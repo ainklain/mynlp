@@ -28,7 +28,7 @@ class Config:
         self.balancing_method = 'each'  # each / once / nothing
         self.data_type = 'kr_stock'
         self.weight_scheme = 'mw'       # mw / ew
-
+        self.app_rate = 1.     # 적용 비율
         # # features info
         # self.set_features_info(self.k_days)
 

@@ -102,7 +102,8 @@ class DataScheduler:
         else:
             raise NotImplementedError
 
-        print("start idx:{} ({}) / end idx: {} ({})".format(start_idx, dg.date_[start_idx], end_idx, dg.date_[end_idx]))
+        if max(start_idx, end_idx) < len(dg.date_):
+            print("start idx:{} ({}) / end idx: {} ({})".format(start_idx, dg.date_[start_idx], end_idx, dg.date_[end_idx]))
 
         return start_idx, end_idx, data_params, decaying_factor
 
@@ -215,8 +216,9 @@ class DataScheduler:
                 next_y = prc_df.loc[next_d_list[i], assets]
                 next_y[:] = 0.
             else:
-                next_y = prc_df.loc[next_d_list[i+1], assets] / prc_df.loc[next_d_list[i], assets] - 1
-
+                prc_df_selected = prc_df.loc[(prc_df.index >=next_d_list[i-1]) & (prc_df.index <= next_d_list[i+1]), assets]
+                prc_df_selected = prc_df_selected.ffill()
+                next_y = prc_df_selected.loc[next_d_list[i+1], assets] / prc_df_selected.loc[next_d_list[i], assets] - 1
 
             additional_info['next_y'] = next_y
             additional_info['factor_d'] = factor_d_list[i]
@@ -422,7 +424,7 @@ class DataScheduler:
             labels_mtl = self.features_cls.labels_for_mtl(features_list, labels, size_factors, importance_wgt)
             model.train_mtl(features_with_noise, labels_mtl, print_loss=print_loss)
 
-    def test(self, performer, model, dataset=None, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None, t_stepsize=1):
+    def test(self, performer, model, dataset=None, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None):
         if out_dir is None:
             test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
         else:
@@ -439,14 +441,14 @@ class DataScheduler:
                 print('[test] no test data')
                 return False
             performer.predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=test_out_path, file_nm=file_nm
-                                                          , ylog=ylog, t_stepsize=t_stepsize, ls_method='ls_5_20', plot_all_features=True)
+                                                          , ylog=ylog, ls_method='ls_5_20', plot_all_features=True)
             performer.predict_plot_mtl_cross_section_test(model, _dataset_list, save_dir=test_out_path + "2", file_nm=file_nm,
-                                                          ylog=ylog, t_stepsize=t_stepsize, ls_method='l_60', plot_all_features=True)
-            _dataset_list_mm = self._dataset_monthly('test')
-            performer.predict_plot_monthly(model, _dataset_list_mm, save_dir=test_out_path + "_mm", file_nm=file_nm,
-                                                          ylog=ylog, t_stepsize=t_stepsize, ls_method='l_60', plot_all_features=True)
-            # performer.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "2", file_nm=file_nm, ylog=ylog, time_step=time_step, invest_rate=0.8)
-            # performer.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "3", file_nm=file_nm, ylog=ylog, t_stepsize=time_step, invest_rate=0.6)
+                                                          ylog=ylog, ls_method='l_60', plot_all_features=True)
+            _dataset_list_m = self._dataset_monthly('test')
+            performer.predict_plot_monthly(model, _dataset_list_m, save_dir=test_out_path + "_ml", file_nm=file_nm,
+                                                          ylog=ylog, ls_method='l_60', plot_all_features=True, rate_=self.configs.app_rate)
+            performer.predict_plot_monthly(model, _dataset_list_m, save_dir=test_out_path + "_mls", file_nm=file_nm,
+                                                          ylog=ylog, ls_method='ls_5_20', plot_all_features=True, rate_=self.configs.app_rate)
 
         if save_type is not None:
             _dataset_list = self._dataset('predict')

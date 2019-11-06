@@ -7,7 +7,8 @@ import time
 
 # v2.1 test
 from ts_mini.config_mini import Config
-from ts_mini.features_mini import FeatureNew, Performance
+from ts_mini.features_mini import FeatureNew
+from ts_mini.performance_mini import Performance
 from ts_mini.data_process_v2_1_mini import DataGeneratorDynamic, DataScheduler
 from ts_mini.model_v2_0_mini import TSModel
 
@@ -17,7 +18,8 @@ configs = Config()
 k_days = 20; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing';head=8
 configs.set_kdays(k_days)
 configs.balancing_method = balancing_method
-configs.f_name = 'kr_mw_rand_{}_{}_{}_{}_h{}_v2_09'.format(k_days, univ_type, balancing_method, pred, head)
+configs.learning_rate = 1e-4
+configs.f_name = 'kr_{}_{}_{}_{}_h{}_mfast_v2_02'.format(k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100
 configs.eval_steps = 100
 configs.save_steps = 100
@@ -48,7 +50,7 @@ trainset = ds._dataset('train')
 evalset = ds._dataset('eval')
 testset_insample = ds._dataset('test_insample')
 testset = ds._dataset('test')
-testset_mm = ds._dataset_monthly('test')
+testset_m = ds._dataset_monthly('test')
 
 
 while not ds.done:
@@ -82,8 +84,7 @@ while not ds.done:
             file_nm='test_{}.png'.format(ii),
             ylog=False,
             # save_type='csv',
-            table_nm='kr_weekly_score_temp',
-            t_stepsize=configs.k_days // configs.sampling_days)
+            table_nm='kr_weekly_score_temp')
 
     ii += 1
 
@@ -91,7 +92,8 @@ while not ds.done:
 # recent value extraction
 recent_month_end = '2019-10-31'
 dataset_t = ds._dataset_t(recent_month_end)
-x = performer.extract_portfolio(model, dataset_t)
+x = performer.extract_portfolio(model, dataset_t, rate_=configs.app_rate)
+x.to_csv('./out/{}/result.csv'.format(configs.f_name))
 
 
 
