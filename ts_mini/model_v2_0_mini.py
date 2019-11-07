@@ -377,9 +377,10 @@ class TSModel:
         self.accuracy = tf.metrics.Accuracy()
 
         # decayed_learning_rate = learning_rate * decay_rate ^ (global_step / decay_steps)
-        # lr = tf.optimizers.schedules.PolynomialDecay(1e-3, 2000, 5e-4)
+        lr = tf.optimizers.schedules.PolynomialDecay(1e-3, 2000, 1e-4)
         # lr = tf.optimizers.schedules.PiecewiseConstantDecay([50, 150, 300], [1e-2, 1e-3, 1e-4, 1e-5])
-        self.optimizer = tf.optimizers.Adam(configs.learning_rate)
+        self.optimizer = tf.optimizers.Adam(lr)
+        # self.optimizer = tf.optimizers.Adam(configs.learning_rate)
 
         self._initialize(configs)
 

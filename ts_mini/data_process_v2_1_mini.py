@@ -46,7 +46,7 @@ class DataScheduler:
 
     def _make_path(self, configs):
         # data path for fetching data
-        self.data_path = os.path.join(os.getcwd(), 'data', '{}_{}'.format(configs.univ_type, configs.sampling_days))
+        self.data_path = os.path.join(os.getcwd(), 'data', '{}_{}_{}'.format(configs.univ_type, configs.sampling_days, configs.m_days))
         os.makedirs(self.data_path, exist_ok=True)
         # make a directory for outputs
         self.data_out_path = os.path.join(os.getcwd(), configs.data_out_path)
@@ -57,6 +57,7 @@ class DataScheduler:
 
         self.base_idx = base_idx
         self.train_begin_idx = np.max([0, base_idx - c.train_set_length])
+        # self.train_begin_idx = 4500
         self.eval_begin_idx = int(c.train_set_length * c.trainset_rate) + np.max([0, base_idx - c.train_set_length])
         self.test_begin_idx = base_idx - c.m_days
         self.test_end_idx = base_idx + c.retrain_days
@@ -71,7 +72,7 @@ class DataScheduler:
             end_idx = self.eval_begin_idx - c.k_days
             data_params['balance_class'] = True
             data_params['label_type'] = 'trainable_label'   # trainable: calc_length 반영
-            decaying_factor = 0.99   # 기간별 샘플 중요도
+            decaying_factor = 0.995   # 기간별 샘플 중요도
         elif mode == 'eval':
             start_idx = self.eval_begin_idx + c.m_days
             end_idx = self.test_begin_idx - c.k_days
@@ -424,7 +425,7 @@ class DataScheduler:
             labels_mtl = self.features_cls.labels_for_mtl(features_list, labels, size_factors, importance_wgt)
             model.train_mtl(features_with_noise, labels_mtl, print_loss=print_loss)
 
-    def test(self, performer, model, dataset=None, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None):
+    def test(self, performer, model, dataset=None, dataset_m=None, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None):
         if out_dir is None:
             test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
         else:
@@ -437,6 +438,11 @@ class DataScheduler:
             else:
                 _dataset_list = dataset
 
+            if dataset_m is None:
+                _dataset_list_m = self._dataset_monthly('test')
+            else:
+                _dataset_list_m = dataset_m
+
             if _dataset_list is False:
                 print('[test] no test data')
                 return False
@@ -444,11 +450,11 @@ class DataScheduler:
                                                           , ylog=ylog, ls_method='ls_5_20', plot_all_features=True)
             performer.predict_plot_mtl_cross_section_test(model, _dataset_list, save_dir=test_out_path + "2", file_nm=file_nm,
                                                           ylog=ylog, ls_method='l_60', plot_all_features=True)
-            _dataset_list_m = self._dataset_monthly('test')
-            performer.predict_plot_monthly(model, _dataset_list_m, save_dir=test_out_path + "_ml", file_nm=file_nm,
-                                                          ylog=ylog, ls_method='l_60', plot_all_features=True, rate_=self.configs.app_rate)
-            performer.predict_plot_monthly(model, _dataset_list_m, save_dir=test_out_path + "_mls", file_nm=file_nm,
-                                                          ylog=ylog, ls_method='ls_5_20', plot_all_features=True, rate_=self.configs.app_rate)
+            if _dataset_list_m is not None:
+                performer.predict_plot_monthly(model, _dataset_list_m, save_dir=test_out_path + "_ml", file_nm=file_nm,
+                                                              ylog=ylog, ls_method='l_60', plot_all_features=True, rate_=self.configs.app_rate)
+                performer.predict_plot_monthly(model, _dataset_list_m, save_dir=test_out_path + "_mls", file_nm=file_nm,
+                                                              ylog=ylog, ls_method='ls_5_20', plot_all_features=True, rate_=self.configs.app_rate)
 
         if save_type is not None:
             _dataset_list = self._dataset('predict')

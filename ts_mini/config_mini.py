@@ -134,14 +134,14 @@ class Config:
             # self.model_predictor_list = ['logy', 'pos_20', 'pos_60', 'pos_120', 'std', 'mdd', 'fft']
             # self.model_predictor_list = ['logy', 'cslogy', 'csstd', 'std', 'stdnew', 'mdd', 'fft', 'pos_20', 'pos_60']
 
-            self.model_predictor_list = ['logy', 'cslogy', 'std', 'stdnew', 'mdd', 'fft', 'pos_20', 'pos_60']
+            # self.model_predictor_list = ['logy', 'cslogy', 'std', 'stdnew', 'mdd', 'fft', 'pos_20', 'pos_60']
 
             # self.model_predictor_list = ['std']
-            # self.model_predictor_list = ['cslogy', 'csstd', 'pos_20']
+            self.model_predictor_list = ['cslogy', 'csstd', 'pos_20']
 
             self.features_structure = \
                 {'regression':
-                     {'logy': [20, 60, 120],
+                     {'logy': [20, 60, 120, 250],
                       'std': [20, 60, 120],
                       'stdnew': [20, 60],
                       'mdd': [20, 60, 120],
@@ -150,7 +150,7 @@ class Config:
                       'csstd': [20, 60],
                       },
                  'classification':
-                     {'pos': [20, 60, 120]}}
+                     {'pos': [20, 60, 120, 250]}}
 
         self.embedding_size = 0
         for cls in self.features_structure.keys():

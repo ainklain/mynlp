@@ -17,15 +17,16 @@ configs = Config()
 
 k_days = 20; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing';head=8
 configs.set_kdays(k_days)
+configs.pred_feature = pred
+configs.weight_scheme = w_scheme
 configs.balancing_method = balancing_method
-configs.learning_rate = 1e-4
-configs.f_name = 'kr_{}_{}_{}_{}_h{}_mfast_v2_02'.format(k_days, univ_type, balancing_method, pred, head)
+# configs.learning_rate = 1e-4
+configs.f_name = 'kr_{}_{}_{}_{}_h{}_mfast_v2_06'.format(k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100
 configs.eval_steps = 100
 configs.save_steps = 100
 configs.attention_head_size = head
 configs.early_stopping_count = 2
-configs.weight_scheme = 'mw'  # mw / ew
 config_str = configs.export()
 
 # scheduler test
@@ -42,13 +43,15 @@ with open(os.path.join(ds.data_out_path, configs.f_name, 'config.txt'), 'w') as 
 if os.path.exists(os.path.join(ds.data_out_path, configs.f_name, configs.f_name + '.pkl')):
     model.load_model(os.path.join(ds.data_out_path, configs.f_name, configs.f_name))
 
-ds.set_idx(6500)
+ds.set_idx(8250)
+# ds.test_end_idx += 250
 ii = 0
 jj = 0
 
 trainset = ds._dataset('train')
 evalset = ds._dataset('eval')
 testset_insample = ds._dataset('test_insample')
+testset_insample_m = ds._dataset_monthly('test_insample')
 testset = ds._dataset('test')
 testset_m = ds._dataset_monthly('test')
 
@@ -63,6 +66,7 @@ while not ds.done:
         trainset = ds._dataset('train')
         evalset = ds._dataset('eval')
         testset_insample = ds._dataset('test_insample')
+        testset_insample_m = ds._dataset_monthly('test_insample')
         testset = ds._dataset('test')
         testset_m = ds._dataset_monthly('test')
 
@@ -78,7 +82,15 @@ while not ds.done:
         if is_trained is not False:
             model.save_model(os.path.join(ds.data_out_path, configs.f_name, configs.f_name, str(ds.base_idx), configs.f_name))
 
-    ds.test(performer, model, testset,
+    ds.test(performer, model, testset_insample, testset_insample_m,
+            use_label=True,
+            out_dir=os.path.join(ds.data_out_path, configs.f_name, str(jj), 'test_insample'),
+            file_nm='test_{}.png'.format(ii),
+            ylog=False,
+            # save_type='csv',
+            table_nm='kr_weekly_score_temp')
+
+    ds.test(performer, model, testset, testset_m,
             use_label=True,
             out_dir=os.path.join(ds.data_out_path, configs.f_name, str(jj), 'test'),
             file_nm='test_{}.png'.format(ii),

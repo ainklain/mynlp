@@ -198,7 +198,7 @@ class FeatureNew:
                     nm = '{}_{}'.format(func_nm, n)
                     features_dict[nm], labels_dict[nm] = self.calc_func(log_p_arr, nm, debug)
             else:
-                for n in [5, 10, 20, 60, 120]:
+                for n in [5, 10, 20, 60, 120, 250]:
                     nm = '{}_{}'.format(func_nm, n)
                     features_dict[nm], labels_dict[nm] = self.calc_func(log_p_arr, nm, debug)
 
