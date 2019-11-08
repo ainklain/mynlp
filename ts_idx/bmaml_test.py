@@ -24,7 +24,12 @@ import re
 layer_list = []
 attr_list = []
 for var in net.trainable_weights:
-    _, layer_nm, attr_nm = list(filter(lambda x: x != '', re.split('/|:\d', var.name)))
+    nm_ = list(filter(lambda x: x != '', re.split('/|:\d', var.name)))
+    if len(nm_) == 3:
+        model_nm, layer_nm, attr_nm = nm_
+    elif len(nm_) == 2:
+        layer_nm, attr_nm = nm_
+
     layer_list.append(layer_nm)
     attr_list.append(attr_nm)
 
