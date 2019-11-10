@@ -107,6 +107,9 @@ def generate_dataset(K, train_size=20000, test_size=10):
 train_ds, test_ds = generate_dataset(K=10)
 
 
+
+
+
 class SineModel(nn.Module):
     def __init__(self, configs=None):
         super().__init__()
@@ -131,7 +134,8 @@ class SineModel(nn.Module):
             w = nn.Parameter(torch.ones(*param))
             b = nn.Parameter(torch.zeros(param[0]))
             # gain=1 according to cbfinn's implementation
-            torch.nn.init.kaiming_normal_(w)
+            # torch.nn.init.kaiming_uniform_(w)
+            torch.nn.init.xavier_uniform_(w)
             self.vars.append(w)
             self.vars.append(b)
 
@@ -186,8 +190,14 @@ def compute_loss(model, x, y, loss_fn=nn.MSELoss()):
     mse = loss_fn(y, logits)
     return mse, logits
 
+# def compute_loss(model, x, y, loss_fn=loss_function):
+#     logits = model.forward(x)
+#     mse = loss_fn(y, logits)
+#     return mse, logits
 
+# model = maml; dataset=train_ds; lr_inner=0.01; batch_size=1; log_steps=1000
 def train_maml(model, epochs, dataset, lr_inner=0.01, batch_size=1, log_steps=1000):
+
     loss_fn = nn.MSELoss()
     optimizer = optim.Adam(model.parameters())
 
@@ -199,28 +209,31 @@ def train_maml(model, epochs, dataset, lr_inner=0.01, batch_size=1, log_steps=10
         start = time.time()
         # Step 3 and 4
         for i, t in enumerate(random.sample(dataset, len(dataset))):
+            # Step 8
             x, y = np_to_tensor(t.batch())
             logits = model.forward(x)  # run forward pass to initialize weights
             # Step 5
-            train_loss = loss_fn(y, logits)
+            train_loss = loss_fn(logits, y)
+
             # Step 6
-            gradients = torch.autograd.grad(train_loss, model.parameters())
+            grad = torch.autograd.grad(train_loss, model.parameters(), create_graph=True)
+            # grad = torch.autograd.grad(train_loss, model.parameters())
 
-            fast_weights = list(map(lambda p: p[1] - lr_inner * p[0], zip(gradients, model.parameters())))
+            fast_weights = list(map(lambda p: p[1] - lr_inner * p[0], zip(grad, model.parameters())))
 
-            # Step 8
             logits = model.forward(x, fast_weights)  # run forward pass to initialize weights
-            test_loss = loss_fn(y, logits)
+            test_loss = loss_fn(logits, y)
+
+            # grad_test = torch.autograd.grad(test_loss, model.parameters())
+            optimizer.zero_grad()
+            test_loss.backward()
+            optimizer.step()
 
             with torch.no_grad():
                 # Logs
                 total_loss += test_loss
                 loss = total_loss / (i + 1.0)
                 losses.append(loss)
-
-            optimizer.zero_grad()
-            test_loss.backward()
-            optimizer.step()
 
             if i % log_steps == 0 and i > 0:
                 print('Step {}: loss = {}, Time to run {} steps = {}'.format(i, loss, log_steps, time.time() - start))
@@ -230,3 +243,4 @@ def train_maml(model, epochs, dataset, lr_inner=0.01, batch_size=1, log_steps=10
 
 maml = SineModel()
 train_maml(maml, 1, train_ds)
+

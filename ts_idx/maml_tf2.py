@@ -91,10 +91,10 @@ def plot(data, *args, **kwargs):
     return plt.plot(x, y, *args, **kwargs)
 
 
-for _ in range(3):
-    plt.title('Sinusoid examples')
-    plot(SinusoidGenerator(K=100).equally_spaced_samples())
-plt.show()
+# for _ in range(3):
+#     plt.title('Sinusoid examples')
+#     plot(SinusoidGenerator(K=100).equally_spaced_samples())
+# plt.show()
 
 
 def generate_dataset(K, train_size=20000, test_size=10):
@@ -181,7 +181,7 @@ def train_model(dataset, epochs=1, lr=0.001, log_steps=1000):
         plt.show()
     return model
 
-neural_net = train_model(train_ds)
+# neural_net = train_model(train_ds)
 
 def plot_model_comparison_to_average(model, ds, model_name='neural network', K=10):
     '''Compare model to average.
@@ -209,7 +209,7 @@ def plot_model_comparison_to_average(model, ds, model_name='neural network', K=1
     plt.legend([avg_plot, model_plot], ['Average', model_name])
     plt.show()
 
-plot_model_comparison_to_average(neural_net, train_ds)
+# plot_model_comparison_to_average(neural_net, train_ds)
 
 def copy_model(model, x):
     '''Copy model weights to a new model.
@@ -322,8 +322,8 @@ def eval_sinewave_for_test(model, sinusoid_generator=None, num_steps=(0, 1, 10),
     return fit_res
 
 
-for index in np.random.randint(0, len(test_ds), size=3):
-    eval_sinewave_for_test(neural_net, test_ds[index])
+# for index in np.random.randint(0, len(test_ds), size=3):
+#     eval_sinewave_for_test(neural_net, test_ds[index])
 
 
 def train_maml(model, epochs, dataset, lr_inner=0.01, batch_size=1, log_steps=1000):
@@ -480,7 +480,7 @@ def train_maml2(model, epochs, dataset, lr_inner=0.01, batch_size=1, log_steps=1
 
 
 maml = SineModel()
-train_maml(maml, 1, train_ds)
+train_maml(maml, 1, train_ds, log_steps=10)
 maml2 = SineModel()
 train_maml2(maml2, 1, train_ds)
 
