@@ -1,54 +1,57 @@
-
+import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import ImageGrid
 import numpy as np
 import pandas as pd
 
+from tensorflow.keras.applications.resnet50 import ResNet50
 
-def log_y_nd(log_p, n):
-    assert len(log_p.shape) == 2
+from pyts.image import GramianAngularField
 
-    return np.r_[log_p[:n, :] - log_p[:1, :], log_p[n:, :] - log_p[:-n, :]]
+# from pyts.datasets import load_gunpoint
+# X, _, _, _ = load_gunpoint(return_X_y=True)
 
+data_path = './data/data_for_metarl.csv'
+data_df = pd.read_csv(data_path)
+data_df.set_index('eval_d', inplace=True)
+date_ = list(data_df.index)
 
-def fft(log_p, n, m_days, k_days):
-    assert (len(log_p) == (m_days + k_days + 1)) or (len(log_p) == (m_days + 1))
+X = data_df.values[:250].transpose()
+# Transform the time series into Gramian Angular Fields
+gasf = GramianAngularField(image_size=64, method='summation')
+X_gasf = np.array(gasf.fit_transform(X), dtype=np.float32)
+gadf = GramianAngularField(image_size=24, method='difference')
+X_gadf = gadf.fit_transform(X)
 
-    log_p_fft = np.fft.fft(log_p[:(m_days + 1)], axis=0)
-    log_p_fft[n:-n] = 0
-    return np.real(np.fft.ifft(log_p_fft, m_days + k_days + 1, axis=0))[:len(log_p)]
-
-
-def std_nd(log_p, n):
-    y = np.exp(log_y_nd(log_p, 1)) - 1.
-    stdarr = np.zeros_like(y)
-    for t in range(1, len(y)):
-        stdarr[t, :] = np.std(y[max(0, t - n):(t + 1), :], ddof=1, axis=0)
-
-    return stdarr
-
-
-def std_nd_new(log_p, n):
-    y = np.exp(log_y_nd(log_p, n)) - 1.
-    stdarr = np.zeros_like(y)
-    for t in range(1, len(y)):
-        stdarr[t, :] = np.std(y[max(0, t - n * 12):(t + 1), :][::n], ddof=1, axis=0)
-
-    return stdarr
+base_model = ResNet50(input_shape=(64, 64, 3), include_top=False)
+X_test = np.stack([X_gasf[0], X_gasf[1], X_gasf[2]], axis=-1)
+base_model(X_test)
+base_model.trainable = False
 
 
-def mdd_nd(log_p, n):
-    mddarr = np.zeros_like(log_p)
-    for t in range(len(log_p)):
-        mddarr[t, :] = log_p[t, :] - np.max(log_p[max(0, t - n):(t + 1), :], axis=0)
 
-    return mddarr
+# Show the images for the first time series
+fig = plt.figure(figsize=(12, 7))
+grid = ImageGrid(fig, 111,
+                 nrows_ncols=(1, 2),
+                 axes_pad=0.15,
+                 share_all=True,
+                 cbar_location="right",
+                 cbar_mode="single",
+                 cbar_size="7%",
+                 cbar_pad=0.3,
+                 )
 
+images = [X_gasf[0], X_gadf[0]]
+titles = ['Gramian Angular Summation Field',
+          'Gramian Angular Difference Field']
+for image, title, ax in zip(images, titles, grid):
+    im = ax.imshow(image, cmap='rainbow', origin='lower')
+    ax.set_title(title, fontdict={'fontsize': 16})
+ax.cax.colorbar(im)
+ax.cax.toggle_label(True)
 
-def positional_encoding(seq_size, dim):
-    encoded_vec = np.array([pos / np.power(10000, 2 * i / dim) for pos in range(seq_size) for i in range(dim)], dtype=np.float32)
-    encoded_vec[::2] = np.sin(encoded_vec[::2])
-    encoded_vec[1::2] = np.cos(encoded_vec[1::2])
-    return encoded_vec.reshape([seq_size, dim])
-
+plt.suptitle('Gramian Angular Fields', y=0.92, fontsize=20)
+plt.show()
 
 class DataGeneratorIndex:
     def __init__(self):
