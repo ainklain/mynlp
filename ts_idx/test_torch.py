@@ -9,12 +9,18 @@ from pyts.image import GramianAngularField
 import time
 import torch
 from torch import nn, optim, utils
+from torch.nn import functional as F
 
 from torch.optim import lr_scheduler
 from torchvision import models, datasets, transforms
 
+transformer = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.Resize((224, 224)),
+    transforms.ToTensor()])
+
 # define device
-device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 
 # dataset example
@@ -76,9 +82,10 @@ def preprocessing(arr, image_size=64, to_dataloader=True):
     logp_downsampled = data_arr[:, ::5]
     logp_downsampled_scaled = minmax_scaler(logp_downsampled, axis=1)
     fig3 = gasf.fit_transform(logp_downsampled_scaled)
-    figs = np.stack([fig1, fig2, fig3], axis=-1)
+    figs = np.stack([fig1, fig2, fig3], axis=1)
 
-    assert figs.shape[1:] == (image_size, image_size, 3)
+    assert figs.shape[1:] == (3, image_size, image_size)
+
 
     # 고정값
     # cp = 0.02
@@ -89,14 +96,23 @@ def preprocessing(arr, image_size=64, to_dataloader=True):
     label_class = np.stack([label_arr > cp_h, (label_arr >= cp_l) & (label_arr <= cp_h), label_arr < cp_l], axis=-1) * 1
     d, l = figs.astype(np.float32), label_class.astype(np.float32)
 
+
     if to_dataloader:
+        transformer = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.Resize((224, 224)),
+            transforms.ToTensor()])
+
         tensor_x = torch.from_numpy(d)  # transform to torch tensors
         tensor_y = torch.from_numpy(l)
+
+        # resize image_size to 224 for resnet
+        tensor_x = torch.stack([transformer(tx) for tx in tensor_x])
 
         my_dataset = utils.data.TensorDataset(tensor_x, tensor_y)  # create your datset
         my_dataloader = utils.data.DataLoader(my_dataset, shuffle=True)  # create your dataloader
 
-        return my_dataloader
+        return my_dataloader, len(tensor_x)
     else:
         return (d, l)
 
@@ -111,14 +127,14 @@ def make_dataloader(arr_y, split_r=[0.6, 0.8]):
     test_arr = arr_logp[int(len(arr_logp) * split_r[1]):]
 
     image_size = 64
-    dataloader_train = preprocessing(train_arr, image_size=image_size, to_dataloader=True)
-    dataloader_valid = preprocessing(valid_arr, image_size=image_size, to_dataloader=True)
-    dataloader_test = preprocessing(test_arr, image_size=image_size, to_dataloader=True)
+    dataloader_train, len_train = preprocessing(train_arr, image_size=image_size, to_dataloader=True)
+    dataloader_valid, len_valid = preprocessing(valid_arr, image_size=image_size, to_dataloader=True)
+    dataloader_test, len_test = preprocessing(test_arr, image_size=image_size, to_dataloader=True)
 
-    return dataloader_train, dataloader_valid, dataloader_test
+    return dataloader_train, dataloader_valid, dataloader_test, [len_train, len_valid, len_test]
 
-
-def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
+def train_model(model, criterion, optimizer, scheduler, dataloaders, dataset_sizes, num_epochs=25):
+    # model = model_ft; optimizer = optimizer_ft;num_epochs=25;phase='train'
     since = time.time()
 
     best_model_wts = copy.deepcopy(model.state_dict())
@@ -129,7 +145,7 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
         print('-' * 10)
 
         # 각 에폭(epoch)은 학습 단계와 검증 단계를 갖습니다.
-        for phase in ['train', 'val']:
+        for phase in ['train', 'valid']:
             if phase == 'train':
                 scheduler.step()
                 model.train()  # 모델을 학습 모드로 설정
@@ -141,6 +157,8 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
 
             # 데이터를 반복
             for inputs, labels in dataloaders[phase]:
+                # inputs, labels = next(iter(dataloaders[phase]))
+
                 inputs = inputs.to(device)
                 labels = labels.to(device)
 
@@ -151,6 +169,7 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
                 # 학습 시에만 연산 기록을 추적
                 with torch.set_grad_enabled(phase == 'train'):
                     outputs = model(inputs)
+                    outputs = F.softmax(outputs)
                     _, preds = torch.max(outputs, 1)
                     loss = criterion(outputs, labels)
 
@@ -161,7 +180,8 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
 
                 # 통계
                 running_loss += loss.item() * inputs.size(0)
-                running_corrects += torch.sum(preds == labels.data)
+                # running_corrects += torch.sum(preds == labels.data)
+                running_corrects += torch.sum(preds == torch.max(labels, 1)[1])
 
             epoch_loss = running_loss / dataset_sizes[phase]
             epoch_acc = running_corrects.double() / dataset_sizes[phase]
@@ -170,7 +190,7 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
                 phase, epoch_loss, epoch_acc))
 
             # 모델을 깊은 복사(deep copy)함
-            if phase == 'val' and epoch_acc > best_acc:
+            if phase == 'valid' and epoch_acc > best_acc:
                 best_acc = epoch_acc
                 best_model_wts = copy.deepcopy(model.state_dict())
 
@@ -193,20 +213,21 @@ def main():
     arr_y = np.array(data_df['mkt_rf'], dtype=np.float32)
 
     # make dataloader
-    dl_train, dl_valid, dl_test = make_dataloader(arr_y)
-    dataloader = {'train': dl_train, 'valid': dl_valid}
-
+    dl_train, dl_valid, dl_test, ds_sizes = make_dataloader(arr_y)
+    dataloaders = {'train': dl_train, 'valid': dl_valid}
+    dataset_sizes = {'train': ds_sizes[0], 'valid': ds_sizes[1], 'test': ds_sizes[2]}
     model_ft = models.resnet50(pretrained=True)
     num_ftrs = model_ft.fc.in_features
     model_ft.fc = nn.Linear(num_ftrs, 3)
     model_ft = model_ft.to(device)
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.MSELoss()
 
     optimizer_ft = optim.Adam(model_ft.parameters(), lr=0.001)
     # optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
-    exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=7, gamma=0.1)
+    scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=7, gamma=0.1)
 
-    model_ft = train_model(model_ft, criterion, optimizer_ft, exp_lr_scheduler,
+    model_ft = train_model(model_ft, criterion, optimizer_ft, scheduler,
+                           dataloaders, dataset_sizes,
                            num_epochs=25)
 
