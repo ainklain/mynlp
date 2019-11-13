@@ -108,8 +108,6 @@ train_ds, test_ds = generate_dataset(K=10)
 
 
 
-
-
 class SineModel(nn.Module):
     def __init__(self, configs=None):
         super().__init__()
