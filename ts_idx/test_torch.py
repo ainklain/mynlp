@@ -1,4 +1,5 @@
 
+
 import copy
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import ImageGrid
@@ -29,8 +30,8 @@ def ex_dataloader():
     tensor_x = torch.stack([torch.Tensor(i) for i in my_x]) # transform to torch tensors
     tensor_y = torch.stack([torch.Tensor(i) for i in my_y])
 
-    my_dataset = TensorDataset(tensor_x,tensor_y) # create your datset
-    my_dataloader = DataLoader(my_dataset) # create your dataloader
+    my_dataset = TensorDataset(tensor_x, tensor_y)  # create your datset
+    my_dataloader = DataLoader(my_dataset)  # create your dataloader
 
 
 def prepare_dataset():
@@ -539,7 +540,6 @@ def main_maml():
     dl_train, dl_valid, dl_test, ds_sizes = make_dataloader(arr_y, batch_size=32)
     dataloaders = {'train': dl_train, 'valid': dl_valid, 'test': dl_test}
     dataset_sizes = {'train': ds_sizes[0], 'valid': ds_sizes[1], 'test': ds_sizes[2]}
-
 
 
     model = ImageModel(base_model='resnet50')
