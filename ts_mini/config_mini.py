@@ -137,7 +137,7 @@ class Config:
             # self.model_predictor_list = ['logy', 'cslogy', 'std', 'stdnew', 'mdd', 'fft', 'pos_20', 'pos_60']
 
             # self.model_predictor_list = ['std']
-            self.model_predictor_list = ['cslogy', 'csstd', 'pos_20']
+            self.model_predictor_list = ['nmlogy', 'nmstd', 'pos_20']
 
             self.features_structure = \
                 {'regression':
@@ -146,8 +146,8 @@ class Config:
                       'stdnew': [20, 60],
                       'mdd': [20, 60, 120],
                       'fft': [100, 3],
-                      'cslogy': [20, 60],
-                      'csstd': [20, 60],
+                      'nmlogy': [20, 60],
+                      'nmstd': [20, 60],
                       },
                  'classification':
                      {'pos': [20, 60, 120, 250]}}

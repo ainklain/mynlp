@@ -90,7 +90,7 @@ class FeatureNew:
         self.delay_days = configs.delay_days
         self.sampling_days = configs.sampling_days
         # 아래 함수 추가할때마다 추가해줄것...
-        self.possible_func = ['logy', 'std', 'stdnew', 'pos', 'mdd', 'fft', 'cslogy', 'csstd']
+        self.possible_func = ['logy', 'std', 'stdnew', 'pos', 'mdd', 'fft', 'cslogy', 'csstd', 'nmlogy', 'nmstd']
         # v1.0 호환
         self.features_structure = configs.features_structure
 
@@ -159,6 +159,16 @@ class FeatureNew:
             result = arr_to_cs(std_nd_new(arr, n)[calc_length:])
             if debug:
                 result_debug = arr_to_cs(std_nd_new(arr_debug, n)[calc_length:])
+        elif func_nm == 'nmlogy':
+            # arr: data without calc data
+            result = arr_to_normal(log_y_nd(arr, n)[calc_length:])
+            if debug:
+                result_debug = arr_to_normal(log_y_nd(arr_debug, n)[calc_length:])
+        elif func_nm == 'nmstd':
+            # arr: data without calc data
+            result = arr_to_normal(std_nd_new(arr, n)[calc_length:])
+            if debug:
+                result_debug = arr_to_normal(std_nd_new(arr_debug, n)[calc_length:])
 
         feature, label = self.split_data_label(result)
         if debug:
@@ -226,8 +236,8 @@ class FeatureNew:
                     labels_mtl[key] = np.stack([labels[:, :, features_list.index("{}_{}".format(key, n))]
                                                 for n in n_arr], axis=-1)
 
-                    if key == 'cslogy':
-                        labels_mtl['cslogy_idx'] = [features_list.index("{}_{}".format(key, n)) for n in n_arr]
+                    # if key == 'cslogy':
+                    #     labels_mtl['cslogy_idx'] = [features_list.index("{}_{}".format(key, n)) for n in n_arr]
 
         labels_mtl['size_factor'] = size_factor
         labels_mtl['importance_wgt'] = importance_wgt

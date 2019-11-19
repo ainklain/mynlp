@@ -15,13 +15,13 @@ from ts_mini.model_v2_0_mini import TSModel
 configs = Config()
 
 
-k_days = 20; w_scheme = 'mw'; univ_type='selected'; pred='cslogy'; balancing_method='nothing';head=8
+k_days = 20; w_scheme = 'mw'; univ_type='selected'; pred='nmlogy'; balancing_method='nothing';head=8
 configs.set_kdays(k_days)
 configs.pred_feature = pred
 configs.weight_scheme = w_scheme
 configs.balancing_method = balancing_method
 # configs.learning_rate = 1e-4
-configs.f_name = 'kr_{}_{}_{}_{}_h{}_mfast_v2_06'.format(k_days, univ_type, balancing_method, pred, head)
+configs.f_name = 'kr_{}_{}_{}_{}_h{}_mfast+labelnoise_v2_00'.format(k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100
 configs.eval_steps = 100
 configs.save_steps = 100
@@ -43,7 +43,7 @@ with open(os.path.join(ds.data_out_path, configs.f_name, 'config.txt'), 'w') as 
 if os.path.exists(os.path.join(ds.data_out_path, configs.f_name, configs.f_name + '.pkl')):
     model.load_model(os.path.join(ds.data_out_path, configs.f_name, configs.f_name))
 
-ds.set_idx(8250)
+ds.set_idx(7500)
 # ds.test_end_idx += 250
 ii = 0
 jj = 0
@@ -118,7 +118,7 @@ print("dg set: {} sec".format(dg_et - dg_st))
 
 # date_i = 6250
 
-data_path = './data/{}_{}'.format(configs.univ_type, configs.sampling_days)
+data_path = './data/{}_{}_{}'.format(configs.univ_type, configs.sampling_days, configs.m_days)
 os.makedirs(data_path, exist_ok=True)
 
 # feature_keys, label_keys = define_keys()
@@ -126,13 +126,13 @@ os.makedirs(data_path, exist_ok=True)
 # load and save data
 # for date_i in range(4000, len(dg.date_), configs.sampling_days):
 input_enc, output_dec, target_dec, additional_info = [], [], [], []
-for date_i in range(1500, len(dg.date_), configs.sampling_days):
+for date_i in range(5120, len(dg.date_), configs.sampling_days):
     loop_st = time.time()
     file_nm = os.path.join(data_path, '{}.pkl'.format(date_i))
     if os.path.exists(file_nm):
         result = pickle.load(open(file_nm, 'rb'))
         ori_pf = dg.features_cls.possible_func[:]
-        dg.features_cls.possible_func = ['cslogy', 'csstd']
+        dg.features_cls.possible_func = ['nmlogy', 'nmstd']
         result2 = dg.sample_data(date_i, debug=True)
         dg.features_cls.possible_func = ori_pf
 

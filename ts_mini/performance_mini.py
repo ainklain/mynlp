@@ -52,6 +52,9 @@ class Performance:
         self.pred_feature = configs.pred_feature
         self.cost_rate = configs.cost_rate
 
+
+        self.adj_feature = 'nmlogy'
+
     def define_variables(self, t_steps, assets, f_keys=None):
         var_dict = dict(y=np.zeros([t_steps, 1]),
                         turnover=np.zeros([t_steps, 1]),
@@ -146,14 +149,14 @@ class Performance:
         # prediction
         predictions = model.predict_mtl(features)
         value_ = dict()
-        value_['cslogy'] = predictions['cslogy'][:, 0, 0]
+        value_[self.adj_feature] = predictions[self.adj_feature][:, 0, 0]
         value_['main'] = predictions[self.pred_feature][:, 0, 0]
 
         # long-short score
         scale_ls = weight_scale(value_['main'], method='ls_5_20')
         # long-only score
         scale_l_temp = weight_scale(value_['main'], method='l_60')
-        scale_l = scale_l_temp * weight_scale(value_['cslogy'], method='l_60')
+        scale_l = scale_l_temp * weight_scale(value_[self.adj_feature], method='l_60')
 
         result_t['model_wgt_ls_ew'] = scale_ls / np.sum(scale_ls)
         result_t['model_wgt_ls_mw'] = mc * scale_ls / np.sum(mc * scale_ls)
@@ -270,7 +273,7 @@ class Performance:
             predictions = model.predict_mtl(features)
             value_ = dict()
 
-            value_['cslogy'] = predictions['cslogy'][:, 0, 0]
+            value_[self.adj_feature] = predictions[self.adj_feature][:, 0, 0]
             for f_ in features_for_plot:
                 f_for_y = ('y' if f_ == 'main' else f_)
                 if f_ == 'main':
@@ -289,7 +292,7 @@ class Performance:
                     scale = weight_scale(value_[f_], method=ls_method)
                 elif m_args[0] == 'l':
                     scale1 = weight_scale(value_[f_], method=ls_method)
-                    scale = scale1 * weight_scale(value_['cslogy'], method=ls_method)
+                    scale = scale1 * weight_scale(value_[self.adj_feature], method=ls_method)
                 elif m_args[0] == 'limit-LS':
                     pass
 
@@ -665,7 +668,7 @@ class Performance:
             predictions = model.predict_mtl(features)
             value_ = dict()
 
-            value_['cslogy'] = predictions['cslogy'][:, 0, 0]
+            value_[self.adj_feature] = predictions[self.adj_feature][:, 0, 0]
             for f_ in features_for_plot:
                 f_for_y = ('y' if f_ == 'main' else f_)
                 if f_ == 'main':
@@ -684,7 +687,7 @@ class Performance:
                     scale = weight_scale(value_[f_], method=ls_method)
                 elif m_args[0] == 'l':
                     scale1 = weight_scale(value_[f_], method=ls_method)
-                    scale = scale1 * weight_scale(value_['cslogy'], method=ls_method)
+                    scale = scale1 * weight_scale(value_[self.adj_feature], method=ls_method)
                 elif m_args[0] == 'limit-LS':
                     pass
 

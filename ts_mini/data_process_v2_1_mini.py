@@ -1,7 +1,7 @@
 
 import pandas as pd
 import pickle
-# import tensorflow as tf
+import tensorflow as tf
 import time
 import numpy as np
 import os
@@ -383,6 +383,7 @@ class DataScheduler:
             save_steps = c.save_steps
 
         for i, (features, labels, size_factors, importance_wgt) in enumerate(train_dataset.take(train_steps)):
+            # features, labels, size_factors, importance_wgt = next(iter(train_dataset))
             print_loss = False
             if i % save_steps == 0:
                 model.save_model(model_name)
@@ -411,7 +412,7 @@ class DataScheduler:
             features_with_noise['input'] = features['input'] + eps
 
             # randomly masked input data
-            if np.random.random() <= 0.1:
+            if np.random.random() <= 0.9:
                 t_size = features['input'].shape[1]
                 mask = np.ones_like(features['input'])
                 masked_idx = np.random.choice(t_size, size=int(t_size * 0.2), replace=False)
@@ -420,9 +421,22 @@ class DataScheduler:
 
                     features_with_noise['input'] = features_with_noise['input'] * mask
 
-            # randomly flip label: not implemented
 
-            labels_mtl = self.features_cls.labels_for_mtl(features_list, labels, size_factors, importance_wgt)
+            # add random noise for label
+            if np.random.random() <= 0.2:
+                sample_sigma = tf.math.reduce_std(labels, axis=[0, 1], keepdims=True)
+                eps = sample_sigma * tf.random.normal(labels.shape, mean=0, stddev=1)
+            else:
+                eps = 0
+            labels_with_noise = labels + eps
+
+            # randomly flip label
+            flip_p = 0.2
+            mask_label = np.random.choice([1, -1], size=labels.shape, p=[1-flip_p, flip_p])
+            labels_with_noise = labels * mask_label
+
+
+            labels_mtl = self.features_cls.labels_for_mtl(features_list, labels_with_noise, size_factors, importance_wgt)
             model.train_mtl(features_with_noise, labels_mtl, print_loss=print_loss)
 
     def test(self, performer, model, dataset=None, dataset_m=None, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None):
