@@ -121,17 +121,23 @@ class Performance:
         return new_wgt
 
     def extract_portfolio(self, model, dataset_t, rate_=1.):
+        c = self.configs
         input_enc, output_dec, target_dec, features_list, add_info = dataset_t
 
         idx_y = features_list.index(self.label_feature)
         size_ = np.array(add_info['size_factor'], dtype=np.float32).reshape([-1, 1, 1])
+        size_nm = np.array(add_info['size_factor_mc_normal'], dtype=np.float32).reshape([-1, 1, 1])
         mktcap = np.array(add_info['size_factor_mktcap'], dtype=np.float32).reshape([-1, 1, 1])
         assets = np.array(add_info['asset_list'])
 
         # data format
         assert np.sum(input_enc[:, -1, idx_y] - output_dec[:, 0, idx_y]) == 0
         new_output_t = np.zeros_like(output_dec)
-        new_output_t[:, 0, :] = output_dec[:, 0, :] + size_[:, 0, :]
+        if c.weight_scheme == 'ew':
+            new_output_t[:, 0, :] = output_dec[:, 0, :]
+        elif c.weight_scheme == 'mw':
+            new_output_t = np.concatenate([new_output_t, new_output_t[:, :, :1]], axis=-1)
+            new_output_t[:, 0, :] = np.concatenate([output_dec[:, 0, :], size_nm[:, 0, :]], axis=-1)
 
         features = {'input': input_enc, 'output': new_output_t}
         labels = target_dec
@@ -188,6 +194,8 @@ class Performance:
                                             , ylog=False
                                             , ls_method='ls_5_20'
                                             , plot_all_features=True):
+        c = self.configs
+
         m_args = ls_method.split('_')
         if m_args[0] == 'ls':
             n_tile = int(m_args[1])
@@ -202,8 +210,6 @@ class Performance:
             return False
 
         ie_list, od_list, td_list, features_list, add_infos, start_d, end_d = dataset_list
-        size_factor_list = [np.array(add_info['size_factor'], dtype=np.float32).reshape([-1, 1, 1]) for add_info in add_infos]
-        mktcap_list = [np.array(add_info['size_factor_mktcap'], dtype=np.float32).reshape([-1, 1, 1]) for add_info in add_infos]
         assets_list = [add_info['asset_list'] for add_info in add_infos]
 
         all_assets_list = list()
@@ -234,25 +240,35 @@ class Performance:
         model_ew = ew_dict['model']
         model_mw = mw_dict['model']
 
-        for i, (ie_t, od_t, td_t, size_, mktcap, assets) \
-                in enumerate(zip(ie_list, od_list, td_list, size_factor_list, mktcap_list, assets_list)):
+        for i, (ie_t, od_t, td_t, add_info) in enumerate(zip(ie_list, od_list, td_list, add_infos)):
             if i % t_stepsize != 0:
                 continue
             t = i // t_stepsize + 1
 
+            size_nm = np.array(add_info['size_factor_mc_normal'], dtype=np.float32).reshape([-1, 1, 1])
+            mktcap = np.array(add_info['size_factor_mktcap'], dtype=np.float32).reshape([-1, 1, 1])
+            assets = np.array(add_info['asset_list'], dtype=np.float32)
+
             # data format
             assert np.sum(ie_t[:, -1, idx_y] - od_t[:, 0, idx_y]) == 0
+
             new_output_t = np.zeros_like(od_t)
-            new_output_t[:, 0, :] = od_t[:, 0, :] + size_[:, 0, :]
             new_output_t2 = np.zeros_like(od_t)
-            new_output_t2[:, 0, :] = od_t[:, 0, :] + mktcap[:, 0, :]
+            if c.weight_scheme == 'ew':
+                new_output_t[:, 0, :] = od_t[:, 0, :]
+                new_output_t2[:, 0, :] = od_t[:, 0, :]
+            elif c.weight_scheme == 'mw':
+                new_output_t = np.concatenate([od_t, od_t[:, :, :1]], axis=-1)
+                new_output_t2 = np.concatenate([od_t, od_t[:, :, :1]], axis=-1)
+                new_output_t[:, 0, :] = np.concatenate([od_t[:, 0, :], size_nm[:, 0, :]], axis=-1)
+                new_output_t2[:, 0, :] = np.concatenate([od_t[:, 0, :], mktcap[:, 0, :]], axis=-1)
 
             features = {'input': ie_t, 'output': new_output_t}
             labels = td_t
             label_y = labels[:, 0, idx_y]
             mc = mktcap[:, 0, 0]
 
-            assets = np.array(assets)
+            # assets = np.array(assets)
 
             # ############ For BenchMark ############
 
@@ -563,6 +579,7 @@ class Performance:
                              , ls_method='ls_5_20'
                              , plot_all_features=True
                              , rate_=1.):
+        c = self.configs
         # file_nm = 'test.png'; ylog = False; t_stepsize = 4; ls_method = 'ls_5_20'; plot_all_features = True
         m_args = ls_method.split('_')
         if m_args[0] == 'ls':
@@ -580,9 +597,6 @@ class Performance:
         results = list()
 
         ie_list, od_list, _, features_list, add_infos, start_d, end_d = dataset_list
-        size_factor_list = [np.array(add_info['size_factor'], dtype=np.float32).reshape([-1, 1, 1]) for add_info in add_infos]
-        mktcap_list = [np.array(add_info['size_factor_mktcap'], dtype=np.float32).reshape([-1, 1, 1]) for add_info in add_infos]
-        # assets_list = [add_info['asset_list'] for add_info in add_infos]
 
         all_assets_list = list()
         for add_info in add_infos:
@@ -619,18 +633,29 @@ class Performance:
         fm_ew = ew_dict['model_w_factor']
         fm_mw = mw_dict['model_w_factor']
 
-        for i, (ie_t, od_t, size_, mktcap, add_info) \
-                in enumerate(zip(ie_list, od_list, size_factor_list, mktcap_list, add_infos)):
+        for i, (ie_t, od_t, add_info) \
+                in enumerate(zip(ie_list, od_list, add_infos)):
             # i=0; ie_t, od_t, size_, mktcap, add_info = ie_list[i], od_list[i], size_factor_list[i], mktcap_list[i],  add_infos[i]
 
             t = i + 1
             print('{} / {}'.format(add_info['factor_d'], add_info['model_d']))
+
+            size_nm = np.array(add_info['size_factor_mc_normal'], dtype=np.float32).reshape([-1, 1, 1])
+            mktcap = np.array(add_info['size_factor_mktcap'], dtype=np.float32).reshape([-1, 1, 1])
+
             # data format
             assert np.sum(ie_t[:, -1, idx_y] - od_t[:, 0, idx_y]) == 0
+
             new_output_t = np.zeros_like(od_t)
-            new_output_t[:, 0, :] = od_t[:, 0, :] + size_[:, 0, :]
             new_output_t2 = np.zeros_like(od_t)
-            new_output_t2[:, 0, :] = od_t[:, 0, :] + mktcap[:, 0, :]
+            if c.weight_scheme == 'ew':
+                new_output_t[:, 0, :] = od_t[:, 0, :]
+                new_output_t2[:, 0, :] = od_t[:, 0, :]
+            elif c.weight_scheme == 'mw':
+                new_output_t = np.concatenate([od_t, od_t[:, :, :1]], axis=-1)
+                new_output_t2 = np.concatenate([od_t, od_t[:, :, :1]], axis=-1)
+                new_output_t[:, 0, :] = np.concatenate([od_t[:, 0, :], size_nm[:, 0, :]], axis=-1)
+                new_output_t2[:, 0, :] = np.concatenate([od_t[:, 0, :], mktcap[:, 0, :]], axis=-1)
 
             features = {'input': ie_t, 'output': new_output_t}
             label_y = np.array(add_info['next_y'])

@@ -201,6 +201,31 @@ class MultiBranchAttention(nn.Module):
         return self.layer_norm(residual + output), attn
 
 
+class FeedForward(nn.Module):
+    def __init__(self, d_in, d_ff, d_out, out_activation=None):
+        super(PoswiseFeedForwardNet, self).__init__()
+        self.relu = nn.ReLU()
+        self.in_layer = Linear(d_in, d_ff)
+        self.out_layer = Linear(d_ff, d_out)
+
+        if out_activation == 'sigmoid':
+            self.out_a = nn.Sigmoid()
+        elif out_activation == 'softmax':
+            self.out_a = nn.Softmax()
+        else:
+            self.out_a = None
+
+    def forward(self, inputs):
+        # inputs: [b_size x d_model]
+        output = self.relu(self.in_layer(inputs))
+        output = self.out_layer(output)
+
+        if self.out_a is not None:
+            output = self.out_a(output)
+
+        return output
+
+
 class PoswiseFeedForwardNet(nn.Module):
     def __init__(self, d_model, d_ff, dropout=0.1):
         super(PoswiseFeedForwardNet, self).__init__()
@@ -228,13 +253,14 @@ class ConvEmbeddingLayer(nn.Module):
 
     def __init__(self, n_features, d_model):
         super(ConvEmbeddingLayer, self).__init__()
-        self.conv1 = nn.Conv1d(in_channels=n_features, out_channels=d_model, kernel_size=1)
+        self.conv1 = nn.Conv1d(in_channels=n_features, out_channels=d_model-n_features, kernel_size=1)
 
     def forward(self, inputs):
         # input shape: (b_size, T, n_features)
         inputs = inputs.contiguous().transpose(-2, -1)
         # (b_size, n_features, T) -> (b_size, d_model, T)
         outputs = self.conv1(inputs)
+        outputs = torch.concat(inputs, outputs)
         return outputs.contiguous().transpose(-2, -1)
 
 
@@ -293,66 +319,12 @@ class WeightedDecoderLayer(nn.Module):
         return dec_outputs, dec_self_attn, dec_enc_attn
 
 
-# ####################### Models ##########################
-def proj_prob_simplex(inputs):
-    # project updated weights onto a probability simplex
-    # see https://arxiv.org/pdf/1101.6081.pdf
-    sorted_inputs, sorted_idx = torch.sort(inputs.view(-1), descending=True)
-    dim = len(sorted_inputs)
-    for i in reversed(range(dim)):
-        t = (sorted_inputs[:i+1].sum() - 1) / (i+1)
-        if sorted_inputs[i] > t:
-            break
-    return torch.clamp(inputs-t, min=0.0)
-
-
-def get_attn_pad_mask(seq_q, seq_k):
-    assert seq_q.dim() == 2 and seq_k.dim() == 2
-    b_size, len_q = seq_q.size()
-    b_size, len_k = seq_k.size()
-    pad_attn_mask = seq_k.data.eq(data_utils.PAD).unsqueeze(1)  # b_size x 1 x len_k
-    return pad_attn_mask.expand(b_size, len_q, len_k)  # b_size x len_q x len_k
-
-
-def get_attn_subsequent_mask(seq):
-    assert seq.dim() == 2
-    attn_shape = [seq.size(0), seq.size(1), seq.size(1)]
-    subsequent_mask = np.triu(np.ones(attn_shape), k=1)
-    subsequent_mask = torch.from_numpy(subsequent_mask).byte()
-    if seq.is_cuda:
-        subsequent_mask = subsequent_mask.cuda()
-
-    return subsequent_mask
-
-
-
-class TSModel(nn.Module):
-    def __init__(self, configs, features_cls, weight_scheme='mw'):
-
-        super(TSModel, self).__init__()
-        self.cnn_embedding = ConvEmbeddingLayer(n_features=configs.n_features, d_model=configs.d_model)
-        self.encoder = Encoder(configs.n_layers, configs.d_k, configs.d_v, configs.d_model, configs.d_ff, configs.n_heads,
-                               configs.max_input_seq_len, configs.src_vocab_size, configs.dropout, configs.weighted_model)
-        self.decoder = Decoder(configs.n_layers, configs.d_k, configs.d_v, configs.d_model, configs.d_ff, configs.n_heads,
-                               configs.max_output_seq_len, configs.tgt_vocab_size, configs.dropout, configs.weighted_model)
-        self.tgt_proj = Linear(configs.d_model, configs.tgt_vocab_size, bias=False)
-        self.weighted_model = configs.weighted_model
-
-
-
-
-
-
-
-
-
 class Encoder(nn.Module):
     def __init__(self, n_layers, d_k, d_v, d_model, d_ff, n_heads,
                  max_seq_len, dropout=0.1, weighted=False):
         super(Encoder, self).__init__()
         self.d_model = d_model
-        # self.src_emb = nn.Embedding(src_vocab_size, d_model, padding_idx=data_utils.PAD,)
-        self.pos_emb = PosEncoding(max_seq_len * 10, d_model) # TODO: *10 fix
+        self.pos_emb = PosEncoding(max_seq_len * 10, d_model)  # TODO: *10 fix
         self.dropout_emb = nn.Dropout(dropout)
         self.layer_type = EncoderLayer if not weighted else WeightedEncoderLayer
         self.layers = nn.ModuleList(
@@ -360,7 +332,7 @@ class Encoder(nn.Module):
 
     def forward(self, enc_inputs, enc_inputs_len, return_attn=False):
         # enc_outputs = self.src_emb(enc_inputs)
-        enc_outputs = enc_inputs + self.pos_emb(enc_inputs_len) # Adding positional encoding TODO: note
+        enc_outputs = enc_inputs + self.pos_emb(enc_inputs_len)  # Adding positional encoding TODO: note
         enc_outputs = self.dropout_emb(enc_outputs)
 
         enc_self_attn_mask = get_attn_pad_mask(enc_inputs, enc_inputs)
@@ -387,7 +359,7 @@ class Decoder(nn.Module):
 
     def forward(self, dec_inputs, dec_inputs_len, enc_inputs, enc_outputs, return_attn=False):
         # dec_outputs = self.tgt_emb(dec_inputs)
-        dec_outputs = dec_inputs + self.pos_emb(dec_inputs_len) # Adding positional encoding # TODO: note
+        dec_outputs = dec_inputs + self.pos_emb(dec_inputs_len)  # Adding positional encoding # TODO: note
         dec_outputs = self.dropout_emb(dec_outputs)
 
         dec_self_attn_pad_mask = get_attn_pad_mask(dec_inputs, dec_inputs)
@@ -406,6 +378,130 @@ class Decoder(nn.Module):
                 dec_enc_attns.append(dec_enc_attn)
 
         return dec_outputs, dec_self_attns, dec_enc_attns
+
+
+
+
+# ####################### Models ##########################
+def proj_prob_simplex(inputs):
+    # project updated weights onto a probability simplex
+    # see https://arxiv.org/pdf/1101.6081.pdf
+    sorted_inputs, sorted_idx = torch.sort(inputs.view(-1), descending=True)
+    dim = len(sorted_inputs)
+    for i in reversed(range(dim)):
+        t = (sorted_inputs[:i+1].sum() - 1) / (i+1)
+        if sorted_inputs[i] > t:
+            break
+    return torch.clamp(inputs-t, min=0.0)
+
+
+# def get_attn_pad_mask(seq_q, seq_k):
+#     assert seq_q.dim() == 2 and seq_k.dim() == 2
+#     b_size, len_q = seq_q.size()
+#     b_size, len_k = seq_k.size()
+#     pad_attn_mask = seq_k.data.eq(data_utils.PAD).unsqueeze(1)  # b_size x 1 x len_k
+#     return pad_attn_mask.expand(b_size, len_q, len_k)  # b_size x len_q x len_k
+
+
+def get_attn_subsequent_mask(seq):
+    assert seq.dim() == 2
+    attn_shape = [seq.size(0), seq.size(1), seq.size(1)]
+    subsequent_mask = np.triu(np.ones(attn_shape), k=1)
+    subsequent_mask = torch.from_numpy(subsequent_mask).byte()
+    if seq.is_cuda:
+        subsequent_mask = subsequent_mask.cuda()
+
+    return subsequent_mask
+
+
+# d_k, d_v, d_model, d_ff, n_heads, dropout
+class TSModel(nn.Module):
+    def __init__(self, configs, features_cls, weight_scheme='mw'):
+        super(TSModel, self).__init__()
+
+        self.weight_scheme = weight_scheme
+
+        self.input_seq_size = configs.m_days // configs.sampling_days + 1
+        # self.output_seq_size = configs.k_days // configs.sampling_days
+        self.output_seq_size = 1
+
+        self.conv_embedding = ConvEmbeddingLayer(n_features=configs.n_features, d_model=configs.d_model)
+        self.encoder = Encoder(configs.n_layers, configs.d_k, configs.d_v, configs.d_model, configs.d_ff,
+                               configs.n_heads, configs.max_input_seq_len, configs.dropout, configs.weighted_model)
+        self.decoder = Decoder(configs.n_layers, configs.d_k, configs.d_v, configs.d_model, configs.d_ff,
+                               configs.n_heads, configs.max_output_seq_len, configs.dropout, configs.weighted_model)
+        self.weighted_model = configs.weighted_model
+
+        self.predictor = dict()
+        self.predictor_helper = dict()
+        n_size = 16
+        for key in configs.model_predictor_list:
+            tags = key.split('_')
+            if tags[0] in configs.features_structure['regression'].keys():
+                if key in ['cslogy', 'csstd']:
+                    self.predictor[key] = FeedForward(configs.d_model, n_size, len(configs.features_structure['regression'][key]), out_activation='sigmoid')
+                else:
+                    self.predictor[key] = FeedForward(configs.d_model, n_size, len(configs.features_structure['regression'][key]))
+            elif tags[0] in configs.features_structure['classification'].keys():
+                self.predictor[key] = FeedForward(configs.d_model, n_size, 2, out_activation='softmax')
+                self.predictor_helper[key] = configs.features_structure['regression']['logy'].index(int(tags[1]))
+            # elif tags[0] in configs.features_structure['crosssection'].keys():
+            #     self.predictor[key] = FeedForward(64, len(configs.features_structure['regression'][key]))
+
+        self.features_cls = features_cls
+
+        self.optim_encoder_w = None
+        self.optim_decoder_w = None
+        self.optim_predictor_w = dict()
+        self.dropout_train = configs.dropout
+
+    def trainable_params(self):
+        # Avoid updating the position encoding
+        params = filter(lambda p: p[1].requires_grad, self.named_parameters())
+        # Add a separate parameter group for the weighted_model
+        param_groups = []
+        base_params = {'params': [], 'type': 'base'}
+        weighted_params = {'params': [], 'type': 'weighted'}
+        for name, param in params:
+            if 'w_kp' in name or 'w_a' in name:
+                weighted_params['params'].append(param)
+            else:
+                base_params['params'].append(param)
+        param_groups.append(base_params)
+        param_groups.append(weighted_params)
+
+        return param_groups
+
+    def encode(self, enc_inputs, return_attn=False):
+        return self.encoder(enc_inputs, self.input_seq_size, return_attn)
+
+    def decode(self, dec_inputs, enc_inputs, enc_outputs, return_attn=False):
+        return self.decoder(dec_inputs, self.output_seq_size, enc_inputs, enc_outputs, return_attn)
+
+    def forward(self, features, return_attn=False):
+        conv_in = self.conv_embedding(features['input'])
+        conv_out = self.conv_embedding(features['output'])
+        enc_outputs, enc_self_attns = self.encoder(conv_in, return_attn)
+        dec_outputs, dec_self_attns, dec_enc_attns = self.decoder(conv_out, conv_in, enc_outputs, return_attn)
+
+        dec_logits = self.tgt_proj(dec_outputs)
+
+        return dec_logits.view(-1, dec_logits.size(-1)), \
+               enc_self_attns, dec_self_attns, dec_enc_attns
+
+    def proj_grad(self):
+        if self.weighted_model:
+            for name, param in self.named_parameters():
+                if 'w_kp' in name or 'w_a' in name:
+                    param.data = proj_prob_simplex(param.data)
+        else:
+            pass
+
+
+
+
+
+
 
 
 class Transformer(nn.Module):

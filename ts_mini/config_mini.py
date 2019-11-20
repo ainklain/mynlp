@@ -157,6 +157,9 @@ class Config:
             for key in self.features_structure[cls].keys():
                 self.embedding_size += len(self.features_structure[cls][key])
 
+        if self.weight_scheme == 'mw':
+            self.embedding_size += 1
+
         # self.model_hidden_size = self.embedding_size
 
     def set_kdays(self, k_days, pred='pos'):

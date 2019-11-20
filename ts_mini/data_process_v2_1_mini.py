@@ -7,6 +7,10 @@ import numpy as np
 import os
 
 
+def normalize(x):
+    return (x - np.mean(x)) / np.std(x, ddof=1)
+
+
 def cleansing_missing_value(df_selected, n_allow_missing_value=5, to_log=True):
     mask = np.sum(df_selected.isna(), axis=0) <= n_allow_missing_value
     df = df_selected.ix[:, mask].ffill().bfill()
@@ -261,12 +265,13 @@ class DataScheduler:
             tmp_ie, tmp_od, tmp_td, additional_info = fetch_data
             additional_info['importance_wgt'] = np.array([decaying_factor ** (n_loop - i - 1)
                                                           for _ in range(len(tmp_ie))], dtype=np.float32)
-
+            additional_info['size_factor_mc_normal'] = normalize(additional_info['size_factor_mktcap'])
             if data_params['balance_class'] is True and c.balancing_method == 'each':
                 idx_bal = self.balanced_index(tmp_td[:, 0, idx_balance])
                 tmp_ie, tmp_od, tmp_td = tmp_ie[idx_bal], tmp_od[idx_bal], tmp_td[idx_bal]
                 additional_info['size_factor'] = additional_info['size_factor'].iloc[idx_bal]
                 additional_info['size_factor_mktcap'] = additional_info['size_factor_mktcap'].iloc[idx_bal]
+                additional_info['size_factor_mc_normal'] = additional_info['size_factor_mc_normal'].iloc[idx_bal]
                 additional_info['importance_wgt'] = additional_info['importance_wgt'][idx_bal]
 
             input_enc.append(tmp_ie)
@@ -285,6 +290,7 @@ class DataScheduler:
 
             size_factor = np.concatenate([additional_info['size_factor'] for additional_info in additional_infos_list], axis=0)
             size_factor_mktcap = np.concatenate([additional_info['size_factor_mktcap'] for additional_info in additional_infos_list], axis=0)
+            size_factor_mc_normal = np.concatenate([additional_info['size_factor_mc_normal'] for additional_info in additional_infos_list], axis=0)
             importance_wgt = np.concatenate([additional_info['importance_wgt'] for additional_info in additional_infos_list], axis=0)
 
             if data_params['balance_class'] is True and c.balancing_method == 'once':
@@ -292,10 +298,12 @@ class DataScheduler:
                 input_enc, output_dec, target_dec = input_enc[idx_bal], output_dec[idx_bal], target_dec[idx_bal]
                 additional_infos['size_factor'] = size_factor[idx_bal]
                 additional_infos['size_factor_mktcap'] = size_factor_mktcap[idx_bal]
+                additional_infos['size_factor_mc_normal'] = size_factor_mktcap[idx_bal]
                 additional_infos['importance_wgt'] = importance_wgt[idx_bal]
             else:
                 additional_infos['size_factor'] = size_factor[:]
                 additional_infos['size_factor_mktcap'] = size_factor_mktcap[:]
+                additional_infos['size_factor_mc_normal'] = size_factor_mktcap[:]
                 additional_infos['importance_wgt'] = importance_wgt[:]
         else:
             additional_infos = additional_infos_list
@@ -355,19 +363,24 @@ class DataScheduler:
         assert np.max(np.abs(eval_input_enc[:, -1, :] - eval_output_dec[:, 0, :])) == 0
 
         train_size_factor = train_add_infos['size_factor'].reshape([-1, 1, 1]).astype(np.float32)
+        train_size_nm = train_add_infos['size_factor_mc_normal'].reshape([-1, 1, 1]).astype(np.float32)
         train_importance_wgt = train_add_infos['importance_wgt']
+
         eval_size_factor = eval_add_infos['size_factor'].reshape([-1, 1, 1]).astype(np.float32)
+        eval_size_nm = eval_add_infos['size_factor_mc_normal'].reshape([-1, 1, 1]).astype(np.float32)
         eval_importance_wgt = eval_add_infos['importance_wgt']
 
         # K > 1인 경우 미래데이터 안 땡겨쓰게.
         train_new_output = np.zeros_like(train_output_dec)
         eval_new_output = np.zeros_like(eval_output_dec)
-        # if weight_scheme == 'ew':
-        #     train_new_output[:, 0, :] = train_output_dec[:, 0, :]
-        #     eval_new_output[:, 0, :] = eval_output_dec[:, 0, :]
-        # elif weight_scheme == 'mw':
-        train_new_output[:, 0, :] = train_output_dec[:, 0, :] + train_size_factor[:, 0, :]
-        eval_new_output[:, 0, :] = eval_output_dec[:, 0, :] + eval_size_factor[:, 0, :]
+        if c.weight_scheme == 'ew':
+            train_new_output[:, 0, :] = train_output_dec[:, 0, :]
+            eval_new_output[:, 0, :] = eval_output_dec[:, 0, :]
+        elif c.weight_scheme == 'mw':
+            train_new_output = np.concatenate([train_output_dec, train_output_dec[:, :, :1]], axis=-1)
+            eval_new_output = np.concatenate([eval_output_dec, eval_output_dec[:, :, :1]], axis=-1)
+            train_new_output[:, 0, :] = np.concatenate([train_output_dec[:, 0, :], train_size_nm[:, 0, :]], axis=1)
+            eval_new_output[:, 0, :] = np.concatenate([eval_output_dec[:, 0, :], eval_size_nm[:, 0, :]], axis=1)
 
         train_dataset = dataset_process(train_input_enc, train_new_output, train_target_dec, train_size_factor, batch_size=c.train_batch_size, importance_wgt=train_importance_wgt)
         eval_dataset = dataset_process(eval_input_enc, eval_new_output, eval_target_dec, eval_size_factor, batch_size=c.eval_batch_size, importance_wgt=eval_importance_wgt, iter_num=1)
@@ -402,7 +415,7 @@ class DataScheduler:
             features_with_noise = {'input': None, 'output': features['output']}
 
             # add random noise
-            if np.random.random() <= 0.4:
+            if np.random.random() <= 0.5:
                 # normal with mu=0 and sig=sigma
                 sample_sigma = tf.math.reduce_std(features['input'], axis=[0, 1], keepdims=True)
                 eps = sample_sigma * tf.random.normal(features['input'].shape, mean=0, stddev=1)
@@ -433,8 +446,7 @@ class DataScheduler:
             # randomly flip label
             flip_p = 0.2
             mask_label = np.random.choice([1, -1], size=labels.shape, p=[1-flip_p, flip_p])
-            labels_with_noise = labels * mask_label
-
+            labels_with_noise = labels_with_noise * mask_label
 
             labels_mtl = self.features_cls.labels_for_mtl(features_list, labels_with_noise, size_factors, importance_wgt)
             model.train_mtl(features_with_noise, labels_mtl, print_loss=print_loss)
@@ -488,8 +500,12 @@ class DataScheduler:
         for i, (input_enc_t, output_dec_t, size_factor) in enumerate(zip(input_enc_list, output_dec_list, size_factor_list)):
             assert np.sum(input_enc_t[:, -1, :] - output_dec_t[:, 0, :]) == 0
             assert np.sum(output_dec_t[:, 1:, :]) == 0
+
             new_output_t = np.zeros_like(output_dec_t)
-            new_output_t[:, 0, :] = output_dec_t[:, 0, :] + size_factor[:, 0, :]
+            if self.configs.weight_scheme == 'ew':
+                new_output_t[:, 0, :] = output_dec_t[:, 0, :]
+            elif self.configs.weight_scheme == 'mw':
+                new_output_t[:, 0, :] = np.concatenate([output_dec_t[:, 0, :], size_factor[:, 0, :]], axis=-1)
 
             features = {'input': input_enc_t, 'output': new_output_t}
             predictions = model.predict_mtl(features)
@@ -511,7 +527,11 @@ class DataScheduler:
             assert np.sum(input_enc_t[:, -1, :] - output_dec_t[:, 0, :]) == 0
             assert np.sum(output_dec_t[:, 1:, :]) == 0
             new_output_t = np.zeros_like(output_dec_t)
-            new_output_t[:, 0, :] = output_dec_t[:, 0, :] + size_factor[:, 0, :]
+            if self.configs.weight_scheme == 'ew':
+                new_output_t[:, 0, :] = output_dec_t[:, 0, :]
+            elif self.configs.weight_scheme == 'mw':
+                new_output_t[:, 0, :] = output_dec_t[:, 0, :] + size_factor[:, 0, :]
+
             features = {'input': input_enc_t, 'output': new_output_t}
             predictions = model.predict_mtl(features)
             df_infos = pd.concat([df_infos, pd.DataFrame({
@@ -949,7 +969,6 @@ class DataGeneratorDynamic:
                 univ = pd.read_csv('./data/factor_wgt.csv')
                 univ = univ[univ.infocode > 0]
 
-
                 # month end / year end mapping table
                 date_mapping = pd.read_csv('./data/date.csv')
                 univ_mapping = pd.merge(univ, date_mapping, left_on='work_m', right_on='work_m')
@@ -998,7 +1017,6 @@ class DataGeneratorDynamic:
         calc_length_label = features_cls.calc_length_label
         delay_days = features_cls.delay_days
 
-
         len_data = calc_length + m_days
         len_label = calc_length_label + delay_days
         # k_days_adj = k_days + delay_days
@@ -1010,6 +1028,11 @@ class DataGeneratorDynamic:
         # data cleansing
         select_where = ((df_pivoted.index >= start_d) & (df_pivoted.index <= end_d))
         df_logp = cleansing_missing_value(df_pivoted.ix[select_where, :], n_allow_missing_value=5, to_log=True)
+
+        selected_where_sz = ((self.size_data.eval_d >= start_d) & (self.size_data.eval_d <= end_d))
+        df_sz = self.size_data.ix[selected_where_sz, ['eval_d', 'infocode', 'mktcap']].pivot(index='eval_d', columns='infocode')
+        df_sz = cleansing_missing_value(df_sz, n_allow_missing_value=5, to_log=True)
+
 
         if df_logp.empty or len(df_logp) <= calc_length + m_days:
             return False

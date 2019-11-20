@@ -152,11 +152,12 @@ class Decoder(Model):
 class ConvModel(Model):
     def __init__(self, embedding_size):
         super().__init__()
-        self.conv1 = Conv1D(embedding_size, 1, activation='relu')
+        self.conv1 = Conv1D(embedding_size, 1, activation='linear')
 
     def call(self, inputs):
         # (None, T, n_features) -> (None, T, embedding_size)
-        return self.conv1(inputs)
+        x = self.conv1(inputs)
+        return tf.concat([inputs, x], axis=-1)
 
 
 class MarketModel:
@@ -328,7 +329,7 @@ class MarketModel:
 
 class TSModel:
     """omit embedding time series. just 1-D data used"""
-    def __init__(self, configs, feature_cls, weight_scheme='ew'):
+    def __init__(self, configs, features_cls, weight_scheme='ew'):
         self.weight_scheme = weight_scheme
 
         self.input_seq_size = configs.m_days // configs.sampling_days + 1
@@ -337,7 +338,7 @@ class TSModel:
         self.position_encode_in = positional_encoding(configs.d_model, self.input_seq_size)
         self.position_encode_out = positional_encoding(configs.d_model, self.output_seq_size)
 
-        self.conv_embedding = ConvModel(embedding_size=configs.d_model)
+        self.conv_embedding = ConvModel(embedding_size=configs.d_model - configs.embedding_size)
         self.encoder = Encoder(dim_input=configs.d_model,
                                model_hidden_size=configs.model_hidden_size,
                                ffn_hidden_size=configs.ffn_hidden_size,
@@ -367,7 +368,7 @@ class TSModel:
             # elif tags[0] in configs.features_structure['crosssection'].keys():
             #     self.predictor[key] = FeedForward(64, len(configs.features_structure['regression'][key]))
 
-        self.feature_cls = feature_cls
+        self.features_cls = features_cls
 
         self.optim_encoder_w = None
         self.optim_decoder_w = None
@@ -377,7 +378,7 @@ class TSModel:
         self.accuracy = tf.metrics.Accuracy()
 
         # decayed_learning_rate = learning_rate * decay_rate ^ (global_step / decay_steps)
-        lr = tf.optimizers.schedules.PolynomialDecay(1e-3, 2000, 1e-4)
+        lr = tf.optimizers.schedules.PolynomialDecay(1e-2, 100, 1e-4)
         # lr = tf.optimizers.schedules.PiecewiseConstantDecay([50, 150, 300], [1e-2, 1e-3, 1e-4, 1e-5])
         self.optimizer = tf.optimizers.Adam(lr)
         # self.optimizer = tf.optimizers.Adam(configs.learning_rate)
