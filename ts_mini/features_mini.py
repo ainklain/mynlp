@@ -245,6 +245,7 @@ class FeatureNew:
         return labels_mtl
 
 
+
 class Feature:
     # to be deleted (use FeatureNew)
     def __init__(self, configs):

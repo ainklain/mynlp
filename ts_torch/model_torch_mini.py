@@ -94,8 +94,11 @@ class PosEncoding(nn.Module):
     def forward(self, input_len):
         max_len = torch.max(input_len)
         tensor = torch.cuda.LongTensor if input_len.is_cuda else torch.LongTensor
+        print("is cuda:{}".format(input_len.is_cuda))
         # input_pos = torch.LongTensor([list(range(1, input_len+1))])
         input_pos = tensor([list(range(1, int(len)+1)) + [0]*int(max_len-len) for len in input_len])
+        if input_len.is_cuda:
+            self.pos_enc.cuda()
 
         return self.pos_enc(input_pos)
 
@@ -424,10 +427,11 @@ def get_attn_subsequent_mask(seq):
 
 # d_k, d_v, d_model, d_ff, n_heads, dropout
 class TSModel(nn.Module):
-    def __init__(self, configs, features_cls, weight_scheme='mw'):
+    def __init__(self, configs, features_cls, weight_scheme='mw', device='cpu'):
         super(TSModel, self).__init__()
 
         self.weight_scheme = weight_scheme
+        self.device = device
 
         self.input_seq_size = configs.m_days // configs.sampling_days + 1
         # self.output_seq_size = configs.k_days // configs.sampling_days
@@ -491,8 +495,12 @@ class TSModel(nn.Module):
 
         enc_in = self.conv_embedding(features['input'])
         dec_in = self.conv_embedding(features['output'])
-        enc_out, enc_self_attns = self.encoder(enc_in, return_attn)
-        predict, dec_self_attns, dec_enc_attns = self.decoder(dec_in, enc_in, enc_out, return_attn)
+
+        input_seq_size = torch.Tensor([enc_in.shape[1] for _ in range(enc_in.shape[0])]).to(self.device)
+        output_seq_size = torch.Tensor([dec_in.shape[1] for _ in range(dec_in.shape[0])]).to(self.device)
+
+        enc_out, enc_self_attns = self.encoder(enc_in, input_seq_size, return_attn)
+        predict, dec_self_attns, dec_enc_attns = self.decoder(dec_in, output_seq_size, enc_in, enc_out, return_attn)
 
         pred_each = dict()
         for key in self.predictor.keys():

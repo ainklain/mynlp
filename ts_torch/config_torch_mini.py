@@ -162,7 +162,7 @@ class Config:
                 self.embedding_size += len(self.features_structure[cls][key])
 
         if self.weight_scheme == 'mw':
-            self.embedding_size += 1
+            self.embedding_size += 0
 
         # self.model_hidden_size = self.embedding_size
 

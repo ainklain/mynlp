@@ -3,6 +3,7 @@ import pandas as pd
 import pickle
 import time
 import torch
+from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import os
 
@@ -46,9 +47,9 @@ class DataScheduler:
         self.test_begin_idx = self.base_idx - configs.m_days
         self.test_end_idx = self.base_idx + configs.retrain_days
 
-        self._make_path(configs)
+        self._make_dir(configs)
 
-    def _make_path(self, configs):
+    def _make_dir(self, configs):
         # data path for fetching data
         self.data_path = os.path.join(os.getcwd(), 'data', '{}_{}_{}'.format(configs.univ_type, configs.sampling_days, configs.m_days))
         os.makedirs(self.data_path, exist_ok=True)
@@ -329,127 +330,74 @@ class DataScheduler:
         idx_bal = np.concatenate([idx_pos, idx_neg])
         return idx_bal
 
-    def train(self,
-              model,
-              trainset=None,
-              evalset=None,
-              model_name='ts_model_v1.0',
-              epoch=True):
-
+    def train(self, model, optimizer, num_epochs, model_name='ts_model_v1.0'):
         c = self.configs
 
         # make directories for graph results (both train and test one)
-        train_out_path = os.path.join(self.data_out_path, model_name, '{}'.format(self.base_idx))
-        os.makedirs(train_out_path, exist_ok=True)
+        # train_out_path = os.path.join(self.data_out_path, model_name, '{}'.format(self.base_idx))
+        # os.makedirs(train_out_path, exist_ok=True)
 
-        if trainset is None:
-            _train_dataset = self._dataset('train')
-        else:
-            _train_dataset = trainset
-
-        if evalset is None:
-            _eval_dataset = self._dataset('eval')
-        else:
-            _eval_dataset = evalset
+        _train_dataset = self._dataset('train')
+        _eval_dataset = self._dataset('eval')
 
         if _train_dataset is False or _eval_dataset is False:
             print('[train] no train/eval data')
-            return False
+            # return False
 
-        train_input_enc, train_output_dec, train_target_dec, features_list, train_add_infos, _, _ = _train_dataset
-        eval_input_enc, eval_output_dec, eval_target_dec, _, eval_add_infos, _, _ = _eval_dataset
+        train_enc_in, train_dec_in, train_dec_out, features_list, train_add_infos, _, _ = _train_dataset
+        eval_enc_in, eval_dec_in, eval_dec_out, _, eval_add_infos, _, _ = _eval_dataset
 
-        assert np.max(np.abs(train_input_enc[:, -1, :] - train_output_dec[:, 0, :])) == 0
-        assert np.max(np.abs(eval_input_enc[:, -1, :] - eval_output_dec[:, 0, :])) == 0
+        assert np.max(np.abs(train_enc_in[:, -1, :] - train_dec_in[:, 0, :])) == 0
+        assert np.max(np.abs(eval_enc_in[:, -1, :] - eval_dec_in[:, 0, :])) == 0
 
-        train_size_factor = train_add_infos['size_factor'].reshape([-1, 1, 1]).astype(np.float32)
-        train_size_nm = train_add_infos['size_factor_mc_normal'].reshape([-1, 1, 1]).astype(np.float32)
-        train_importance_wgt = train_add_infos['importance_wgt']
+        train_dataloader = data_loader(train_enc_in, train_dec_in, train_dec_out, train_add_infos, batch_size=c.train_batch_size)
+        eval_dataloader = data_loader(eval_enc_in, eval_dec_in, eval_dec_out, eval_add_infos, batch_size=c.eval_batch_size)
 
-        eval_size_factor = eval_add_infos['size_factor'].reshape([-1, 1, 1]).astype(np.float32)
-        eval_size_nm = eval_add_infos['size_factor_mc_normal'].reshape([-1, 1, 1]).astype(np.float32)
-        eval_importance_wgt = eval_add_infos['importance_wgt']
+        for ep in range(num_epochs):
+            for i, (features, labels, add_infos) in enumerate(train_dataloader):
+                # features, labels, add_infos = next(iter(train_dataloader))
 
-        # K > 1인 경우 미래데이터 안 땡겨쓰게.
-        train_new_output = np.zeros_like(train_output_dec)
-        eval_new_output = np.zeros_like(eval_output_dec)
-        if c.weight_scheme == 'ew':
-            train_new_output[:, 0, :] = train_output_dec[:, 0, :]
-            eval_new_output[:, 0, :] = eval_output_dec[:, 0, :]
-        elif c.weight_scheme == 'mw':
-            train_new_output = np.concatenate([train_output_dec, train_output_dec[:, :, :1]], axis=-1)
-            eval_new_output = np.concatenate([eval_output_dec, eval_output_dec[:, :, :1]], axis=-1)
-            train_new_output[:, 0, :] = np.concatenate([train_output_dec[:, 0, :], train_size_nm[:, 0, :]], axis=1)
-            eval_new_output[:, 0, :] = np.concatenate([eval_output_dec[:, 0, :], eval_size_nm[:, 0, :]], axis=1)
+                # 미래데이터 안 땡겨쓰게
+                if c.weight_scheme == 'ew':
+                    new_out = torch.zeros_like(features['output'])
+                    new_out[:] = features['output']
+                if c.weight_scheme == 'mw':
+                    new_out = torch.zeros_like(features['output'])
+                    new_out[:] = features['output']
+                    # new_out = torch.zeros(*features['output'].shape[:2], features['output'].shape[2] + 1)
+                    # new_out = torch.cat(features['input'][:, 0, :])
 
-        train_dataset = dataset_process(train_input_enc, train_new_output, train_target_dec, train_size_factor, batch_size=c.train_batch_size, importance_wgt=train_importance_wgt)
-        eval_dataset = dataset_process(eval_input_enc, eval_new_output, eval_target_dec, eval_size_factor, batch_size=c.eval_batch_size, importance_wgt=eval_importance_wgt, iter_num=1)
-        print("train step: {}  eval step: {}".format(len(train_input_enc) // c.train_batch_size,
-                                                     len(eval_input_enc) // c.eval_batch_size))
-        if epoch:
-            train_steps = len(train_input_enc) // c.train_batch_size
-            eval_steps = train_steps
-            save_steps = train_steps
-        else:
-            train_steps = c.train_steps
-            eval_steps = c.eval_steps
-            save_steps = c.save_steps
+                # add random noise for features
+                features_with_noise = {'input': None, 'output': new_out}
+                features_with_noise['input'] = Noise.random_noise(features['input'], p=0.5)
+                features_with_noise['input'] = Noise.random_mask(features_with_noise['input'], p=0.9, mask_p=0.2)
 
-        for i, (features, labels, size_factors, importance_wgt) in enumerate(train_dataset.take(train_steps)):
-            # features, labels, size_factors, importance_wgt = next(iter(train_dataset))
-            print_loss = False
-            if i % save_steps == 0:
-                model.save_model(model_name)
+                # add random noise for labels
+                labels_with_noise = Noise.random_noise(labels, p=0.2)
+                labels_with_noise = Noise.random_flip(labels_with_noise, p=0.9, flip_p=0.2)
 
-            if i % eval_steps == 0:
-                print_loss = True
-                model.evaluate_mtl(eval_dataset, features_list, steps=len(eval_input_enc) // c.eval_batch_size)
+                labels_mtl = self.labels_torch(features_list, labels_with_noise, add_infos)
+                to_device(model.device, [features_with_noise, labels_mtl])
+                pred = model.forward(features_with_noise, labels_mtl)
 
-                print("[t: {} / i: {}] min_eval_loss:{} / count:{}".format(self.base_idx, i, model.eval_loss, model.eval_count))
-                if model.eval_count >= c.early_stopping_count:
-                    print("[t: {} / i: {}] train finished.".format(self.base_idx, i))
-                    model.weight_to_optim()
-                    model.save_model(model_name)
-                    break
+    def labels_torch(self, f_list, labels, add_infos):
+        c = self.configs
+        labels_mtl = dict()
+        for cls in c.features_structure.keys():
+            for key in c.features_structure[cls].keys():
+                n_arr = c.features_structure[cls][key]
+                if cls == 'classification':    # classification
+                    for n in n_arr:
+                        f_nm = '{}_{}'.format(key, n)
+                        labels_mtl[f_nm] = (labels[:, :, f_list.index(f_nm)] > 0).int()
+                else:
+                    labels_mtl[key] = torch.stack([labels[:, :, f_list.index("{}_{}".format(key, n))] for n in n_arr], axis=-1)
 
-            features_with_noise = {'input': None, 'output': features['output']}
+        labels_mtl['size_factor'] = add_infos['size_factor'].reshape(-1, 1, 1)
+        labels_mtl['importance_wgt'] = add_infos['importance_wgt'].reshape(-1, 1, 1)
 
-            # add random noise
-            if np.random.random() <= 0.5:
-                # normal with mu=0 and sig=sigma
-                sample_sigma = tf.math.reduce_std(features['input'], axis=[0, 1], keepdims=True)
-                eps = sample_sigma * tf.random.normal(features['input'].shape, mean=0, stddev=1)
-            else:
-                eps = 0
+        return labels_mtl
 
-            features_with_noise['input'] = features['input'] + eps
-
-            # randomly masked input data
-            if np.random.random() <= 0.9:
-                t_size = features['input'].shape[1]
-                mask = np.ones_like(features['input'])
-                masked_idx = np.random.choice(t_size, size=int(t_size * 0.2), replace=False)
-                for mask_i in masked_idx:
-                    mask[:, mask_i, :] = 0
-
-                    features_with_noise['input'] = features_with_noise['input'] * mask
-
-
-            # add random noise for label
-            if np.random.random() <= 0.2:
-                sample_sigma = tf.math.reduce_std(labels, axis=[0, 1], keepdims=True)
-                eps = sample_sigma * tf.random.normal(labels.shape, mean=0, stddev=1)
-            else:
-                eps = 0
-            labels_with_noise = labels + eps
-
-            # randomly flip label
-            flip_p = 0.2
-            mask_label = np.random.choice([1, -1], size=labels.shape, p=[1-flip_p, flip_p])
-            labels_with_noise = labels_with_noise * mask_label
-
-            labels_mtl = self.features_cls.labels_for_mtl(features_list, labels_with_noise, size_factors, importance_wgt)
-            model.train_mtl(features_with_noise, labels_mtl, print_loss=print_loss)
 
     def test(self, performer, model, dataset=None, dataset_m=None, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None):
         if out_dir is None:
@@ -1058,47 +1006,88 @@ class DataGeneratorDynamic:
         return len(self.date_)
 
 
-def ex_dataloader():
-    my_x = [np.array([[1.0,2],[3,4]]),np.array([[5.,6],[7,8]])] # a list of numpy arrays
-    my_y = [np.array([4.]), np.array([2.])] # another list of numpy arrays (targets)
+class AssetDataset(Dataset):
+    def __init__(self, enc_in, dec_in, dec_out, add_infos_dict):
+        self.enc_in = enc_in
+        self.dec_in = dec_in
+        self.dec_out = dec_out
+        self.add_infos = add_infos_dict
 
-    tensor_x = torch.stack([torch.Tensor(i) for i in my_x])  # transform to torch tensors
-    tensor_y = torch.stack([torch.Tensor(i) for i in my_y])
+    def __len__(self):
+        return len(self.enc_in)
 
-    my_dataset = TensorDataset(tensor_x, tensor_y)  # create your datset
-    my_dataloader = DataLoader(my_dataset)  # create your dataloader
+    def __getitem__(self, idx):
+        features = {'input': self.enc_in[idx], 'output': self.dec_in[idx]}
+        out_addinfos = dict()
+        for key in self.add_infos.keys():
+            out_addinfos[key] = self.add_infos[key][idx]
+
+        return features, self.dec_out[idx], out_addinfos
 
 
+def data_loader(enc_in, dec_in, dec_out, add_infos_dict, batch_size=1, shuffle=True):
+    asset_dataset = AssetDataset(enc_in, dec_in, dec_out, add_infos_dict)
+    return DataLoader(asset_dataset, batch_size=batch_size, shuffle=shuffle, pin_memory=True)
 
-# 학습에 들어가 배치 데이터를 만드는 함수이다.
-def dataset_process_torch(enc_in, dec_in, dec_out, size_factor, batch_size, importance_wgt=None, shuffle=True, iter_num=None, device='cpu'):
-    input_enc = torch.from_numpy(input_enc).to(device)
-    output_dec = torch.from_numpy(output_dec).to(device)
-    target_dec = torch.from_numpy(target_dec).to(device)
-    size_factor = torch.from_numpy(size_factor).to(device)
-    importance_wgt = torch.from_numpy(importance_wgt).to(device)
 
-    dataset = tf.data.Dataset.from_tensor_slices((input_enc, output_dec, target_dec, size_factor, importance_wgt))
+class Noise:
+    @staticmethod
+    def random_noise(arr, p):
+        # arr shape: (batch_size , seq_size, n_features)
+        assert arr.dim() == 3
+        # add random noise
+        if np.random.random() <= p:
+            # normal with mu=0 and sig=sigma
+            sample_sigma = torch.std(arr, axis=[0, 1], keepdims=True)
+            eps = sample_sigma * torch.randn_like(arr)
+        else:
+            eps = 0
 
-    # 전체 데이터를 섞는다.
-    if shuffle is True:
-        dataset = dataset.shuffle(buffer_size=len(input_enc))
-    # 배치 인자 값이 없다면  에러를 발생 시킨다.
-    assert batch_size is not None, "train batchSize must not be None"
-    # from_tensor_slices를 통해 나눈것을
-    # 배치크기 만큼 묶어 준다.
-    dataset = dataset.batch(batch_size, drop_remainder=True)
-    # 데이터 각 요소에 대해서 rearrange 함수를
-    # 통해서 요소를 변환하여 맵으로 구성한다.
-    dataset = dataset.map(rearrange)
-    # repeat()함수에 원하는 에포크 수를 넣을수 있으면
-    # 아무 인자도 없다면 무한으로 이터레이터 된다.
-    if iter_num is None:
-        dataset = dataset.repeat()
-    else:
-        dataset = dataset.repeat(iter_num)
-    # make_one_shot_iterator를 통해 이터레이터를
-    # 만들어 준다.
-    # 이터레이터를 통해 다음 항목의 텐서
-    # 개체를 넘겨준다.
-    return dataset
+        return arr + eps
+
+    @staticmethod
+    def _get_mask(arr_shape, mask_p):
+        mask = np.random.choice([False, True], size=arr_shape, p=[1 - mask_p, mask_p])
+        return mask
+
+    @classmethod
+    def random_mask(cls, arr, p, mask_p=0.2):
+        """p의 확률로 mask_p만큼의 값을 0처리"""
+        # deep copy
+        new_arr = torch.zeros_like(arr)
+        new_arr[:] = arr[:]
+
+        # randomly masked input data
+        if np.random.random() <= p:
+            mask = cls._get_mask(arr.shape, mask_p)
+            new_arr[mask] = 0
+
+        return new_arr
+
+    @classmethod
+    def random_flip(cls, arr, p, flip_p=0.2):
+        """p의 확률로 flip_p만큼의 값을 flip"""
+
+        # deep copy
+        new_arr = torch.zeros_like(arr)
+        new_arr[:] = arr[:]
+
+        if np.random.random() <= p:
+            mask = cls._get_mask(arr.shape, flip_p)
+            new_arr[mask] = arr[mask] * -1
+
+        return new_arr
+
+
+def to_device(device, list_to_device):
+    assert isinstance(list_to_device, list)
+
+    for value_ in list_to_device:
+        if isinstance(value_, dict):
+            for key in value_.keys():
+                value_[key] = value_[key].to(device)
+        elif isinstance(value_, torch.Tensor):
+            value_ = value_.to(device)
+        else:
+            raise NotImplementedError
+

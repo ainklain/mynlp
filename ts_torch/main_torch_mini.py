@@ -40,15 +40,23 @@ config_str = configs.export()
 features_cls = FeatureNew(configs)
 
 
-
-model = TSModel(configs, features_cls, weight_scheme=configs.weight_scheme)
-
+device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+model = TSModel(configs, features_cls, weight_scheme=configs.weight_scheme, device=device)
+model.to(device)
 
 ds = DataScheduler(configs, features_cls)
-performer = Performance(configs)
+
+ds.set_idx(7500)
+# ds.test_end_idx += 250
+ii = 0
+jj = 0
+
+trainset = ds._dataset('train')
+evalset = ds._dataset('eval')
+
+# performer = Performance(configs)
 
 optimizer = optim.Adam(model.parameters(), lr=configs.learning_rate)
-
 
 
 os.makedirs(os.path.join(ds.data_out_path, configs.f_name), exist_ok=True)
@@ -58,13 +66,6 @@ with open(os.path.join(ds.data_out_path, configs.f_name, 'config.txt'), 'w') as 
 if os.path.exists(os.path.join(ds.data_out_path, configs.f_name, configs.f_name + '.pkl')):
     model.load_model(os.path.join(ds.data_out_path, configs.f_name, configs.f_name))
 
-ds.set_idx(7500)
-# ds.test_end_idx += 250
-ii = 0
-jj = 0
-
-trainset = ds._dataset('train')
-evalset = ds._dataset('eval')
 testset_insample = ds._dataset('test_insample')
 testset_insample_m = ds._dataset_monthly('test_insample')
 testset = ds._dataset('test')
