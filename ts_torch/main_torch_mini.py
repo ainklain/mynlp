@@ -17,7 +17,7 @@ from ts_mini.features_mini import FeatureNew
 # vtorch test
 from ts_torch.data_process_torch_mini import DataGeneratorDynamic, DataScheduler
 from ts_torch.config_torch_mini import Config
-# from ts_mini.performance_mini import Performance
+from ts_mini.performance_mini import Performance
 
 
 configs = Config()
@@ -54,10 +54,10 @@ jj = 0
 trainset = ds._dataset('train')
 evalset = ds._dataset('eval')
 
-# performer = Performance(configs)
+performer = Performance(configs)
 
 optimizer = optim.Adam(model.parameters(), lr=configs.learning_rate)
-
+ds.train(model, optimizer, 5, performer)
 
 os.makedirs(os.path.join(ds.data_out_path, configs.f_name), exist_ok=True)
 with open(os.path.join(ds.data_out_path, configs.f_name, 'config.txt'), 'w') as f:

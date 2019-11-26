@@ -250,8 +250,8 @@ class DataScheduler:
     def _dataset(self, mode='train'):
         c = self.configs
 
-        input_enc, output_dec, target_dec = [], [], []
-        additional_infos_list = []  # test/predict 인경우 list, train/eval인 경우 dict
+        enc_in, dec_in, dec_out = [], [], []
+        add_infos_list = []  # test/predict 인경우 list, train/eval인 경우 dict
         start_idx, end_idx, data_params, decaying_factor = self.get_data_params(mode)
         features_list = c.key_list
 
@@ -263,56 +263,48 @@ class DataScheduler:
             if fetch_data is None:
                 continue
 
-            tmp_ie, tmp_od, tmp_td, additional_info = fetch_data
-            additional_info['importance_wgt'] = np.array([decaying_factor ** (n_loop - i - 1)
-                                                          for _ in range(len(tmp_ie))], dtype=np.float32)
-            additional_info['size_factor_mc_normal'] = normalize(additional_info['size_factor_mktcap'])
+            tmp_ein, tmp_din, tmp_dout, add_info = fetch_data
+            add_info['importance_wgt'] = np.array([decaying_factor ** (n_loop - i - 1)
+                                                          for _ in range(len(tmp_ein))], dtype=np.float32)
+            add_info['size_factor_mc_normal'] = normalize(add_info['size_factor_mktcap'])
             if data_params['balance_class'] is True and c.balancing_method == 'each':
-                idx_bal = self.balanced_index(tmp_td[:, 0, idx_balance])
-                tmp_ie, tmp_od, tmp_td = tmp_ie[idx_bal], tmp_od[idx_bal], tmp_td[idx_bal]
-                additional_info['size_factor'] = additional_info['size_factor'].iloc[idx_bal]
-                additional_info['size_factor_mktcap'] = additional_info['size_factor_mktcap'].iloc[idx_bal]
-                additional_info['size_factor_mc_normal'] = additional_info['size_factor_mc_normal'].iloc[idx_bal]
-                additional_info['importance_wgt'] = additional_info['importance_wgt'][idx_bal]
+                idx_bal = self.balanced_index(tmp_dout[:, 0, idx_balance])
+                tmp_ie, tmp_od, tmp_td = tmp_ein[idx_bal], tmp_din[idx_bal], tmp_dout[idx_bal]
+                add_info['size_factor'] = add_info['size_factor'].iloc[idx_bal]
+                add_info['size_factor_mktcap'] = add_info['size_factor_mktcap'].iloc[idx_bal]
+                add_info['size_factor_mc_normal'] = add_info['size_factor_mc_normal'].iloc[idx_bal]
+                add_info['importance_wgt'] = add_info['importance_wgt'][idx_bal]
 
-            input_enc.append(tmp_ie)
-            output_dec.append(tmp_od)
-            target_dec.append(tmp_td)
-            additional_infos_list.append(additional_info)
+            enc_in.append(tmp_ein)
+            dec_in.append(tmp_din)
+            dec_out.append(tmp_dout)
+            add_infos_list.append(add_info)
 
-        if len(input_enc) == 0:
+        if len(enc_in) == 0:
             return False
 
-        if mode in ['train', 'eval']:
-            additional_infos = dict()
-            input_enc = np.concatenate(input_enc, axis=0)
-            output_dec = np.concatenate(output_dec, axis=0)
-            target_dec = np.concatenate(target_dec, axis=0)
+        add_infos = dict()
+        enc_in = np.concatenate(enc_in, axis=0)
+        dec_in = np.concatenate(dec_in, axis=0)
+        dec_out = np.concatenate(dec_out, axis=0)
 
-            size_factor = np.concatenate([additional_info['size_factor'] for additional_info in additional_infos_list], axis=0)
-            size_factor_mktcap = np.concatenate([additional_info['size_factor_mktcap'] for additional_info in additional_infos_list], axis=0)
-            size_factor_mc_normal = np.concatenate([additional_info['size_factor_mc_normal'] for additional_info in additional_infos_list], axis=0)
-            importance_wgt = np.concatenate([additional_info['importance_wgt'] for additional_info in additional_infos_list], axis=0)
+        balancing_list = ['size_factor', 'size_factor_mktcap', 'size_factor_mc_normal', 'importance_wgt']
+        if data_params['balance_class'] is True and c.balancing_method == 'once':
+            idx_bal = self.balanced_index(dec_out[:, 0, idx_balance])
+            input_enc, output_dec, target_dec = enc_in[idx_bal], dec_in[idx_bal], dec_out[idx_bal]
 
-            if data_params['balance_class'] is True and c.balancing_method == 'once':
-                idx_bal = self.balanced_index(target_dec[:, 0, idx_balance])
-                input_enc, output_dec, target_dec = input_enc[idx_bal], output_dec[idx_bal], target_dec[idx_bal]
-                additional_infos['size_factor'] = size_factor[idx_bal]
-                additional_infos['size_factor_mktcap'] = size_factor_mktcap[idx_bal]
-                additional_infos['size_factor_mc_normal'] = size_factor_mktcap[idx_bal]
-                additional_infos['importance_wgt'] = importance_wgt[idx_bal]
-            else:
-                additional_infos['size_factor'] = size_factor[:]
-                additional_infos['size_factor_mktcap'] = size_factor_mktcap[:]
-                additional_infos['size_factor_mc_normal'] = size_factor_mktcap[:]
-                additional_infos['importance_wgt'] = importance_wgt[:]
+            for nm_ in balancing_list:
+                val_ = np.concatenate([add_info[nm_] for add_info in add_infos_list], axis=0)
+                add_infos[nm_] = val_[idx_bal]
         else:
-            additional_infos = additional_infos_list
+            for nm_ in balancing_list:
+                val_ = np.concatenate([add_info[nm_] for add_info in add_infos_list], axis=0)
+                add_infos[nm_] = val_[:]
 
         start_date = self.date_[start_idx]
         end_date = self.date_[end_idx]
 
-        return input_enc, output_dec, target_dec, features_list, additional_infos, start_date, end_date
+        return enc_in, dec_in, dec_out, features_list, add_infos, start_date, end_date
 
     def balanced_index(self, balance_arr):
         where_p = (balance_arr > 0)
@@ -330,7 +322,7 @@ class DataScheduler:
         idx_bal = np.concatenate([idx_pos, idx_neg])
         return idx_bal
 
-    def train(self, model, optimizer, num_epochs, model_name='ts_model_v1.0'):
+    def train(self, model, optimizer, num_epochs, performer):
         c = self.configs
 
         # make directories for graph results (both train and test one)
@@ -339,6 +331,11 @@ class DataScheduler:
 
         _train_dataset = self._dataset('train')
         _eval_dataset = self._dataset('eval')
+        _test_dataset = self._dataset('test')
+        _dataset_list_m = self._dataset_monthly('test')
+
+        test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
+        os.makedirs(test_out_path, exist_ok=True)
 
         if _train_dataset is False or _eval_dataset is False:
             print('[train] no train/eval data')
@@ -354,6 +351,21 @@ class DataScheduler:
         eval_dataloader = data_loader(eval_enc_in, eval_dec_in, eval_dec_out, eval_add_infos, batch_size=c.eval_batch_size)
 
         for ep in range(num_epochs):
+            performer.predict_plot_mtl_cross_section_test(model, _test_dataset
+                                                          , save_dir=test_out_path
+                                                          , file_nm='test_{}.png'.format(ep)
+                                                          , ylog=False
+                                                          , ls_method='ls_5_20'
+                                                          , plot_all_features=True)
+
+            performer.predict_plot_monthly(model, _dataset_list_m
+                                           , save_dir=test_out_path + "_mls"
+                                           , file_nm='test_{}.png'.format(ep)
+                                           , ylog=True
+                                           , ls_method='ls_5_20'
+                                           , plot_all_features=True,
+                                           rate_=self.configs.app_rate)
+
             for i, (features, labels, add_infos) in enumerate(train_dataloader):
                 # features, labels, add_infos = next(iter(train_dataloader))
 
@@ -378,7 +390,15 @@ class DataScheduler:
 
                 labels_mtl = self.labels_torch(features_list, labels_with_noise, add_infos)
                 to_device(model.device, [features_with_noise, labels_mtl])
-                pred = model.forward(features_with_noise, labels_mtl)
+                # pred, _, _, _ = model.forward(features_with_noise, labels_mtl)
+                pred, loss = model.forward_with_loss(features_with_noise, labels_mtl)
+
+                if i % 20 == 0:
+                    print('Step {}: loss = {}'.format(i, loss))
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
     def labels_torch(self, f_list, labels, add_infos):
         c = self.configs
@@ -389,7 +409,7 @@ class DataScheduler:
                 if cls == 'classification':    # classification
                     for n in n_arr:
                         f_nm = '{}_{}'.format(key, n)
-                        labels_mtl[f_nm] = (labels[:, :, f_list.index(f_nm)] > 0).int()
+                        labels_mtl[f_nm] = (labels[:, :, f_list.index(f_nm)] > 0).long()
                 else:
                     labels_mtl[key] = torch.stack([labels[:, :, f_list.index("{}_{}".format(key, n))] for n in n_arr], axis=-1)
 
@@ -908,6 +928,11 @@ class DataGeneratorDynamic:
             self.df_pivoted_all = data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
             self.df_pivoted_all.columns = self.df_pivoted_all.columns.droplevel(0).to_numpy(dtype=np.int32)
 
+            size_df = pd.read_csv('./data/kr_mktcap_daily.csv')
+            size_df.columns = ['date_', 'infocode', 'mktcap', 'size_port']
+            data_df = data_df.set_index(['date_', 'infocode'])
+            size_df = size_df.set_index(['date_', 'infocode'])
+
             if univ_type == 'all':
                 self.data_code = pd.read_csv('./data/kr_sizeinfo_90.csv')
                 self.data_code = self.data_code[self.data_code.infocode > 0]
@@ -977,10 +1002,11 @@ class DataGeneratorDynamic:
         select_where = ((df_pivoted.index >= start_d) & (df_pivoted.index <= end_d))
         df_logp = cleansing_missing_value(df_pivoted.ix[select_where, :], n_allow_missing_value=5, to_log=True)
 
-        selected_where_sz = ((self.size_data.eval_d >= start_d) & (self.size_data.eval_d <= end_d))
-        df_sz = self.size_data.ix[selected_where_sz, ['eval_d', 'infocode', 'mktcap']].pivot(index='eval_d', columns='infocode')
-        df_sz = cleansing_missing_value(df_sz, n_allow_missing_value=5, to_log=True)
-
+        # selected_where_sz = ((self.size_data.eval_d >= start_d) & (self.size_data.eval_d <= end_d))
+        # df_sz = self.size_data.ix[selected_where_sz, ['eval_d', 'infocode', 'mktcap']].pivot(index='eval_d', columns='infocode')
+        # df_sz.columns = df_sz.columns.droplevel(0)
+        # df_sz = cleansing_missing_value(df_sz, n_allow_missing_value=5, to_log=True)
+        # assert len(df_logp) == len(df_sz)
 
         if df_logp.empty or len(df_logp) <= calc_length + m_days:
             return False

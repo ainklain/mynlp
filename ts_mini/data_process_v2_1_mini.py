@@ -364,11 +364,11 @@ class DataScheduler:
 
         train_size_factor = train_add_infos['size_factor'].reshape([-1, 1, 1]).astype(np.float32)
         train_size_nm = train_add_infos['size_factor_mc_normal'].reshape([-1, 1, 1]).astype(np.float32)
-        train_importance_wgt = train_add_infos['importance_wgt']
+        train_importance_wgt = train_add_infos['importance_wgt'].reshape([-1, 1, 1]).astype(np.float32)
 
         eval_size_factor = eval_add_infos['size_factor'].reshape([-1, 1, 1]).astype(np.float32)
         eval_size_nm = eval_add_infos['size_factor_mc_normal'].reshape([-1, 1, 1]).astype(np.float32)
-        eval_importance_wgt = eval_add_infos['importance_wgt']
+        eval_importance_wgt = eval_add_infos['importance_wgt'].reshape([-1, 1, 1]).astype(np.float32)
 
         # K > 1인 경우 미래데이터 안 땡겨쓰게.
         train_new_output = np.zeros_like(train_output_dec)

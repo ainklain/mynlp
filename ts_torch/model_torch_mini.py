@@ -94,7 +94,7 @@ class PosEncoding(nn.Module):
     def forward(self, input_len):
         max_len = torch.max(input_len)
         tensor = torch.cuda.LongTensor if input_len.is_cuda else torch.LongTensor
-        print("is cuda:{}".format(input_len.is_cuda))
+        # print("is cuda:{}".format(input_len.is_cuda))
         # input_pos = torch.LongTensor([list(range(1, input_len+1))])
         input_pos = tensor([list(range(1, int(len)+1)) + [0]*int(max_len-len) for len in input_len])
         if input_len.is_cuda:
@@ -455,7 +455,7 @@ class TSModel(nn.Module):
                 else:
                     self.predictor[key] = FeedForward(configs.d_model, n_size, len(configs.features_structure['regression'][key]))
             elif tags[0] in configs.features_structure['classification'].keys():
-                self.predictor[key] = FeedForward(configs.d_model, n_size, 2, out_activation='softmax')
+                self.predictor[key] = FeedForward(configs.d_model, n_size, 2, out_activation='linear')
                 self.predictor_helper[key] = configs.features_structure['regression']['logy'].index(int(tags[1]))
             # elif tags[0] in configs.features_structure['crosssection'].keys():
             #     self.predictor[key] = FeedForward(64, len(configs.features_structure['regression'][key]))
@@ -507,6 +507,52 @@ class TSModel(nn.Module):
             pred_each[key] = self.predictor[key](predict)
 
         return pred_each, enc_self_attns, dec_self_attns, dec_enc_attns
+
+    def predict_mtl(self, features):
+        ret = self.forward(features)
+        return ret[0]
+
+    def forward_with_loss(self, features, labels_mtl, return_attn=False):
+        # features = {'input': torch.zeros(2, 25, 23), 'output': torch.zeros(2, 1, 23)}
+
+        enc_in = self.conv_embedding(features['input'])
+        dec_in = self.conv_embedding(features['output'])
+
+        input_seq_size = torch.Tensor([enc_in.shape[1] for _ in range(enc_in.shape[0])]).to(self.device)
+        output_seq_size = torch.Tensor([dec_in.shape[1] for _ in range(dec_in.shape[0])]).to(self.device)
+
+        enc_out, enc_self_attns = self.encoder(enc_in, input_seq_size, return_attn)
+        predict, dec_self_attns, dec_enc_attns = self.decoder(dec_in, output_seq_size, enc_in, enc_out, return_attn)
+
+        pred_each = dict()
+        loss_each = dict()
+        loss = None
+        for key in self.predictor.keys():
+            pred_each[key] = self.predictor[key](predict)
+
+            if self.weight_scheme == 'mw':
+                adj_weight = labels_mtl['size_factor'][:, :, 0] * 2.
+            else:
+                adj_weight = 1.
+
+            adj_importance = labels_mtl['importance_wgt'][:, :, 0]
+
+            if key[:3] == 'pos':
+                criterion = torch.nn.CrossEntropyLoss(reduction='none')
+                pred_each[key] = pred_each[key].contiguous().transpose(1, -1)
+                loss_each[key] = criterion(pred_each[key], labels_mtl[key]) \
+                                 * torch.abs(labels_mtl['logy'][:, :, self.predictor_helper[key]]) \
+                                 * adj_weight * adj_importance
+            else:
+                criterion = torch.nn.MSELoss(reduction='none')
+                loss_each[key] = criterion(pred_each[key], labels_mtl[key]) * adj_weight * adj_importance
+
+            if loss is None:
+                loss = loss_each[key].mean()
+            else:
+                loss += loss_each[key].mean()
+
+        return pred_each, loss #, enc_self_attns, dec_self_attns, dec_enc_attns,
 
     def proj_grad(self):
         if self.weighted_model:

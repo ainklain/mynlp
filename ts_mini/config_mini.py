@@ -60,7 +60,6 @@ class Config:
         self.dropout_mm = 0.5
         self.embedding_size_mm = 10
 
-
     @property
     def balancing_key(self):
         return 'pos_{}'.format(self.k_days)
@@ -89,6 +88,10 @@ class Config:
                     key_list.append("{}_{}".format(subkey, nd))
 
         return key_list
+
+    def set_weight_scheme(self, weight_scheme):
+        self.weight_scheme = weight_scheme
+        self.set_features_info()
 
     def set_features_info(self, k_days=5):
         if k_days == 5:
