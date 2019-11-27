@@ -236,9 +236,13 @@ class DataScheduler:
             add_info['importance_wgt'] = np.array([decaying_factor ** (n_loop - i - 1)
                                                           for _ in range(len(tmp_ein))], dtype=np.float32)
 
+            balancing_list = ['mktcap', 'size_rnk', 'importance_wgt']
+            for nm_ in balancing_list:
+                add_info[nm_] = torch.from_numpy(np.array(add_info[nm_], dtype=np.float32).squeeze())
+
             enc_in.append(torch.from_numpy(tmp_ein))
-            dec_in.append(tmp_din)
-            dec_out.append(tmp_dout)
+            dec_in.append(torch.from_numpy(tmp_din))
+            dec_out.append(torch.from_numpy(tmp_dout))
             additional_infos.append(add_info)
 
         if len(enc_in) == 0:
