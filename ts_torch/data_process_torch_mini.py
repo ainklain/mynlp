@@ -12,10 +12,12 @@ def normalize(x):
     return (x - np.mean(x)) / np.std(x, ddof=1)
 
 
-def cleansing_missing_value(df_selected, n_allow_missing_value=5, to_log=True):
+def cleansing_missing_value(df_selected, n_allow_missing_value=5, to_log=True, reset_first_value=True):
     mask = np.sum(df_selected.isna(), axis=0) <= n_allow_missing_value
-    df = df_selected.ix[:, mask].ffill().bfill()
-    df = df / df.iloc[0]
+    df = df_selected.loc[:, mask].ffill().bfill()
+    if reset_first_value:
+        df = df / df.iloc[0]
+
     if to_log:
         df = np.log(df)
 
@@ -54,7 +56,7 @@ class DataScheduler:
         self.data_path = os.path.join(os.getcwd(), 'data', '{}_{}_{}'.format(configs.univ_type, configs.sampling_days, configs.m_days))
         os.makedirs(self.data_path, exist_ok=True)
         # make a directory for outputs
-        self.data_out_path = os.path.join(os.getcwd(), configs.data_out_path)
+        self.data_out_path = os.path.join(os.getcwd(), configs.data_out_path, self.configs.f_name)
         os.makedirs(self.data_out_path, exist_ok=True)
 
     def set_idx(self, base_idx):
@@ -171,13 +173,13 @@ class DataScheduler:
         if fetch_data is None:
             return False
 
-        input_enc, output_dec, target_dec, additional_info = fetch_data
-        additional_info['factor_d'] = base_d
-        additional_info['model_d'] = recent_d
-        additional_info['univ'] = univ[univ.eval_m == base_d]
-        additional_info['importance_wgt'] = np.array([1 for _ in range(len(input_enc))], dtype=np.float32)
+        enc_in, dec_in, dec_out, add_info = fetch_data
+        add_info['factor_d'] = base_d
+        add_info['model_d'] = recent_d
+        add_info['univ'] = univ[univ.eval_m == base_d]
+        add_info['importance_wgt'] = np.array([1 for _ in range(len(enc_in))], dtype=np.float32)
 
-        return input_enc, output_dec, target_dec, features_list, additional_info
+        return enc_in, dec_in, dec_out, features_list, add_info
 
     def _dataset_monthly(self, mode='test'):
         assert mode in ['test', 'test_insample', 'predict']
@@ -187,7 +189,7 @@ class DataScheduler:
         univ = dg.univ
 
         # parameter setting
-        input_enc, output_dec, target_dec = [], [], []
+        enc_in, dec_in, dec_out = [], [], []
         additional_infos = []  # test/predict 인경우 list, train/eval인 경우 dict
         start_idx, end_idx, data_params, decaying_factor = self.get_data_params(mode)
         features_list = c.key_list
@@ -213,10 +215,10 @@ class DataScheduler:
                 continue
 
             i = list(nearest_idx).index(idx)
-            tmp_ie, tmp_od, tmp_td, additional_info = fetch_data
+            tmp_ein, tmp_din, tmp_dout, add_info = fetch_data
 
             # next y
-            assets = additional_info['asset_list']
+            assets = add_info['asset_list']
 
             if next_d_list[i+1] == '9999-12-31':
                 next_y = prc_df.loc[next_d_list[i], assets]
@@ -226,26 +228,26 @@ class DataScheduler:
                 prc_df_selected = prc_df_selected.ffill()
                 next_y = prc_df_selected.loc[next_d_list[i+1], assets] / prc_df_selected.loc[next_d_list[i], assets] - 1
 
-            additional_info['next_y'] = next_y
-            additional_info['factor_d'] = factor_d_list[i]
-            additional_info['model_d'] = nearest_d_list[i]
-            additional_info['inv_d'] = next_d_list[i]
-            additional_info['univ'] = univ[univ.eval_m == factor_d_list[i]]
-            additional_info['importance_wgt'] = np.array([decaying_factor ** (n_loop - i - 1)
-                                                          for _ in range(len(tmp_ie))], dtype=np.float32)
+            add_info['next_y'] = next_y
+            add_info['factor_d'] = factor_d_list[i]
+            add_info['model_d'] = nearest_d_list[i]
+            add_info['inv_d'] = next_d_list[i]
+            add_info['univ'] = univ[univ.eval_m == factor_d_list[i]]
+            add_info['importance_wgt'] = np.array([decaying_factor ** (n_loop - i - 1)
+                                                          for _ in range(len(tmp_ein))], dtype=np.float32)
 
-            input_enc.append(tmp_ie)
-            output_dec.append(tmp_od)
-            target_dec.append(tmp_td)
-            additional_infos.append(additional_info)
+            enc_in.append(torch.from_numpy(tmp_ein))
+            dec_in.append(tmp_din)
+            dec_out.append(tmp_dout)
+            additional_infos.append(add_info)
 
-        if len(input_enc) == 0:
+        if len(enc_in) == 0:
             return False
 
         start_date = self.date_[start_idx]
         end_date = self.date_[end_idx]
 
-        return input_enc, output_dec, target_dec, features_list, additional_infos, start_date, end_date
+        return enc_in, dec_in, dec_out, features_list, additional_infos, start_date, end_date
 
     def _dataset(self, mode='train'):
         c = self.configs
@@ -257,6 +259,7 @@ class DataScheduler:
 
         idx_balance = c.key_list.index(c.balancing_key)
 
+        balancing_list = ['mktcap', 'size_rnk', 'importance_wgt']
         n_loop = np.ceil((end_idx - start_idx) / c.sampling_days)
         for i, d in enumerate(range(start_idx, end_idx, c.sampling_days)):
             fetch_data = self._fetch_data(d)
@@ -266,14 +269,11 @@ class DataScheduler:
             tmp_ein, tmp_din, tmp_dout, add_info = fetch_data
             add_info['importance_wgt'] = np.array([decaying_factor ** (n_loop - i - 1)
                                                           for _ in range(len(tmp_ein))], dtype=np.float32)
-            add_info['size_factor_mc_normal'] = normalize(add_info['size_factor_mktcap'])
             if data_params['balance_class'] is True and c.balancing_method == 'each':
                 idx_bal = self.balanced_index(tmp_dout[:, 0, idx_balance])
-                tmp_ie, tmp_od, tmp_td = tmp_ein[idx_bal], tmp_din[idx_bal], tmp_dout[idx_bal]
-                add_info['size_factor'] = add_info['size_factor'].iloc[idx_bal]
-                add_info['size_factor_mktcap'] = add_info['size_factor_mktcap'].iloc[idx_bal]
-                add_info['size_factor_mc_normal'] = add_info['size_factor_mc_normal'].iloc[idx_bal]
-                add_info['importance_wgt'] = add_info['importance_wgt'][idx_bal]
+                tmp_ein, tmp_din, tmp_dout = tmp_ein[idx_bal], tmp_din[idx_bal], tmp_dout[idx_bal]
+                for nm_ in balancing_list:
+                    add_info[nm_] = add_info[nm_].iloc[idx_bal]
 
             enc_in.append(tmp_ein)
             dec_in.append(tmp_din)
@@ -283,23 +283,35 @@ class DataScheduler:
         if len(enc_in) == 0:
             return False
 
-        add_infos = dict()
-        enc_in = np.concatenate(enc_in, axis=0)
-        dec_in = np.concatenate(dec_in, axis=0)
-        dec_out = np.concatenate(dec_out, axis=0)
+        if mode in ['train', 'eval']:
+            add_infos = dict()
+            enc_in = np.concatenate(enc_in, axis=0)
+            dec_in = np.concatenate(dec_in, axis=0)
+            dec_out = np.concatenate(dec_out, axis=0)
 
-        balancing_list = ['size_factor', 'size_factor_mktcap', 'size_factor_mc_normal', 'importance_wgt']
-        if data_params['balance_class'] is True and c.balancing_method == 'once':
-            idx_bal = self.balanced_index(dec_out[:, 0, idx_balance])
-            input_enc, output_dec, target_dec = enc_in[idx_bal], dec_in[idx_bal], dec_out[idx_bal]
+            if data_params['balance_class'] is True and c.balancing_method == 'once':
+                idx_bal = self.balanced_index(dec_out[:, 0, idx_balance])
+                enc_in, dec_in, dec_out = enc_in[idx_bal], dec_in[idx_bal], dec_out[idx_bal]
 
-            for nm_ in balancing_list:
-                val_ = np.concatenate([add_info[nm_] for add_info in add_infos_list], axis=0)
-                add_infos[nm_] = val_[idx_bal]
+                for nm_ in balancing_list:
+                    val_ = np.concatenate([np.squeeze(add_info[nm_]) for add_info in add_infos_list], axis=0)
+                    add_infos[nm_] = val_[idx_bal]
+            else:
+                for nm_ in balancing_list:
+                    val_ = np.concatenate([np.squeeze(add_info[nm_]) for add_info in add_infos_list], axis=0)
+                    add_infos[nm_] = val_[:]
         else:
-            for nm_ in balancing_list:
-                val_ = np.concatenate([add_info[nm_] for add_info in add_infos_list], axis=0)
-                add_infos[nm_] = val_[:]
+            # test의 경우 전부 torch로 변환
+            enc_in = [torch.from_numpy(ei_t) for ei_t in enc_in]
+            dec_in = [torch.from_numpy(di_t) for di_t in dec_in]
+            dec_out = [torch.from_numpy(do_t) for do_t in dec_out]
+            
+            add_infos = []
+            for add_info in add_infos_list:
+                add_info_temp = add_info.copy()
+                for nm_ in balancing_list:
+                    add_info_temp[nm_] = torch.from_numpy(np.array(add_info[nm_], dtype=np.float32).squeeze())
+                add_infos.append(add_info_temp)
 
         start_date = self.date_[start_idx]
         end_date = self.date_[end_idx]
@@ -323,6 +335,7 @@ class DataScheduler:
         return idx_bal
 
     def train(self, model, optimizer, num_epochs, performer):
+        model.train()
         c = self.configs
 
         # make directories for graph results (both train and test one)
@@ -331,11 +344,6 @@ class DataScheduler:
 
         _train_dataset = self._dataset('train')
         _eval_dataset = self._dataset('eval')
-        _test_dataset = self._dataset('test')
-        _dataset_list_m = self._dataset_monthly('test')
-
-        test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
-        os.makedirs(test_out_path, exist_ok=True)
 
         if _train_dataset is False or _eval_dataset is False:
             print('[train] no train/eval data')
@@ -351,33 +359,13 @@ class DataScheduler:
         eval_dataloader = data_loader(eval_enc_in, eval_dec_in, eval_dec_out, eval_add_infos, batch_size=c.eval_batch_size)
 
         for ep in range(num_epochs):
-            performer.predict_plot_mtl_cross_section_test(model, _test_dataset
-                                                          , save_dir=test_out_path
-                                                          , file_nm='test_{}.png'.format(ep)
-                                                          , ylog=False
-                                                          , ls_method='ls_5_20'
-                                                          , plot_all_features=True)
-
-            performer.predict_plot_monthly(model, _dataset_list_m
-                                           , save_dir=test_out_path + "_mls"
-                                           , file_nm='test_{}.png'.format(ep)
-                                           , ylog=True
-                                           , ls_method='ls_5_20'
-                                           , plot_all_features=True,
-                                           rate_=self.configs.app_rate)
-
+            self.test_plot(performer, model, ep)
             for i, (features, labels, add_infos) in enumerate(train_dataloader):
                 # features, labels, add_infos = next(iter(train_dataloader))
 
                 # 미래데이터 안 땡겨쓰게
-                if c.weight_scheme == 'ew':
-                    new_out = torch.zeros_like(features['output'])
-                    new_out[:] = features['output']
-                if c.weight_scheme == 'mw':
-                    new_out = torch.zeros_like(features['output'])
-                    new_out[:] = features['output']
-                    # new_out = torch.zeros(*features['output'].shape[:2], features['output'].shape[2] + 1)
-                    # new_out = torch.cat(features['input'][:, 0, :])
+                new_out = torch.zeros_like(features['output'])
+                new_out[:] = features['output']
 
                 # add random noise for features
                 features_with_noise = {'input': None, 'output': new_out}
@@ -400,6 +388,38 @@ class DataScheduler:
                 loss.backward()
                 optimizer.step()
 
+    def test_plot(self, performer, model, ep):
+        # self=ds; ep=0; ylog = False
+        model.eval()
+        model.to('cpu')
+
+        _dataset_list = self._dataset('test')
+        _dataset_list_m = self._dataset_monthly('test')
+
+        test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
+        os.makedirs(test_out_path, exist_ok=True)
+
+        if _dataset_list is False:
+            print('[test] no test data')
+            return False
+
+        performer.predict_plot_mtl_cross_section_test(model, _dataset_list
+                                                      , save_dir=test_out_path
+                                                      , file_nm='test_{}.png'.format(ep)
+                                                      , ylog=False
+                                                      , ls_method='ls_5_20'
+                                                      , plot_all_features=True)
+        if _dataset_list_m is not None:
+            performer.predict_plot_monthly(model, _dataset_list_m
+                                           , save_dir=test_out_path + "_mls"
+                                           , file_nm='test_{}.png'.format(ep)
+                                           , ylog=True
+                                           , ls_method='ls_5_20'
+                                           , plot_all_features=True
+                                           , rate_=self.configs.app_rate)
+
+        model.to(model.device)
+
     def labels_torch(self, f_list, labels, add_infos):
         c = self.configs
         labels_mtl = dict()
@@ -413,11 +433,10 @@ class DataScheduler:
                 else:
                     labels_mtl[key] = torch.stack([labels[:, :, f_list.index("{}_{}".format(key, n))] for n in n_arr], axis=-1)
 
-        labels_mtl['size_factor'] = add_infos['size_factor'].reshape(-1, 1, 1)
+        labels_mtl['size_rnk'] = add_infos['size_rnk'].reshape(-1, 1, 1)
         labels_mtl['importance_wgt'] = add_infos['importance_wgt'].reshape(-1, 1, 1)
 
         return labels_mtl
-
 
     def test(self, performer, model, dataset=None, dataset_m=None, use_label=True, out_dir=None, file_nm='out.png', ylog=False, save_type=None, table_nm=None):
         if out_dir is None:
@@ -463,17 +482,13 @@ class DataScheduler:
 
     def save_score_to_csv(self, model, dataset_list, out_dir=None):
         input_enc_list, output_dec_list, _, _, additional_infos, start_date, _ = dataset_list
-        size_factor_list = [add_info['size_factor'] for add_info in additional_infos]
         df_infos = pd.DataFrame(columns={'start_d', 'base_d', 'infocode', 'score'})
-        for i, (input_enc_t, output_dec_t, size_factor) in enumerate(zip(input_enc_list, output_dec_list, size_factor_list)):
+        for i, (input_enc_t, output_dec_t) in enumerate(zip(input_enc_list, output_dec_list)):
             assert np.sum(input_enc_t[:, -1, :] - output_dec_t[:, 0, :]) == 0
             assert np.sum(output_dec_t[:, 1:, :]) == 0
 
             new_output_t = np.zeros_like(output_dec_t)
-            if self.configs.weight_scheme == 'ew':
-                new_output_t[:, 0, :] = output_dec_t[:, 0, :]
-            elif self.configs.weight_scheme == 'mw':
-                new_output_t[:, 0, :] = np.concatenate([output_dec_t[:, 0, :], size_factor[:, 0, :]], axis=-1)
+            new_output_t[:, 0, :] = output_dec_t[:, 0, :]
 
             features = {'input': input_enc_t, 'output': new_output_t}
             predictions = model.predict_mtl(features)
@@ -489,16 +504,12 @@ class DataScheduler:
             table_nm = 'kr_weekly_score_temp'
 
         input_enc_list, output_dec_list, _, _, additional_infos, start_date, _ = dataset_list
-        size_factor_list = [add_info['size_factor'] for add_info in additional_infos]
         df_infos = pd.DataFrame(columns={'start_d', 'base_d', 'infocode', 'score'})
-        for i, (input_enc_t, output_dec_t, size_factor) in enumerate(zip(input_enc_list, output_dec_list, size_factor_list)):
+        for i, (input_enc_t, output_dec_t) in enumerate(zip(input_enc_list, output_dec_list)):
             assert np.sum(input_enc_t[:, -1, :] - output_dec_t[:, 0, :]) == 0
             assert np.sum(output_dec_t[:, 1:, :]) == 0
             new_output_t = np.zeros_like(output_dec_t)
-            if self.configs.weight_scheme == 'ew':
-                new_output_t[:, 0, :] = output_dec_t[:, 0, :]
-            elif self.configs.weight_scheme == 'mw':
-                new_output_t[:, 0, :] = output_dec_t[:, 0, :] + size_factor[:, 0, :]
+            new_output_t[:, 0, :] = output_dec_t[:, 0, :]
 
             features = {'input': input_enc_t, 'output': new_output_t}
             predictions = model.predict_mtl(features)
@@ -865,7 +876,7 @@ class DataGeneratorMarket:
 
             self.date_ = list(data_df_temp.index)
             features_mm = ['mkt_rf', 'smb', 'hml', 'rmw', 'wml', 'call_rate', 'kospi', 'usdkrw']
-            self.data_df = pd.DataFrame(data_df_temp.ix[:, features_mm], dtype=np.float32)
+            self.data_df = pd.DataFrame(data_df_temp.loc[:, features_mm], dtype=np.float32)
 
     def sample_data(self, base_d, debug=True):
         # get attributes to local variables
@@ -963,7 +974,7 @@ class DataGeneratorDynamic:
 
                 univ_w_size = univ_w_size[univ_w_size.infocode > 0]
                 univ_w_size['mktcap'] = univ_w_size['mktcap'] / 1000.
-                self.univ = univ_w_size.ix[:, ['eval_m', 'infocode', 'gicode', 'size_port', 'mktcap', 'wgt']]
+                self.univ = univ_w_size.loc[:, ['eval_m', 'infocode', 'gicode', 'size_port', 'mktcap', 'wgt']]
                 self.univ.columns = ['eval_m', 'infocode', 'gicode', 'size_port', 'mktcap', 'wgt']
                 self.size_data = size_data
 
@@ -1000,13 +1011,7 @@ class DataGeneratorDynamic:
 
         # data cleansing
         select_where = ((df_pivoted.index >= start_d) & (df_pivoted.index <= end_d))
-        df_logp = cleansing_missing_value(df_pivoted.ix[select_where, :], n_allow_missing_value=5, to_log=True)
-
-        # selected_where_sz = ((self.size_data.eval_d >= start_d) & (self.size_data.eval_d <= end_d))
-        # df_sz = self.size_data.ix[selected_where_sz, ['eval_d', 'infocode', 'mktcap']].pivot(index='eval_d', columns='infocode')
-        # df_sz.columns = df_sz.columns.droplevel(0)
-        # df_sz = cleansing_missing_value(df_sz, n_allow_missing_value=5, to_log=True)
-        # assert len(df_logp) == len(df_sz)
+        df_logp = cleansing_missing_value(df_pivoted.loc[select_where, :], n_allow_missing_value=5, to_log=True)
 
         if df_logp.empty or len(df_logp) <= calc_length + m_days:
             return False
@@ -1016,14 +1021,30 @@ class DataGeneratorDynamic:
             return False
         print('[{}] univ size: {}'.format(base_d, len(univ_list)))
 
+        logp_arr = df_logp.reindex(columns=univ_list).to_numpy(dtype=np.float32)
+
+        # size
+        selected_where_sz = ((self.size_data.eval_d >= start_d) & (self.size_data.eval_d <= end_d))
+        df_sz = self.size_data.loc[selected_where_sz, ['eval_d', 'infocode', 'mktcap']].pivot(index='eval_d', columns='infocode')
+        df_sz.columns = df_sz.columns.droplevel(0)
+        if len(df_logp) != len(df_sz):
+            df_sz = pd.merge(df_logp.reindex(columns=[]), df_sz, how='left', left_index=True, right_index=True)
+
+        df_sz = cleansing_missing_value(df_sz, n_allow_missing_value=20, to_log=False, reset_first_value=False)
+        sz_arr = df_sz.reindex(columns=univ_list).to_numpy(dtype=np.float32)
+        assert logp_arr.shape == sz_arr.shape
+
         # calculate features
-        features_dict, labels_dict = features_cls.calc_features(df_logp.ix[:, univ_list].to_numpy(dtype=np.float32), transpose=False, debug=debug)
+        features_dict, labels_dict = features_cls.calc_features(logp_arr, transpose=False, debug=debug)
+        f_size, l_size = features_cls.calc_func_size(sz_arr)
+        features_dict['nmsize'] = f_size
+        labels_dict['nmsize'] = l_size
 
         spot_dict = dict()
         spot_dict['base_d'] = base_d
         spot_dict['asset_list'] = univ_list
-        spot_dict['size_factor'] = size_df.loc[univ_list].mktcap.rank() / len(univ_list)
-        spot_dict['size_factor_mktcap'] = size_df.loc[univ_list]
+        spot_dict['mktcap'] = size_df.loc[univ_list]
+        spot_dict['size_rnk'] = spot_dict['mktcap'].rank() / len(spot_dict['mktcap'])
 
         return features_dict, labels_dict, spot_dict
 
@@ -1031,29 +1052,6 @@ class DataGeneratorDynamic:
     def max_length(self):
         return len(self.date_)
 
-
-class AssetDataset(Dataset):
-    def __init__(self, enc_in, dec_in, dec_out, add_infos_dict):
-        self.enc_in = enc_in
-        self.dec_in = dec_in
-        self.dec_out = dec_out
-        self.add_infos = add_infos_dict
-
-    def __len__(self):
-        return len(self.enc_in)
-
-    def __getitem__(self, idx):
-        features = {'input': self.enc_in[idx], 'output': self.dec_in[idx]}
-        out_addinfos = dict()
-        for key in self.add_infos.keys():
-            out_addinfos[key] = self.add_infos[key][idx]
-
-        return features, self.dec_out[idx], out_addinfos
-
-
-def data_loader(enc_in, dec_in, dec_out, add_infos_dict, batch_size=1, shuffle=True):
-    asset_dataset = AssetDataset(enc_in, dec_in, dec_out, add_infos_dict)
-    return DataLoader(asset_dataset, batch_size=batch_size, shuffle=shuffle, pin_memory=True)
 
 
 class Noise:
@@ -1103,6 +1101,30 @@ class Noise:
             new_arr[mask] = arr[mask] * -1
 
         return new_arr
+
+
+class AssetDataset(Dataset):
+    def __init__(self, enc_in, dec_in, dec_out, add_infos_dict):
+        self.enc_in = enc_in
+        self.dec_in = dec_in
+        self.dec_out = dec_out
+        self.add_infos = add_infos_dict
+
+    def __len__(self):
+        return len(self.enc_in)
+
+    def __getitem__(self, idx):
+        features = {'input': self.enc_in[idx], 'output': self.dec_in[idx]}
+        out_addinfos = dict()
+        for key in self.add_infos.keys():
+            out_addinfos[key] = self.add_infos[key][idx]
+
+        return features, self.dec_out[idx], out_addinfos
+
+
+def data_loader(enc_in, dec_in, dec_out, add_infos_dict, batch_size=1, shuffle=True):
+    asset_dataset = AssetDataset(enc_in, dec_in, dec_out, add_infos_dict)
+    return DataLoader(asset_dataset, batch_size=batch_size, shuffle=shuffle, pin_memory=True)
 
 
 def to_device(device, list_to_device):

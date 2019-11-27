@@ -52,7 +52,6 @@ class Performance:
         self.pred_feature = configs.pred_feature
         self.cost_rate = configs.cost_rate
 
-
         self.adj_feature = 'nmlogy'
 
     def define_variables(self, t_steps, assets, f_keys=None):
@@ -125,19 +124,13 @@ class Performance:
         input_enc, output_dec, target_dec, features_list, add_info = dataset_t
 
         idx_y = features_list.index(self.label_feature)
-        size_ = np.array(add_info['size_factor'], dtype=np.float32).reshape([-1, 1, 1])
-        size_nm = np.array(add_info['size_factor_mc_normal'], dtype=np.float32).reshape([-1, 1, 1])
-        mktcap = np.array(add_info['size_factor_mktcap'], dtype=np.float32).reshape([-1, 1, 1])
+        mktcap = np.array(add_info['mktcap'], dtype=np.float32).reshape([-1, 1, 1])
         assets = np.array(add_info['asset_list'])
 
         # data format
         assert np.sum(input_enc[:, -1, idx_y] - output_dec[:, 0, idx_y]) == 0
         new_output_t = np.zeros_like(output_dec)
-        if c.weight_scheme == 'ew':
-            new_output_t[:, 0, :] = output_dec[:, 0, :]
-        elif c.weight_scheme == 'mw':
-            new_output_t = np.concatenate([new_output_t, new_output_t[:, :, :1]], axis=-1)
-            new_output_t[:, 0, :] = np.concatenate([output_dec[:, 0, :], size_nm[:, 0, :]], axis=-1)
+        new_output_t[:, 0, :] = output_dec[:, 0, :]
 
         features = {'input': input_enc, 'output': new_output_t}
         labels = target_dec
@@ -245,23 +238,14 @@ class Performance:
                 continue
             t = i // t_stepsize + 1
 
-            size_nm = np.array(add_info['size_factor_mc_normal'], dtype=np.float32).reshape([-1, 1, 1])
-            mktcap = np.array(add_info['size_factor_mktcap'], dtype=np.float32).reshape([-1, 1, 1])
+            mktcap = np.array(add_info['mktcap'], dtype=np.float32).reshape([-1, 1, 1])
             assets = np.array(add_info['asset_list'], dtype=np.float32)
 
             # data format
             assert np.sum(ie_t[:, -1, idx_y] - od_t[:, 0, idx_y]) == 0
 
             new_output_t = np.zeros_like(od_t)
-            new_output_t2 = np.zeros_like(od_t)
-            if c.weight_scheme == 'ew':
-                new_output_t[:, 0, :] = od_t[:, 0, :]
-                new_output_t2[:, 0, :] = od_t[:, 0, :]
-            elif c.weight_scheme == 'mw':
-                new_output_t = np.concatenate([od_t, od_t[:, :, :1]], axis=-1)
-                new_output_t2 = np.concatenate([od_t, od_t[:, :, :1]], axis=-1)
-                new_output_t[:, 0, :] = np.concatenate([od_t[:, 0, :], size_nm[:, 0, :]], axis=-1)
-                new_output_t2[:, 0, :] = np.concatenate([od_t[:, 0, :], mktcap[:, 0, :]], axis=-1)
+            new_output_t[:, 0, :] = od_t[:, 0, :]
 
             features = {'input': ie_t, 'output': new_output_t}
             labels = td_t
@@ -640,22 +624,13 @@ class Performance:
             t = i + 1
             print('{} / {}'.format(add_info['factor_d'], add_info['model_d']))
 
-            size_nm = np.array(add_info['size_factor_mc_normal'], dtype=np.float32).reshape([-1, 1, 1])
-            mktcap = np.array(add_info['size_factor_mktcap'], dtype=np.float32).reshape([-1, 1, 1])
+            mktcap = np.array(add_info['mktcap'], dtype=np.float32).reshape([-1, 1, 1])
 
             # data format
             assert np.sum(ie_t[:, -1, idx_y] - od_t[:, 0, idx_y]) == 0
 
             new_output_t = np.zeros_like(od_t)
-            new_output_t2 = np.zeros_like(od_t)
-            if c.weight_scheme == 'ew':
-                new_output_t[:, 0, :] = od_t[:, 0, :]
-                new_output_t2[:, 0, :] = od_t[:, 0, :]
-            elif c.weight_scheme == 'mw':
-                new_output_t = np.concatenate([od_t, od_t[:, :, :1]], axis=-1)
-                new_output_t2 = np.concatenate([od_t, od_t[:, :, :1]], axis=-1)
-                new_output_t[:, 0, :] = np.concatenate([od_t[:, 0, :], size_nm[:, 0, :]], axis=-1)
-                new_output_t2[:, 0, :] = np.concatenate([od_t[:, 0, :], mktcap[:, 0, :]], axis=-1)
+            new_output_t[:, 0, :] = od_t[:, 0, :]
 
             features = {'input': ie_t, 'output': new_output_t}
             label_y = np.array(add_info['next_y'])

@@ -122,26 +122,18 @@ class Performance:
 
     def extract_portfolio(self, model, dataset_t, rate_=1.):
         c = self.configs
-        input_enc, output_dec, target_dec, features_list, add_info = dataset_t
+        enc_in, dec_in, dec_out, features_list, add_info = dataset_t
 
         idx_y = features_list.index(self.label_feature)
-        size_ = np.array(add_info['size_factor'], dtype=np.float32).reshape([-1, 1, 1])
-        size_nm = np.array(add_info['size_factor_mc_normal'], dtype=np.float32).reshape([-1, 1, 1])
-        mktcap = np.array(add_info['size_factor_mktcap'], dtype=np.float32).reshape([-1, 1, 1])
+        mktcap = np.array(add_info['mktcap'], dtype=np.float32).reshape([-1, 1, 1])
         assets = np.array(add_info['asset_list'])
 
         # data format
-        assert np.sum(input_enc[:, -1, idx_y] - output_dec[:, 0, idx_y]) == 0
-        new_output_t = np.zeros_like(output_dec)
-        if c.weight_scheme == 'ew':
-            new_output_t[:, 0, :] = output_dec[:, 0, :]
-        elif c.weight_scheme == 'mw':
-            new_output_t[:, 0, :] = output_dec[:, 0, :]
-            # new_output_t = np.concatenate([new_output_t, new_output_t[:, :, :1]], axis=-1)
-            # new_output_t[:, 0, :] = np.concatenate([output_dec[:, 0, :], size_nm[:, 0, :]], axis=-1)
+        assert np.sum((enc_in[:, -1, idx_y] - dec_in[:, 0, idx_y]).numpy()) == 0
+        dec_in[:, 1:, :] = 0
 
-        features = {'input': input_enc, 'output': new_output_t}
-        labels = target_dec
+        features = {'input': enc_in, 'output': dec_in}
+        labels = dec_out.numpy()
         label_y = labels[:, 0, idx_y]
         mc = mktcap[:, 0, 0]
 
@@ -154,7 +146,10 @@ class Performance:
 
         # ############ For Model ############
         # prediction
-        predictions = model.predict_mtl(features)
+        predictions = model.predict_mtl(features, device='cpu')
+        for key in predictions.keys():
+            predictions[key] = predictions[key].detach().numpy()
+
         value_ = dict()
         value_[self.adj_feature] = predictions[self.adj_feature][:, 0, 0]
         value_['main'] = predictions[self.pred_feature][:, 0, 0]
@@ -195,6 +190,8 @@ class Performance:
                                             , ylog=False
                                             , ls_method='ls_5_20'
                                             , plot_all_features=True):
+        # dataset_list= _dataset_list; save_dir = test_out_path; file_nm = 'test_{}.png'.format(0); ylog = False; ls_method = 'ls_5_20'; plot_all_features = True
+
         c = self.configs
 
         m_args = ls_method.split('_')
@@ -241,31 +238,21 @@ class Performance:
         model_ew = ew_dict['model']
         model_mw = mw_dict['model']
 
-        for i, (ie_t, od_t, td_t, add_info) in enumerate(zip(ie_list, od_list, td_list, add_infos)):
+        for i, (ein_t, din_t, dout_t, add_info) in enumerate(zip(ie_list, od_list, td_list, add_infos)):
+            # i=0; ein_t, din_t, dout_t, add_info = ie_list[i], od_list[i], td_list[i], add_infos[i]
             if i % t_stepsize != 0:
                 continue
             t = i // t_stepsize + 1
 
-            size_nm = np.array(add_info['size_factor_mc_normal'], dtype=np.float32).reshape([-1, 1, 1])
-            mktcap = np.array(add_info['size_factor_mktcap'], dtype=np.float32).reshape([-1, 1, 1])
+            mktcap = np.array(add_info['mktcap'], dtype=np.float32).reshape([-1, 1, 1])
             assets = np.array(add_info['asset_list'], dtype=np.float32)
 
             # data format
-            assert np.sum(ie_t[:, -1, idx_y] - od_t[:, 0, idx_y]) == 0
+            assert np.sum((ein_t[:, -1, idx_y] - din_t[:, 0, idx_y]).numpy()) == 0
+            din_t[:, 1:, :] = 0
 
-            new_output_t = np.zeros_like(od_t)
-            new_output_t2 = np.zeros_like(od_t)
-            if c.weight_scheme == 'ew':
-                new_output_t[:, 0, :] = od_t[:, 0, :]
-                new_output_t2[:, 0, :] = od_t[:, 0, :]
-            elif c.weight_scheme == 'mw':
-                new_output_t = np.concatenate([od_t, od_t[:, :, :1]], axis=-1)
-                new_output_t2 = np.concatenate([od_t, od_t[:, :, :1]], axis=-1)
-                new_output_t[:, 0, :] = np.concatenate([od_t[:, 0, :], size_nm[:, 0, :]], axis=-1)
-                new_output_t2[:, 0, :] = np.concatenate([od_t[:, 0, :], mktcap[:, 0, :]], axis=-1)
-
-            features = {'input': ie_t, 'output': new_output_t}
-            labels = td_t
+            features = {'input': ein_t, 'output': din_t}
+            labels = dout_t.numpy()
             label_y = labels[:, 0, idx_y]
             mc = mktcap[:, 0, 0]
 
@@ -287,7 +274,9 @@ class Performance:
 
             # ############ For Model ############
             # prediction
-            predictions = model.predict_mtl(features)
+            predictions = model.predict_mtl(features, device='cpu')
+            for key in predictions.keys():
+                predictions[key] = predictions[key].detach().numpy()
             value_ = dict()
 
             value_[self.adj_feature] = predictions[self.adj_feature][:, 0, 0]
@@ -597,7 +586,7 @@ class Performance:
 
         results = list()
 
-        ie_list, od_list, _, features_list, add_infos, start_d, end_d = dataset_list
+        ein_list, din_list, _, features_list, add_infos, start_d, end_d = dataset_list
 
         all_assets_list = list()
         for add_info in add_infos:
@@ -605,7 +594,7 @@ class Performance:
 
         idx_y = features_list.index(self.label_feature)
 
-        t_steps = len(ie_list) + 1
+        t_steps = len(ein_list) + 1
 
         # define variables to save values
         if plot_all_features:
@@ -634,31 +623,20 @@ class Performance:
         fm_ew = ew_dict['model_w_factor']
         fm_mw = mw_dict['model_w_factor']
 
-        for i, (ie_t, od_t, add_info) \
-                in enumerate(zip(ie_list, od_list, add_infos)):
-            # i=0; ie_t, od_t, size_, mktcap, add_info = ie_list[i], od_list[i], size_factor_list[i], mktcap_list[i],  add_infos[i]
+        for i, (ein_t, din_t, add_info) \
+                in enumerate(zip(ein_list, din_list, add_infos)):
+            # i=0; ein_t, din_t, add_info = ein_list[i], din_list[i], add_infos[i]
 
             t = i + 1
             print('{} / {}'.format(add_info['factor_d'], add_info['model_d']))
 
-            size_nm = np.array(add_info['size_factor_mc_normal'], dtype=np.float32).reshape([-1, 1, 1])
-            mktcap = np.array(add_info['size_factor_mktcap'], dtype=np.float32).reshape([-1, 1, 1])
+            mktcap = np.array(add_info['mktcap'], dtype=np.float32).reshape([-1, 1, 1])
 
             # data format
-            assert np.sum(ie_t[:, -1, idx_y] - od_t[:, 0, idx_y]) == 0
+            assert np.sum((ein_t[:, -1, idx_y] - din_t[:, 0, idx_y]).numpy()) == 0
+            din_t[:, 1:, :] = 0
 
-            new_output_t = np.zeros_like(od_t)
-            new_output_t2 = np.zeros_like(od_t)
-            if c.weight_scheme == 'ew':
-                new_output_t[:, 0, :] = od_t[:, 0, :]
-                new_output_t2[:, 0, :] = od_t[:, 0, :]
-            elif c.weight_scheme == 'mw':
-                new_output_t = np.concatenate([od_t, od_t[:, :, :1]], axis=-1)
-                new_output_t2 = np.concatenate([od_t, od_t[:, :, :1]], axis=-1)
-                new_output_t[:, 0, :] = np.concatenate([od_t[:, 0, :], size_nm[:, 0, :]], axis=-1)
-                new_output_t2[:, 0, :] = np.concatenate([od_t[:, 0, :], mktcap[:, 0, :]], axis=-1)
-
-            features = {'input': ie_t, 'output': new_output_t}
+            features = {'input': ein_t, 'output': din_t}
             label_y = np.array(add_info['next_y'])
             mc = mktcap[:, 0, 0]
 
@@ -691,7 +669,10 @@ class Performance:
 
             # ############ For Model ############
             # prediction
-            predictions = model.predict_mtl(features)
+            predictions = model.predict_mtl(features, device='cpu')
+            for key in predictions.keys():
+                predictions[key] = predictions[key].detach().numpy()
+
             value_ = dict()
 
             value_[self.adj_feature] = predictions[self.adj_feature][:, 0, 0]

@@ -57,7 +57,7 @@ def arr_to_cs(arr):
 
 
 def arr_to_normal(arr):
-    return_value = (arr - np.mean(arr, axis=1, keepdims=True)) / np.std(arr, axis=1, ddof=1, keepdims=True)
+    return_value = (arr - np.nanmean(arr, axis=1, keepdims=True)) / np.nanstd(arr, axis=1, ddof=1, keepdims=True)
     return return_value
 
 
@@ -68,16 +68,6 @@ def numpy_fill(arr):
     np.maximum.accumulate(idx, axis=1, out=idx)
     out = arr[np.arange(idx.shape[0])[:, None], idx]
     return out
-
-
-def cleansing_missing_value(df_selected, n_allow_missing_value=5, to_log=True):
-    mask = np.sum(df_selected.isna(), axis=0) <= n_allow_missing_value
-    df = df_selected.ix[:, mask].ffill().bfill()
-    df = df / df.iloc[0]
-    if to_log:
-        df = np.log(df)
-
-    return df
 
 
 class FeatureNew:
@@ -107,6 +97,23 @@ class FeatureNew:
         else:
             label_ = data_arr[self.m_days:][self.delay_days:]
         return data_, label_
+
+    def calc_func_size(self, arr):
+        calc_length, m_days, k_days, delay_days = self.calc_length, self.m_days, self.k_days, self.delay_days
+        k_days_adj = k_days + delay_days
+        result = arr_to_normal(arr[calc_length:])
+        feature, label = self.split_data_label(result)
+
+        if label is None:
+            label_ = None
+        # label 산출을 위한 최소한의 데이터가 없는 경우 (ex. predict)
+        else:
+            if len(label) <= 1:
+                label_ = None
+            else:
+                label_ = label[1]
+
+        return feature[::self.sampling_days], label_
 
     def calc_func(self, arr, feature_nm, debug=False):
 

@@ -17,7 +17,7 @@ from ts_mini.features_mini import FeatureNew
 # vtorch test
 from ts_torch.data_process_torch_mini import DataGeneratorDynamic, DataScheduler
 from ts_torch.config_torch_mini import Config
-from ts_mini.performance_mini import Performance
+from ts_torch.performance_torch_mini import Performance
 
 
 configs = Config()
@@ -28,7 +28,7 @@ configs.pred_feature = pred
 configs.weight_scheme = w_scheme
 configs.balancing_method = balancing_method
 # configs.learning_rate = 1e-4
-configs.f_name = 'kr_{}_{}_{}_{}_h{}_mfast+labelnoise_v2_02'.format(k_days, univ_type, balancing_method, pred, head)
+configs.f_name = 'kr_{}_{}_{}_{}_h{}_mfast+labelnoise_v2_03'.format(k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100
 configs.eval_steps = 100
 configs.save_steps = 100
@@ -57,7 +57,8 @@ evalset = ds._dataset('eval')
 performer = Performance(configs)
 
 optimizer = optim.Adam(model.parameters(), lr=configs.learning_rate)
-ds.train(model, optimizer, 5, performer)
+
+ds.train(model, optimizer, 10, performer)
 
 os.makedirs(os.path.join(ds.data_out_path, configs.f_name), exist_ok=True)
 with open(os.path.join(ds.data_out_path, configs.f_name, 'config.txt'), 'w') as f:

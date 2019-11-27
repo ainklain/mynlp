@@ -490,14 +490,15 @@ class TSModel(nn.Module):
     def decode(self, dec_inputs, enc_inputs, enc_outputs, return_attn=False):
         return self.decoder(dec_inputs, self.output_seq_size, enc_inputs, enc_outputs, return_attn)
 
-    def forward(self, features, return_attn=False):
+    def forward(self, features, return_attn=False, device=None):
         # features = {'input': torch.zeros(2, 25, 23), 'output': torch.zeros(2, 1, 23)}
-
+        if device is None:
+            device = self.device
         enc_in = self.conv_embedding(features['input'])
         dec_in = self.conv_embedding(features['output'])
 
-        input_seq_size = torch.Tensor([enc_in.shape[1] for _ in range(enc_in.shape[0])]).to(self.device)
-        output_seq_size = torch.Tensor([dec_in.shape[1] for _ in range(dec_in.shape[0])]).to(self.device)
+        input_seq_size = torch.Tensor([enc_in.shape[1] for _ in range(enc_in.shape[0])]).to(device)
+        output_seq_size = torch.Tensor([dec_in.shape[1] for _ in range(dec_in.shape[0])]).to(device)
 
         enc_out, enc_self_attns = self.encoder(enc_in, input_seq_size, return_attn)
         predict, dec_self_attns, dec_enc_attns = self.decoder(dec_in, output_seq_size, enc_in, enc_out, return_attn)
@@ -508,8 +509,8 @@ class TSModel(nn.Module):
 
         return pred_each, enc_self_attns, dec_self_attns, dec_enc_attns
 
-    def predict_mtl(self, features):
-        ret = self.forward(features)
+    def predict_mtl(self, features, device=None):
+        ret = self.forward(features, device=device)
         return ret[0]
 
     def forward_with_loss(self, features, labels_mtl, return_attn=False):
@@ -531,7 +532,7 @@ class TSModel(nn.Module):
             pred_each[key] = self.predictor[key](predict)
 
             if self.weight_scheme == 'mw':
-                adj_weight = labels_mtl['size_factor'][:, :, 0] * 2.
+                adj_weight = labels_mtl['size_rnk'][:, :, 0] * 2.  # size_rnk: 0~1사이 랭크
             else:
                 adj_weight = 1.
 

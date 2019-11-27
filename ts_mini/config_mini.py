@@ -77,7 +77,7 @@ class Config:
             # label_keys = ['logy_{}'.format(n) for n in [20, 60, 120]]
             # label_keys += ['stdnew_{}'.format(n) for n in [20, 60, 120]]
             # label_keys += ['pos_{}'.format(n) for n in [20, 60]]
-        key_list = self._parse_features_structure()
+        key_list = self._parse_features_structure() + ['nmsize']
         return key_list
 
     def _parse_features_structure(self):
