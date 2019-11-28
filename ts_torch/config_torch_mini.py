@@ -82,7 +82,7 @@ class Config:
             # label_keys = ['logy_{}'.format(n) for n in [20, 60, 120]]
             # label_keys += ['stdnew_{}'.format(n) for n in [20, 60, 120]]
             # label_keys += ['pos_{}'.format(n) for n in [20, 60]]
-        key_list = self._parse_features_structure()
+        key_list = self._parse_features_structure() + ['nmsize']
         return key_list
 
     def _parse_features_structure(self):
@@ -156,15 +156,7 @@ class Config:
                  'classification':
                      {'pos': [20, 60, 120, 250]}}
 
-        self.embedding_size = 0
-        for cls in self.features_structure.keys():
-            for key in self.features_structure[cls].keys():
-                self.embedding_size += len(self.features_structure[cls][key])
-
-        if self.weight_scheme == 'mw':
-            self.embedding_size += 0
-
-        # self.model_hidden_size = self.embedding_size
+        self.embedding_size = len(self._parse_features_structure()) + 1 # 1: nm_size
 
     def set_kdays(self, k_days, pred='pos'):
         self.k_days = k_days

@@ -568,7 +568,8 @@ class Performance:
                              , ylog=False
                              , ls_method='ls_5_20'
                              , plot_all_features=True
-                             , rate_=1.):
+                             , rate_=1.
+                             , debug=False):
         c = self.configs
         # file_nm = 'test.png'; ylog = False; t_stepsize = 4; ls_method = 'ls_5_20'; plot_all_features = True
         m_args = ls_method.split('_')
@@ -628,7 +629,8 @@ class Performance:
             # i=0; ein_t, din_t, add_info = ein_list[i], din_list[i], add_infos[i]
 
             t = i + 1
-            print('{} / {}'.format(add_info['factor_d'], add_info['model_d']))
+            if debug:
+                print('{} / {}'.format(add_info['factor_d'], add_info['model_d']))
 
             mktcap = np.array(add_info['mktcap'], dtype=np.float32).reshape([-1, 1, 1])
 

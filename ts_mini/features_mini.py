@@ -102,6 +102,7 @@ class FeatureNew:
         calc_length, m_days, k_days, delay_days = self.calc_length, self.m_days, self.k_days, self.delay_days
         k_days_adj = k_days + delay_days
         result = arr_to_normal(arr[calc_length:])
+        result[np.isnan(result)] = 0   # TODO: 임시로 nan값 0처리
         feature, label = self.split_data_label(result)
 
         if label is None:

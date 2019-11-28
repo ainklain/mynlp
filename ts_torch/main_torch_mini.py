@@ -1,10 +1,6 @@
 
-import numpy as np
-import os
-import pandas as pd
-import pickle
-import time
 
+import os
 
 ### TORCH TEST
 import torch
@@ -28,7 +24,7 @@ configs.pred_feature = pred
 configs.weight_scheme = w_scheme
 configs.balancing_method = balancing_method
 # configs.learning_rate = 1e-4
-configs.f_name = 'kr_{}_{}_{}_{}_h{}_mfast+labelnoise_v2_03'.format(k_days, univ_type, balancing_method, pred, head)
+configs.f_name = 'kr_{}_{}_{}_{}_h{}_mfast+labelnoise_v2_05'.format(k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100
 configs.eval_steps = 100
 configs.save_steps = 100
@@ -38,31 +34,32 @@ config_str = configs.export()
 
 
 features_cls = FeatureNew(configs)
+ds = DataScheduler(configs, features_cls)
+ds.set_idx(8000)
+
+os.makedirs(os.path.join(ds.data_out_path), exist_ok=True)
+with open(os.path.join(ds.data_out_path, 'config.txt'), 'w') as f:
+    f.write(config_str)
 
 
 device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 model = TSModel(configs, features_cls, weight_scheme=configs.weight_scheme, device=device)
 model.to(device)
 
-ds = DataScheduler(configs, features_cls)
-
-ds.set_idx(7500)
-# ds.test_end_idx += 250
-ii = 0
-jj = 0
-
-trainset = ds._dataset('train')
-evalset = ds._dataset('eval')
-
 performer = Performance(configs)
-
 optimizer = optim.Adam(model.parameters(), lr=configs.learning_rate)
 
-ds.train(model, optimizer, 10, performer)
+while True:
+    ds.train(model, optimizer, performer, num_epochs=50, early_stopping_count=configs.early_stopping_count)
+    ds.next()
+    if ds.done:
+        break
 
-os.makedirs(os.path.join(ds.data_out_path, configs.f_name), exist_ok=True)
-with open(os.path.join(ds.data_out_path, configs.f_name, 'config.txt'), 'w') as f:
-    f.write(config_str)
+    if ds.base_idx >= 10000:
+        print('something wrong')
+        break
+
+
 
 if os.path.exists(os.path.join(ds.data_out_path, configs.f_name, configs.f_name + '.pkl')):
     model.load_model(os.path.join(ds.data_out_path, configs.f_name, configs.f_name))

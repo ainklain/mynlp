@@ -51,6 +51,8 @@ class DataScheduler:
 
         self._make_dir(configs)
 
+        self.dataloader = {'train': False, 'eval': False}
+
     def _make_dir(self, configs):
         # data path for fetching data
         self.data_path = os.path.join(os.getcwd(), 'data', '{}_{}_{}'.format(configs.univ_type, configs.sampling_days, configs.m_days))
@@ -338,41 +340,92 @@ class DataScheduler:
         idx_bal = np.concatenate([idx_pos, idx_neg])
         return idx_bal
 
-    def train(self, model, optimizer, num_epochs, performer):
-        model.train()
+    def _dataloader(self, mode):
         c = self.configs
+        if mode == 'train':
+            batch_size = c.train_batch_size
+        elif mode == 'eval':
+            batch_size = c.eval_batch_size
+        else:
+            batch_size = 1
 
-        # make directories for graph results (both train and test one)
-        # train_out_path = os.path.join(self.data_out_path, model_name, '{}'.format(self.base_idx))
-        # os.makedirs(train_out_path, exist_ok=True)
+        _dataset = self._dataset(mode)
 
-        _train_dataset = self._dataset('train')
-        _eval_dataset = self._dataset('eval')
+        if _dataset is False:
+            print('[train] no {} data'.format(mode))
+            return False
 
-        if _train_dataset is False or _eval_dataset is False:
-            print('[train] no train/eval data')
-            # return False
+        enc_in, dec_in, dec_out, features_list, add_infos, _, _ = _dataset
+        # TODO: 임시 처리 (nmsize nan값 0 처리)
+        enc_in[np.isnan(enc_in)] = 0
+        dec_in[np.isnan(dec_in)] = 0
+        dec_out[np.isnan(dec_out)] = 0
+        assert np.nanmax(np.abs(enc_in[:, -1, :] - dec_in[:, 0, :])) == 0
+        dataloader = data_loader(enc_in, dec_in, dec_out, add_infos, batch_size=batch_size)
 
-        train_enc_in, train_dec_in, train_dec_out, features_list, train_add_infos, _, _ = _train_dataset
-        eval_enc_in, eval_dec_in, eval_dec_out, _, eval_add_infos, _, _ = _eval_dataset
+        print('dataloader: mode-{} batchsize-{}'.format(mode, batch_size))
+        return dataloader, features_list
 
-        assert np.max(np.abs(train_enc_in[:, -1, :] - train_dec_in[:, 0, :])) == 0
-        assert np.max(np.abs(eval_enc_in[:, -1, :] - eval_dec_in[:, 0, :])) == 0
-
-        train_dataloader = data_loader(train_enc_in, train_dec_in, train_dec_out, train_add_infos, batch_size=c.train_batch_size)
-        eval_dataloader = data_loader(eval_enc_in, eval_dec_in, eval_dec_out, eval_add_infos, batch_size=c.eval_batch_size)
-
+    def train(self, model, optimizer, performer, num_epochs, early_stopping_count=2):
+        min_eval_loss = 99999
+        stop_count = 0
+        print('train start...')
         for ep in range(num_epochs):
-            self.test_plot(performer, model, ep)
-            for i, (features, labels, add_infos) in enumerate(train_dataloader):
-                # features, labels, add_infos = next(iter(train_dataloader))
+            if ep % 2 == 0:
+                print('[Ep {}] plot'.format(ep))
+                self.test_plot(performer, model, ep)
 
+            print('[Ep {}] model evaluation ...'.format(ep))
+            eval_loss = self.step_epoch(ep, model, optimizer, is_train=False)
+            if eval_loss is False:
+                return False
+
+            if eval_loss > min_eval_loss:
+                stop_count += 1
+            else:
+                min_eval_loss = eval_loss
+                stop_count = 0
+
+            print('[Ep {}] count: {}/{}'.format(ep, stop_count, early_stopping_count))
+            if stop_count >= early_stopping_count:
+                print('[Ep {}] Early Stopped'.format(ep))
+                self.test_plot(performer, model, ep)
+                break
+
+            print('[Ep {}] model train ...'.format(ep))
+            train_loss = self.step_epoch(ep, model, optimizer, is_train=True)
+            if train_loss is False:
+                return False
+
+    def step_epoch(self, ep, model, optimizer, is_train=True):
+        if is_train:
+            mode = 'train'
+            model.train()
+        else:
+            mode = 'eval'
+            model.eval()
+
+        if ep == 0:
+            self.dataloader[mode] = self._dataloader(mode)
+            if self.dataloader[mode] is False:
+                return False
+
+        dataloader, features_list = self.dataloader[mode]
+        if ep == 0:
+            print('f_list: {}'.format(features_list))
+
+        total_loss = 0
+        i = 0
+        for features, labels, add_infos in dataloader:
+            #  features, labels, add_infos = next(iter(dataloader))
+            with torch.set_grad_enabled(is_train):
                 # 미래데이터 안 땡겨쓰게
                 new_out = torch.zeros_like(features['output'])
                 new_out[:] = features['output']
 
                 # add random noise for features
                 features_with_noise = {'input': None, 'output': new_out}
+
                 features_with_noise['input'] = Noise.random_noise(features['input'], p=0.5)
                 features_with_noise['input'] = Noise.random_mask(features_with_noise['input'], p=0.9, mask_p=0.2)
 
@@ -383,14 +436,33 @@ class DataScheduler:
                 labels_mtl = self.labels_torch(features_list, labels_with_noise, add_infos)
                 to_device(model.device, [features_with_noise, labels_mtl])
                 # pred, _, _, _ = model.forward(features_with_noise, labels_mtl)
-                pred, loss = model.forward_with_loss(features_with_noise, labels_mtl)
+                pred, loss_each = model.forward_with_loss(features_with_noise, labels_mtl)
 
-                if i % 20 == 0:
-                    print('Step {}: loss = {}'.format(i, loss))
+                losses = 0
+                for key in loss_each.keys():
+                    losses += loss_each[key].mean()
 
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                if is_train:
+                    optimizer.zero_grad()
+                    losses.backward()
+                    optimizer.step()
+
+                total_loss += losses
+                i += 1
+
+        total_loss = total_loss.detach().cpu().numpy() / i
+        if is_train:
+            print_str = "[Ep {}][{}] ".format(ep, mode)
+            size_str = "[Ep {}][{}][size] ".format(ep, mode)
+            for key in loss_each.keys():
+                print_str += "{}- {:.4f} / ".format(key, loss_each[key].mean().detach().cpu().numpy())
+                size_str += "{} - {} / ".format(key, loss_each[key].shape)
+            print(print_str)
+            print(size_str)
+            return total_loss
+        else:
+            print('[Ep {}][{}] total - {:.4f}'.format(ep, mode, total_loss))
+            return total_loss
 
     def test_plot(self, performer, model, ep):
         # self=ds; ep=0; ylog = False
@@ -1087,8 +1159,8 @@ class Noise:
 
         # randomly masked input data
         if np.random.random() <= p:
-            mask = cls._get_mask(arr.shape, mask_p)
-            new_arr[mask] = 0
+            mask = cls._get_mask(new_arr.shape, mask_p)
+            new_arr[[mask]] = 0
 
         return new_arr
 
@@ -1102,7 +1174,7 @@ class Noise:
 
         if np.random.random() <= p:
             mask = cls._get_mask(arr.shape, flip_p)
-            new_arr[mask] = arr[mask] * -1
+            new_arr[[mask]] = arr[[mask]] * -1
 
         return new_arr
 

@@ -525,35 +525,33 @@ class TSModel(nn.Module):
         enc_out, enc_self_attns = self.encoder(enc_in, input_seq_size, return_attn)
         predict, dec_self_attns, dec_enc_attns = self.decoder(dec_in, output_seq_size, enc_in, enc_out, return_attn)
 
+        if self.weight_scheme == 'mw':
+            adj_weight = labels_mtl['size_rnk'] * 2.  # size_rnk: 0~1사이 랭크
+        else:
+            adj_weight = 1.
+
+        adj_importance = labels_mtl['importance_wgt']
+
         pred_each = dict()
         loss_each = dict()
-        loss = None
         for key in self.predictor.keys():
             pred_each[key] = self.predictor[key](predict)
-
-            if self.weight_scheme == 'mw':
-                adj_weight = labels_mtl['size_rnk'][:, :, 0] * 2.  # size_rnk: 0~1사이 랭크
-            else:
-                adj_weight = 1.
-
-            adj_importance = labels_mtl['importance_wgt'][:, :, 0]
 
             if key[:3] == 'pos':
                 criterion = torch.nn.CrossEntropyLoss(reduction='none')
                 pred_each[key] = pred_each[key].contiguous().transpose(1, -1)
-                loss_each[key] = criterion(pred_each[key], labels_mtl[key]) \
-                                 * torch.abs(labels_mtl['logy'][:, :, self.predictor_helper[key]]) \
-                                 * adj_weight * adj_importance
+                loss_each[key] = criterion(pred_each[key], labels_mtl[key])
+                adj_logy = torch.abs(labels_mtl['logy'][:, :, self.predictor_helper[key]])
+                assert loss_each[key].shape == adj_logy.shape
+                loss_each[key] = loss_each[key] * adj_logy
             else:
                 criterion = torch.nn.MSELoss(reduction='none')
-                loss_each[key] = criterion(pred_each[key], labels_mtl[key]) * adj_weight * adj_importance
+                loss_each[key] = criterion(pred_each[key], labels_mtl[key]).mean(axis=-1)
 
-            if loss is None:
-                loss = loss_each[key].mean()
-            else:
-                loss += loss_each[key].mean()
+            loss_shape = loss_each[key].shape
+            loss_each[key] = loss_each[key] * adj_weight.reshape(loss_shape) * adj_importance.reshape(loss_shape)
 
-        return pred_each, loss #, enc_self_attns, dec_self_attns, dec_enc_attns,
+        return pred_each, loss_each #, enc_self_attns, dec_self_attns, dec_enc_attns,
 
     def proj_grad(self):
         if self.weighted_model:
@@ -567,66 +565,4 @@ class TSModel(nn.Module):
 
 
 
-
-
-
-class Transformer(nn.Module):
-    def __init__(self, opt):
-        super(Transformer, self).__init__()
-        self.encoder = Encoder(opt.n_layers, opt.d_k, opt.d_v, opt.d_model, opt.d_ff, opt.n_heads,
-                               opt.max_src_seq_len, opt.src_vocab_size, opt.dropout, opt.weighted_model)
-        self.decoder = Decoder(opt.n_layers, opt.d_k, opt.d_v, opt.d_model, opt.d_ff, opt.n_heads,
-                               opt.max_tgt_seq_len, opt.tgt_vocab_size, opt.dropout, opt.weighted_model)
-        self.tgt_proj = Linear(opt.d_model, opt.tgt_vocab_size, bias=False)
-        self.weighted_model = opt.weighted_model
-
-        if opt.share_proj_weight:
-            print('Sharing target embedding and projection..')
-            self.tgt_proj.weight = self.decoder.tgt_emb.weight
-
-        if opt.share_embs_weight:
-            print('Sharing source and target embedding..')
-            assert opt.src_vocab_size == opt.tgt_vocab_size, \
-                'To share word embeddings, the vocabulary size of src/tgt should be the same'
-            self.encoder.src_emb.weight = self.decoder.tgt_emb.weight
-
-    def trainable_params(self):
-        # Avoid updating the position encoding
-        params = filter(lambda p: p[1].requires_grad, self.named_parameters())
-        # Add a separate parameter group for the weighted_model
-        param_groups = []
-        base_params = {'params': [], 'type': 'base'}
-        weighted_params = {'params': [], 'type': 'weighted'}
-        for name, param in params:
-            if 'w_kp' in name or 'w_a' in name:
-                weighted_params['params'].append(param)
-            else:
-                base_params['params'].append(param)
-        param_groups.append(base_params)
-        param_groups.append(weighted_params)
-
-        return param_groups
-
-    def encode(self, enc_inputs, enc_inputs_len, return_attn=False):
-        return self.encoder(enc_inputs, enc_inputs_len, return_attn)
-
-    def decode(self, dec_inputs, dec_inputs_len, enc_inputs, enc_outputs, return_attn=False):
-        return self.decoder(dec_inputs, dec_inputs_len, enc_inputs, enc_outputs, return_attn)
-
-    def forward(self, enc_inputs, enc_inputs_len, dec_inputs, dec_inputs_len, return_attn=False):
-        enc_outputs, enc_self_attns = self.encoder(enc_inputs, enc_inputs_len, return_attn)
-        dec_outputs, dec_self_attns, dec_enc_attns = \
-            self.decoder(dec_inputs, dec_inputs_len, enc_inputs, enc_outputs, return_attn)
-        dec_logits = self.tgt_proj(dec_outputs)
-
-        return dec_logits.view(-1, dec_logits.size(-1)), \
-               enc_self_attns, dec_self_attns, dec_enc_attns
-
-    def proj_grad(self):
-        if self.weighted_model:
-            for name, param in self.named_parameters():
-                if 'w_kp' in name or 'w_a' in name:
-                    param.data = proj_prob_simplex(param.data)
-        else:
-            pass
 
