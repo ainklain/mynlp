@@ -19,7 +19,7 @@ class Config:
         self.train_steps = 200000
         self.eval_steps = 50
         self.save_steps = 50
-        self.early_stopping_count = 10
+        self.early_stopping_count = 5
         self.dropout = 0.5
         self.learning_rate = 1e-4
 
