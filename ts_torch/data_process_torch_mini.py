@@ -397,7 +397,7 @@ class DataScheduler:
             if train_loss is False:
                 return False
 
-    def step_epoch(self, ep, model, optimizer, is_train=True):
+    def step_epoch(self, ep, model, optimizer, is_train=True, size_attn=False):
         if is_train:
             mode = 'train'
             model.train()
@@ -423,15 +423,21 @@ class DataScheduler:
                 new_out = torch.zeros_like(features['output'])
                 new_out[:] = features['output']
 
-                # add random noise for features
+                if size_attn:
+                    new_out[:] += add_infos['size_rnk'].reshape(-1, 1, 1)
+
                 features_with_noise = {'input': None, 'output': new_out}
+                if is_train:
+                    # add random noise for features
+                    features_with_noise['input'] = Noise.random_noise(features['input'], p=0.5)
+                    features_with_noise['input'] = Noise.random_mask(features_with_noise['input'], p=0.9, mask_p=0.2)
 
-                features_with_noise['input'] = Noise.random_noise(features['input'], p=0.5)
-                features_with_noise['input'] = Noise.random_mask(features_with_noise['input'], p=0.9, mask_p=0.2)
-
-                # add random noise for labels
-                labels_with_noise = Noise.random_noise(labels, p=0.2)
-                labels_with_noise = Noise.random_flip(labels_with_noise, p=0.9, flip_p=0.2)
+                    # add random noise for labels
+                    labels_with_noise = Noise.random_noise(labels, p=0.2)
+                    labels_with_noise = Noise.random_flip(labels_with_noise, p=0.9, flip_p=0.2)
+                else:
+                    features_with_noise['input'] = features['input']
+                    labels_with_noise = labels
 
                 labels_mtl = self.labels_torch(features_list, labels_with_noise, add_infos)
                 to_device(model.device, [features_with_noise, labels_mtl])
@@ -489,7 +495,7 @@ class DataScheduler:
             performer.predict_plot_monthly(model, _dataset_list_m
                                            , save_dir=test_out_path + "_mls"
                                            , file_nm='test_{}.png'.format(ep)
-                                           , ylog=True
+                                           , ylog=False
                                            , ls_method='ls_5_20'
                                            , plot_all_features=True
                                            , rate_=self.configs.app_rate)

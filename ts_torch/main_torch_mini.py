@@ -24,13 +24,14 @@ configs.pred_feature = pred
 configs.weight_scheme = w_scheme
 configs.balancing_method = balancing_method
 # configs.learning_rate = 1e-4
-configs.f_name = 'kr_{}_{}_{}_{}_h{}_torch_001'.format(k_days, univ_type, balancing_method, pred, head)
+configs.f_name = 'kr_{}_{}_{}_{}_h{}_torch_003'.format(k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100
 configs.eval_steps = 100
 configs.save_steps = 100
 configs.attention_head_size = head
 configs.early_stopping_count = 5
 configs.learning_rate = 5e-4
+configs.update_comment = 'eval에도 랜덤 적용 제거'
 config_str = configs.export()
 
 
