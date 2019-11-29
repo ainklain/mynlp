@@ -1,3 +1,7 @@
+# https://github.com/kumar-shridhar/PyTorch-BayesianCNN
+# https://github.com/JavierAntoran/Bayesian-Neural-Networks
+# https://github.com/ThirstyScholar/bayes-by-backprop
+
 import math
 import torch
 import torch.nn as nn
