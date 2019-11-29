@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt, cm
 
+from ts_torch import torch_util_mini as tu
 
 def weight_scale(score, method='L_60'):
     method = method.lower()
@@ -51,7 +52,6 @@ class Performance:
         self.label_feature = configs.label_feature
         self.pred_feature = configs.pred_feature
         self.cost_rate = configs.cost_rate
-
 
         self.adj_feature = 'nmlogy'
 
@@ -120,22 +120,13 @@ class Performance:
 
         return new_wgt
 
-    def extract_portfolio(self, model, dataset_t, rate_=1.):
+    def extract_portfolio(self, model, dataloader_set_t, rate_=1.):
         c = self.configs
-        enc_in, dec_in, dec_out, features_list, add_info = dataset_t
+        dataloader, features_list, all_assets_list, start_d, end_d = dataloader_set_t
+        features, add_info = dataloader
 
-        idx_y = features_list.index(self.label_feature)
-        mktcap = np.array(add_info['mktcap'], dtype=np.float32).reshape([-1, 1, 1])
+        mc = np.array(add_info['mktcap'], dtype=np.float32).squeeze()
         assets = np.array(add_info['asset_list'])
-
-        # data format
-        assert np.sum((enc_in[:, -1, idx_y] - dec_in[:, 0, idx_y]).numpy()) == 0
-        dec_in[:, 1:, :] = 0
-
-        features = {'input': enc_in, 'output': dec_in}
-        labels = dec_out.numpy()
-        label_y = labels[:, 0, idx_y]
-        mc = mktcap[:, 0, 0]
 
         result_t = add_info['univ'].set_index('infocode').loc[assets]
         result_t['wgt'] = result_t['wgt'] / np.sum(result_t['wgt'])
@@ -146,9 +137,9 @@ class Performance:
 
         # ############ For Model ############
         # prediction
-        predictions = model.predict_mtl(features, device='cpu')
+        predictions = model.predict_mtl(features)
         for key in predictions.keys():
-            predictions[key] = predictions[key].detach().numpy()
+            predictions[key] = tu.np_ify(predictions[key])
 
         value_ = dict()
         value_[self.adj_feature] = predictions[self.adj_feature][:, 0, 0]
@@ -168,29 +159,29 @@ class Performance:
 
         # LONG SHORT
         # Equal Weight Mix
-        wgt_ew = self.scale_to_wgt(result_t['wgt'], scale_ls, rate_, mc, w_method='ew')
+        wgt_ls_ew = self.scale_to_wgt(result_t['wgt'], scale_ls, rate_, mc, w_method='ew')
         # Market Weight Mix
-        wgt_mw = self.scale_to_wgt(result_t['wgt'], scale_ls, rate_, mc, w_method='mw')
+        wgt_ls_mw = self.scale_to_wgt(result_t['wgt'], scale_ls, rate_, mc, w_method='mw')
 
         # Equal Weight Mix
-        wgt_ew = self.scale_to_wgt(result_t['wgt'], scale_l, rate_, mc, w_method='ew')
+        wgt_l_ew = self.scale_to_wgt(result_t['wgt'], scale_l, rate_, mc, w_method='ew')
         # Market Weight Mix
-        wgt_mw = self.scale_to_wgt(result_t['wgt'], scale_l, rate_, mc, w_method='mw')
+        wgt_l_mw = self.scale_to_wgt(result_t['wgt'], scale_l, rate_, mc, w_method='mw')
 
-        result_t['fm_wgt_ls_ew'] = wgt_ew
-        result_t['fm_wgt_ls_mw'] = wgt_mw
+        result_t['fm_wgt_ls_ew'] = wgt_ls_ew
+        result_t['fm_wgt_ls_mw'] = wgt_ls_mw
 
-        result_t['fm_wgt_l_ew'] = wgt_ew
-        result_t['fm_wgt_l_mw'] = wgt_mw
+        result_t['fm_wgt_l_ew'] = wgt_l_ew
+        result_t['fm_wgt_l_mw'] = wgt_l_mw
 
         return result_t
 
-    def predict_plot_mtl_cross_section_test(self, model, dataset_list, save_dir
+    def predict_plot_mtl_cross_section_test(self, model, dataloader_set, save_dir
                                             , file_nm='test.png'
                                             , ylog=False
                                             , ls_method='ls_5_20'
                                             , plot_all_features=True):
-        # dataset_list= _dataset_list; save_dir = test_out_path; file_nm = 'test_{}.png'.format(0); ylog = False; ls_method = 'ls_5_20'; plot_all_features = True
+        # save_dir = test_out_path; file_nm = 'test_{}.png'.format(0); ylog = False; ls_method = 'ls_5_20'; plot_all_features = True
 
         c = self.configs
 
@@ -204,20 +195,11 @@ class Performance:
             def_variables = self.define_variables
             kw = {}
 
-        if dataset_list is False:
-            return False
-
-        ie_list, od_list, td_list, features_list, add_infos, start_d, end_d = dataset_list
-        assets_list = [add_info['asset_list'] for add_info in add_infos]
-
-        all_assets_list = list()
-        for assets in assets_list:
-            all_assets_list = sorted(list(set(all_assets_list + assets)))
-
-        idx_y = features_list.index(self.label_feature)
+        # dataloader: (features: dict of torch.Tensor, add_infos: dict of np.array)
+        dataloader, features_list, all_assets_list, start_d, end_d = dataloader_set
 
         t_stepsize = self.configs.k_days // self.configs.sampling_days
-        t_steps = int(np.ceil(len(ie_list) / t_stepsize)) + 1
+        t_steps = int(np.ceil(len(dataloader[0]) / t_stepsize)) + 1
 
         # define variables to save values
         if plot_all_features:
@@ -238,25 +220,16 @@ class Performance:
         model_ew = ew_dict['model']
         model_mw = mw_dict['model']
 
-        for i, (ein_t, din_t, dout_t, add_info) in enumerate(zip(ie_list, od_list, td_list, add_infos)):
+        for i, (features, add_info) in enumerate(zip(*dataloader)):
             # i=0; ein_t, din_t, dout_t, add_info = ie_list[i], od_list[i], td_list[i], add_infos[i]
             if i % t_stepsize != 0:
                 continue
             t = i // t_stepsize + 1
 
-            mktcap = np.array(add_info['mktcap'], dtype=np.float32).reshape([-1, 1, 1])
+            mc = np.array(add_info['mktcap'], dtype=np.float32).squeeze()
+            label_y = np.array(add_info['next_y'])
+
             assets = np.array(add_info['asset_list'], dtype=np.float32)
-
-            # data format
-            assert np.sum((ein_t[:, -1, idx_y] - din_t[:, 0, idx_y]).numpy()) == 0
-            din_t[:, 1:, :] = 0
-
-            features = {'input': ein_t, 'output': din_t}
-            labels = dout_t.numpy()
-            label_y = labels[:, 0, idx_y]
-            mc = mktcap[:, 0, 0]
-
-            # assets = np.array(assets)
 
             # ############ For BenchMark ############
 
@@ -274,9 +247,9 @@ class Performance:
 
             # ############ For Model ############
             # prediction
-            predictions = model.predict_mtl(features, device='cpu')
+            predictions = model.predict_mtl(features)
             for key in predictions.keys():
-                predictions[key] = predictions[key].detach().numpy()
+                predictions[key] = tu.np_ify(predictions[key])
             value_ = dict()
 
             value_[self.adj_feature] = predictions[self.adj_feature][:, 0, 0]
@@ -563,14 +536,15 @@ class Performance:
                 # print("figure saved. (dir: {})".format(save_file_name))
                 plt.close(fig)
 
-    def predict_plot_monthly(self, model, dataset_list, save_dir
+    def predict_plot_monthly(self, model, dataloader_set, save_dir
                              , file_nm='test.png'
                              , ylog=False
                              , ls_method='ls_5_20'
                              , plot_all_features=True
-                             , rate_=1.
                              , debug=False):
+
         c = self.configs
+        rate_ = c.app_rate
         # file_nm = 'test.png'; ylog = False; t_stepsize = 4; ls_method = 'ls_5_20'; plot_all_features = True
         m_args = ls_method.split('_')
         if m_args[0] == 'ls':
@@ -582,20 +556,12 @@ class Performance:
             def_variables = self.define_variables
             kw = {}
 
-        if dataset_list is False:
-            return False
+        # dataloader: (features: dict of Torch.Tensor, add_infos: dict of np.array)
+        dataloader, features_list, all_assets_list, start_d, end_d = dataloader_set
 
         results = list()
 
-        ein_list, din_list, _, features_list, add_infos, start_d, end_d = dataset_list
-
-        all_assets_list = list()
-        for add_info in add_infos:
-            all_assets_list = sorted(list(set(all_assets_list + add_info['asset_list'])))
-
-        idx_y = features_list.index(self.label_feature)
-
-        t_steps = len(ein_list) + 1
+        t_steps = len(dataloader[0]) + 1
 
         # define variables to save values
         if plot_all_features:
@@ -624,23 +590,13 @@ class Performance:
         fm_ew = ew_dict['model_w_factor']
         fm_mw = mw_dict['model_w_factor']
 
-        for i, (ein_t, din_t, add_info) \
-                in enumerate(zip(ein_list, din_list, add_infos)):
-            # i=0; ein_t, din_t, add_info = ein_list[i], din_list[i], add_infos[i]
-
+        for i, (features, add_info) in enumerate(zip(*dataloader)):
             t = i + 1
             if debug:
                 print('{} / {}'.format(add_info['factor_d'], add_info['model_d']))
 
-            mktcap = np.array(add_info['mktcap'], dtype=np.float32).reshape([-1, 1, 1])
-
-            # data format
-            assert np.sum((ein_t[:, -1, idx_y] - din_t[:, 0, idx_y]).numpy()) == 0
-            din_t[:, 1:, :] = 0
-
-            features = {'input': ein_t, 'output': din_t}
+            mc = np.array(add_info['mktcap'], dtype=np.float32).squeeze()
             label_y = np.array(add_info['next_y'])
-            mc = mktcap[:, 0, 0]
 
             assets = np.array(add_info['asset_list'])
 
@@ -671,9 +627,9 @@ class Performance:
 
             # ############ For Model ############
             # prediction
-            predictions = model.predict_mtl(features, device='cpu')
+            predictions = model.predict_mtl(features)
             for key in predictions.keys():
-                predictions[key] = predictions[key].detach().numpy()
+                predictions[key] = tu.np_ify(predictions[key])
 
             value_ = dict()
 

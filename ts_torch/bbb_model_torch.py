@@ -11,10 +11,6 @@ from torch import nn
 from torch.nn import functional as F, init
 from torch.autograd import Variable
 
-
-# from tensorflow.keras import Model
-# from tensorflow.keras.layers import Dense, Dropout, Embedding
-
 # ####################### Module ##########################
 class Constant:
     def __init__(self):
@@ -461,7 +457,7 @@ class TSModel(nn.Module):
 
         self.features_cls = features_cls
 
-        self.optim_state_dict = self.state_dict()
+        self.optim_state_dict = None
         self.dropout_train = configs.dropout
 
     def trainable_params(self):

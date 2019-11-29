@@ -4,6 +4,7 @@ import pickle
 import time
 import torch
 from torch.utils.data import Dataset, DataLoader
+from ts_torch import torch_util_mini as tu
 import numpy as np
 import os
 
@@ -240,11 +241,11 @@ class DataScheduler:
 
             balancing_list = ['mktcap', 'size_rnk', 'importance_wgt']
             for nm_ in balancing_list:
-                add_info[nm_] = torch.from_numpy(np.array(add_info[nm_], dtype=np.float32).squeeze())
+                add_info[nm_] = np.array(add_info[nm_], dtype=np.float32).squeeze()
 
-            enc_in.append(torch.from_numpy(tmp_ein))
-            dec_in.append(torch.from_numpy(tmp_din))
-            dec_out.append(torch.from_numpy(tmp_dout))
+            enc_in.append(tmp_ein)
+            dec_in.append(tmp_din)
+            dec_out.append(tmp_dout)
             additional_infos.append(add_info)
 
         if len(enc_in) == 0:
@@ -307,16 +308,11 @@ class DataScheduler:
                     val_ = np.concatenate([np.squeeze(add_info[nm_]) for add_info in add_infos_list], axis=0)
                     add_infos[nm_] = val_[:]
         else:
-            # test의 경우 전부 torch로 변환
-            enc_in = [torch.from_numpy(ei_t) for ei_t in enc_in]
-            dec_in = [torch.from_numpy(di_t) for di_t in dec_in]
-            dec_out = [torch.from_numpy(do_t) for do_t in dec_out]
-            
             add_infos = []
             for add_info in add_infos_list:
                 add_info_temp = add_info.copy()
                 for nm_ in balancing_list:
-                    add_info_temp[nm_] = torch.from_numpy(np.array(add_info[nm_], dtype=np.float32).squeeze())
+                    add_info_temp[nm_] = np.array(add_info[nm_], dtype=np.float32).squeeze()
                 add_infos.append(add_info_temp)
 
         start_date = self.date_[start_idx]
@@ -340,31 +336,70 @@ class DataScheduler:
         idx_bal = np.concatenate([idx_pos, idx_neg])
         return idx_bal
 
-    def _dataloader(self, mode):
+    def _dataloader(self, mode, is_monthly=False):
+        # self = ds; mode = 'test'; is_monthly=False
         c = self.configs
-        if mode == 'train':
-            batch_size = c.train_batch_size
-        elif mode == 'eval':
-            batch_size = c.eval_batch_size
-        else:
-            batch_size = 1
+        batch_size = dict(train=c.train_batch_size, eval=c.eval_batch_size, test=1)
 
-        _dataset = self._dataset(mode)
+        if is_monthly:
+            assert mode in ['test', 'test_insample', 'predict']
+            _dataset = self._dataset_monthly(mode)
+        else:
+            _dataset = self._dataset(mode)
 
         if _dataset is False:
             print('[train] no {} data'.format(mode))
             return False
 
-        enc_in, dec_in, dec_out, features_list, add_infos, _, _ = _dataset
-        # TODO: 임시 처리 (nmsize nan값 0 처리)
-        enc_in[np.isnan(enc_in)] = 0
-        dec_in[np.isnan(dec_in)] = 0
-        dec_out[np.isnan(dec_out)] = 0
-        assert np.nanmax(np.abs(enc_in[:, -1, :] - dec_in[:, 0, :])) == 0
-        dataloader = data_loader(enc_in, dec_in, dec_out, add_infos, batch_size=batch_size)
+        enc_in, dec_in, dec_out, features_list, add_infos, start_d, end_d = _dataset
 
-        print('dataloader: mode-{} batchsize-{}'.format(mode, batch_size))
-        return dataloader, features_list
+        if mode in ['train', 'eval']:
+            # TODO: 임시 처리 (nmsize nan값 0 처리)
+            enc_in[np.isnan(enc_in)] = 0
+            dec_in[np.isnan(dec_in)] = 0
+            dec_out[np.isnan(dec_out)] = 0
+            assert np.nanmax(np.abs(enc_in[:, -1, :] - dec_in[:, 0, :])) == 0
+            # 미래데이터 안 땡겨쓰게
+            new_dec_in = np.zeros_like(dec_in)
+            new_dec_in[:, 0, :] = dec_in[:, 0, :]
+
+            if c.size_encoding:
+                new_dec_in[:] += add_infos['size_rnk'].reshape(-1, 1, 1)
+
+            dataloader = data_loader(enc_in, new_dec_in, dec_out, add_infos, batch_size=batch_size[mode])
+            print('dataloader: mode-{} batchsize-{}'.format(mode, batch_size))
+            return dataloader, features_list
+
+        elif mode in ['test', 'test_monthly', 'predict']:
+            idx_y = features_list.index(c.label_feature)
+            all_assets_list = list()
+            features = list()
+            for ein_t, din_t, dout_t, add_info in zip(enc_in, dec_in, dec_out, add_infos):
+                # ein_t, din_t, dout_t, add_info = next(iter(zip(enc_in, dec_in, dec_out, add_infos)))
+                all_assets_list = sorted(list(set(all_assets_list + add_info['asset_list'])))
+                # TODO: 임시 처리 (nmsize nan값 0 처리)
+                ein_t[np.isnan(ein_t)] = 0
+                din_t[np.isnan(din_t)] = 0
+                dout_t[np.isnan(dout_t)] = 0
+                # data format
+                assert np.nanmax(np.abs(ein_t[:, -1, :] - din_t[:, 0, :])) == 0
+                # 미래데이터 안 땡겨쓰게
+                new_din_t = np.zeros_like(din_t)
+                new_din_t[:, 0, :] = din_t[:, 0, :]
+
+                # label 값 (t+1수익률)
+                add_info['next_y'] = dout_t[:, 0, idx_y]
+
+                if c.size_encoding:
+                    new_din_t[:] += np.array(add_info['size_rnk']).reshape(-1, 1, 1)
+
+                # torch로 변환
+                features.append({'input': torch.from_numpy(ein_t), 'output': torch.from_numpy(new_din_t)})
+
+            dataloader = [features, add_infos]
+            return dataloader, features_list, all_assets_list, start_d, end_d
+        else:
+            raise NotImplementedError
 
     def train(self, model, optimizer, performer, num_epochs, early_stopping_count=2):
         min_eval_loss = 99999
@@ -373,7 +408,8 @@ class DataScheduler:
         for ep in range(num_epochs):
             if ep % 2 == 0:
                 print('[Ep {}] plot'.format(ep))
-                self.test_plot(performer, model, ep)
+                self.test_plot(performer, model, ep, is_monthly=False)
+                self.test_plot(performer, model, ep, is_monthly=True)
 
             print('[Ep {}] model evaluation ...'.format(ep))
             eval_loss = self.step_epoch(ep, model, optimizer, is_train=False)
@@ -383,13 +419,17 @@ class DataScheduler:
             if eval_loss > min_eval_loss:
                 stop_count += 1
             else:
+                model.save_to_optim()
                 min_eval_loss = eval_loss
                 stop_count = 0
 
             print('[Ep {}] count: {}/{}'.format(ep, stop_count, early_stopping_count))
             if stop_count >= early_stopping_count:
                 print('[Ep {}] Early Stopped'.format(ep))
-                self.test_plot(performer, model, ep)
+                model.load_from_optim()
+                self.test_plot(performer, model, ep, is_monthly=False)
+                self.test_plot(performer, model, ep, is_monthly=True)
+
                 break
 
             print('[Ep {}] model train ...'.format(ep))
@@ -397,7 +437,7 @@ class DataScheduler:
             if train_loss is False:
                 return False
 
-    def step_epoch(self, ep, model, optimizer, is_train=True, size_attn=False):
+    def step_epoch(self, ep, model, optimizer, is_train=True):
         if is_train:
             mode = 'train'
             model.train()
@@ -419,28 +459,19 @@ class DataScheduler:
         for features, labels, add_infos in dataloader:
             #  features, labels, add_infos = next(iter(dataloader))
             with torch.set_grad_enabled(is_train):
-                # 미래데이터 안 땡겨쓰게
-                new_out = torch.zeros_like(features['output'])
-                new_out[:] = features['output']
-
-                if size_attn:
-                    new_out[:] += add_infos['size_rnk'].reshape(-1, 1, 1)
-
-                features_with_noise = {'input': None, 'output': new_out}
+                features_with_noise = {'input': features['input'], 'output': features['output']}
+                labels_with_noise = labels
                 if is_train:
                     # add random noise for features
-                    features_with_noise['input'] = Noise.random_noise(features['input'], p=0.5)
+                    features_with_noise['input'] = Noise.random_noise(features_with_noise['input'], p=0.5)
                     features_with_noise['input'] = Noise.random_mask(features_with_noise['input'], p=0.9, mask_p=0.2)
 
                     # add random noise for labels
                     labels_with_noise = Noise.random_noise(labels, p=0.2)
                     labels_with_noise = Noise.random_flip(labels_with_noise, p=0.9, flip_p=0.2)
-                else:
-                    features_with_noise['input'] = features['input']
-                    labels_with_noise = labels
 
                 labels_mtl = self.labels_torch(features_list, labels_with_noise, add_infos)
-                to_device(model.device, [features_with_noise, labels_mtl])
+                to_device(tu.device, [features_with_noise, labels_mtl])
                 # pred, _, _, _ = model.forward(features_with_noise, labels_mtl)
                 pred, loss_each = model.forward_with_loss(features_with_noise, labels_mtl)
 
@@ -456,12 +487,12 @@ class DataScheduler:
                 total_loss += losses
                 i += 1
 
-        total_loss = total_loss.detach().cpu().numpy() / i
+        total_loss = tu.np_ify(total_loss) / i
         if is_train:
             print_str = "[Ep {}][{}] ".format(ep, mode)
             size_str = "[Ep {}][{}][size] ".format(ep, mode)
             for key in loss_each.keys():
-                print_str += "{}- {:.4f} / ".format(key, loss_each[key].mean().detach().cpu().numpy())
+                print_str += "{}- {:.4f} / ".format(key, tu.np_ify(loss_each[key].mean()))
                 size_str += "{} - {} / ".format(key, loss_each[key].shape)
             print(print_str)
             print(size_str)
@@ -470,37 +501,30 @@ class DataScheduler:
             print('[Ep {}][{}] total - {:.4f}'.format(ep, mode, total_loss))
             return total_loss
 
-    def test_plot(self, performer, model, ep):
-        # self=ds; ep=0; ylog = False
+    def test_plot(self, performer, model, ep, is_monthly):
+        # self=ds; ep=0; is_monthly = False
         model.eval()
-        model.to('cpu')
 
-        _dataset_list = self._dataset('test')
-        _dataset_list_m = self._dataset_monthly('test')
+        if is_monthly:
+            mode = 'test_monthly'
+            performer_func = performer.predict_plot_monthly
 
-        test_out_path = os.path.join(self.data_out_path, '{}/test'.format(self.base_idx))
-        os.makedirs(test_out_path, exist_ok=True)
+        else:
+            mode = 'test'
+            performer_func = performer.predict_plot_mtl_cross_section_test
 
-        if _dataset_list is False:
-            print('[test] no test data')
+        if ep == 0:
+            self.dataloader[mode] = self._dataloader('test', is_monthly=is_monthly)
+
+        if self.dataloader[mode] is False:
             return False
 
-        performer.predict_plot_mtl_cross_section_test(model, _dataset_list
-                                                      , save_dir=test_out_path
-                                                      , file_nm='test_{}.png'.format(ep)
-                                                      , ylog=False
-                                                      , ls_method='ls_5_20'
-                                                      , plot_all_features=True)
-        if _dataset_list_m is not None:
-            performer.predict_plot_monthly(model, _dataset_list_m
-                                           , save_dir=test_out_path + "_mls"
-                                           , file_nm='test_{}.png'.format(ep)
-                                           , ylog=False
-                                           , ls_method='ls_5_20'
-                                           , plot_all_features=True
-                                           , rate_=self.configs.app_rate)
+        dataloader_set = self.dataloader[mode]
+        test_out_path = os.path.join(self.data_out_path, '{}/{}'.format(self.base_idx, mode))
+        os.makedirs(test_out_path, exist_ok=True)
 
-        model.to(model.device)
+        performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}.png'.format(ep)
+                       , ylog=False, ls_method='ls_5_20', plot_all_features=True)
 
     def labels_torch(self, f_list, labels, add_infos):
         c = self.configs
@@ -605,6 +629,26 @@ class DataScheduler:
             # sqlm = SqlManager()
             # sqlm.set_db_name('passive')
             # sqlm.db_insert(df_infos[['start_d', 'base_d', 'infocode', 'score']], table_nm, fast_executemany=True)
+
+    def save(self, ep, model, optimizer):
+        save_path = os.path.join(self.data_out_path, "saved_model.pt")
+        torch.save({
+            'ep': ep,
+            'model_state_dict': model.optim_state_dict,
+            'optimizer_state_dict': optimizer.state_dict(),
+        }, save_path)
+
+    def load(self, model, optimizer):
+        load_path = os.path.join(self.data_out_path, "saved_model.pt")
+        if not os.path.exists(load_path):
+            return False
+
+        print("Model Loaded. ({})".format(load_path))
+        checkpoint = torch.load(load_path)
+        model.optim_state_dict = checkpoint['model_state_dict']
+        model.load_state_dict(model.optim_state_dict)
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        model.eval()
 
     def next(self):
         self.base_idx += self.retrain_days
@@ -1212,12 +1256,12 @@ def data_loader(enc_in, dec_in, dec_out, add_infos_dict, batch_size=1, shuffle=T
 def to_device(device, list_to_device):
     assert isinstance(list_to_device, list)
 
-    for value_ in list_to_device:
+    for i, value_ in enumerate(list_to_device):
         if isinstance(value_, dict):
             for key in value_.keys():
                 value_[key] = value_[key].to(device)
         elif isinstance(value_, torch.Tensor):
-            value_ = value_.to(device)
+            list_to_device[i] = value_.to(device)
         else:
             raise NotImplementedError
 
