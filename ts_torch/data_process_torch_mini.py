@@ -184,6 +184,25 @@ class DataScheduler:
 
         return enc_in, dec_in, dec_out, features_list, add_info
 
+    def dataloader_t(self, recent_month_end):
+        c = self.configs
+        _dataset_t = self._dataset_t(recent_month_end)
+
+        enc_in, dec_in, dec_out, features_list, add_infos = _dataset_t
+
+        enc_in[np.isnan(enc_in)] = 0
+        dec_in[np.isnan(dec_in)] = 0
+
+        new_dec_in = np.zeros_like(enc_in)
+        new_dec_in[:, 0, :] = enc_in[:, 0, :]
+
+        if c.size_encoding:
+            new_dec_in[:] += np.array(add_infos['size_rnk']).reshape(-1, 1, 1)
+
+        features = {'input': torch.from_numpy(enc_in), 'output': torch.from_numpy(new_dec_in)}
+        dataloader = [features, add_infos]
+        return dataloader, features_list, add_infos['asset_list'], None, None
+
     def _dataset_monthly(self, mode='test'):
         assert mode in ['test', 'test_insample', 'predict']
         c = self.configs
@@ -257,6 +276,70 @@ class DataScheduler:
         return enc_in, dec_in, dec_out, features_list, additional_infos, start_date, end_date
 
     def _dataset(self, mode='train'):
+        c = self.configs
+
+        enc_in, dec_in, dec_out = [], [], []
+        add_infos_list = []  # test/predict 인경우 list, train/eval인 경우 dict
+        start_idx, end_idx, data_params, decaying_factor = self.get_data_params(mode)
+        features_list = c.key_list
+
+        idx_balance = c.key_list.index(c.balancing_key)
+
+        balancing_list = ['mktcap', 'size_rnk', 'importance_wgt']
+        n_loop = np.ceil((end_idx - start_idx) / c.sampling_days)
+        for i, d in enumerate(range(start_idx, end_idx, c.sampling_days)):
+            fetch_data = self._fetch_data(d)
+            if fetch_data is None:
+                continue
+
+            tmp_ein, tmp_din, tmp_dout, add_info = fetch_data
+            add_info['importance_wgt'] = np.array([decaying_factor ** (n_loop - i - 1)
+                                                          for _ in range(len(tmp_ein))], dtype=np.float32)
+            if data_params['balance_class'] is True and c.balancing_method == 'each':
+                idx_bal = self.balanced_index(tmp_dout[:, 0, idx_balance])
+                tmp_ein, tmp_din, tmp_dout = tmp_ein[idx_bal], tmp_din[idx_bal], tmp_dout[idx_bal]
+                for nm_ in balancing_list:
+                    add_info[nm_] = add_info[nm_].iloc[idx_bal]
+
+            enc_in.append(tmp_ein)
+            dec_in.append(tmp_din)
+            dec_out.append(tmp_dout)
+            add_infos_list.append(add_info)
+
+        if len(enc_in) == 0:
+            return False
+
+        if mode in ['train', 'eval']:
+            add_infos = dict()
+            enc_in = np.concatenate(enc_in, axis=0)
+            dec_in = np.concatenate(dec_in, axis=0)
+            dec_out = np.concatenate(dec_out, axis=0)
+
+            if data_params['balance_class'] is True and c.balancing_method == 'once':
+                idx_bal = self.balanced_index(dec_out[:, 0, idx_balance])
+                enc_in, dec_in, dec_out = enc_in[idx_bal], dec_in[idx_bal], dec_out[idx_bal]
+
+                for nm_ in balancing_list:
+                    val_ = np.concatenate([np.squeeze(add_info[nm_]) for add_info in add_infos_list], axis=0)
+                    add_infos[nm_] = val_[idx_bal]
+            else:
+                for nm_ in balancing_list:
+                    val_ = np.concatenate([np.squeeze(add_info[nm_]) for add_info in add_infos_list], axis=0)
+                    add_infos[nm_] = val_[:]
+        else:
+            add_infos = []
+            for add_info in add_infos_list:
+                add_info_temp = add_info.copy()
+                for nm_ in balancing_list:
+                    add_info_temp[nm_] = np.array(add_info[nm_], dtype=np.float32).squeeze()
+                add_infos.append(add_info_temp)
+
+        start_date = self.date_[start_idx]
+        end_date = self.date_[end_idx]
+
+        return enc_in, dec_in, dec_out, features_list, add_infos, start_date, end_date
+
+    def _dataset_modified(self, mode='train', use_maml=False):
         c = self.configs
 
         enc_in, dec_in, dec_out = [], [], []
@@ -513,7 +596,7 @@ class DataScheduler:
             mode = 'test'
             performer_func = performer.predict_plot_mtl_cross_section_test
 
-        if ep == 0:
+        if (ep == 0) or (self.dataloader.get(mode) is None):
             self.dataloader[mode] = self._dataloader('test', is_monthly=is_monthly)
 
         if self.dataloader[mode] is False:
@@ -656,6 +739,8 @@ class DataScheduler:
         self.eval_begin_idx += self.retrain_days
         self.test_begin_idx += self.retrain_days
         self.test_end_idx = min(self.test_end_idx + self.retrain_days, self.data_generator.max_length - self.configs.k_days - 1)
+
+        self.dataloader = {'train': False, 'eval': False}
 
     def get_date(self):
         return self.date_[self.base_d]

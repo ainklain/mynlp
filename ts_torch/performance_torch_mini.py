@@ -129,6 +129,7 @@ class Performance:
         assets = np.array(add_info['asset_list'])
 
         result_t = add_info['univ'].set_index('infocode').loc[assets]
+        result_t.loc[np.isnan(result_t['wgt']), 'wgt'] = 0.
         result_t['wgt'] = result_t['wgt'] / np.sum(result_t['wgt'])
 
         # ############ For BM ############

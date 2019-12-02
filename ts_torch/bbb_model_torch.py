@@ -9,6 +9,7 @@ import torch
 
 from torch import nn
 from torch.nn import functional as F, init
+from ts_torch.bayesian_torch import BBBLinearFactorial, BBBConv2d
 from torch.autograd import Variable
 
 # ####################### Module ##########################
@@ -19,15 +20,15 @@ class Constant:
 const = Constant()
 
 
-class Linear(nn.Module):
-    def __init__(self, in_features, out_features, bias=True):
-        super(Linear, self).__init__()
-        self.linear = nn.Linear(in_features, out_features, bias=bias)
-        init.xavier_normal_(self.linear.weight)
-        init.zeros_(self.linear.bias)
-
-    def forward(self, inputs):
-        return self.linear(inputs)
+# class Linear(nn.Module):
+#     def __init__(self, in_features, out_features, bias=True):
+#         super(Linear, self).__init__()
+#         self.linear = nn.Linear(in_features, out_features, bias=bias)
+#         init.xavier_normal_(self.linear.weight)
+#         init.zeros_(self.linear.bias)
+#
+#     def forward(self, inputs):
+#         return self.linear(inputs)
 
 
 class ScaledDotProductAttention(nn.Module):
@@ -108,9 +109,9 @@ class _MultiHeadAttention(nn.Module):
         self.d_model = d_model
         self.n_heads = n_heads
 
-        self.w_q = Linear(d_model, d_k * n_heads)
-        self.w_k = Linear(d_model, d_k * n_heads)
-        self.w_v = Linear(d_model, d_v * n_heads)
+        self.w_q = BBBLinearFactorial(d_model, d_k * n_heads)
+        self.w_k = BBBLinearFactorial(d_model, d_k * n_heads)
+        self.w_v = BBBLinearFactorial(d_model, d_v * n_heads)
 
         self.attention = ScaledDotProductAttention(d_k, dropout)
 

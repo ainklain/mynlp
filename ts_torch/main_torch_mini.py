@@ -25,7 +25,7 @@ configs.pred_feature = pred
 configs.weight_scheme = w_scheme
 configs.balancing_method = balancing_method
 # configs.learning_rate = 1e-4
-configs.f_name = 'kr_{}_{}_{}_{}_h{}_torch_006'.format(k_days, univ_type, balancing_method, pred, head)
+configs.f_name = 'kr_{}_{}_{}_{}_h{}_torch_nov01'.format(k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100
 configs.eval_steps = 100
 configs.save_steps = 100
@@ -39,7 +39,7 @@ config_str = configs.export()
 
 features_cls = FeatureNew(configs)
 ds = DataScheduler(configs, features_cls)
-ds.set_idx(6500)
+ds.set_idx(8250)
 
 os.makedirs(os.path.join(ds.data_out_path), exist_ok=True)
 with open(os.path.join(ds.data_out_path, 'config.txt'), 'w') as f:
@@ -63,6 +63,27 @@ while True:
     if ds.base_idx >= 10000:
         print('something wrong')
         break
+
+
+
+# recent value extraction
+import numpy as np
+recent_month_end = '2019-10-31'
+dataloader_t = ds.dataloader_t(recent_month_end)
+# dataset_t = ds._dataset_t(recent_month_end)
+#
+# enc_in, dec_in, dec_out, features_list, add_infos = dataset_t
+# new_dec_in = np.zeros_like(enc_in)
+# new_dec_in[:, 0, :] = enc_in[:, 0, :]
+# new_dec_in[:] += np.array(add_infos['size_rnk']).reshape(-1, 1, 1)
+#
+# features = {'input': torch.from_numpy(enc_in), 'output': torch.from_numpy(new_dec_in)}
+# dataloader = [features, add_infos]
+# all_assets_list = add_infos['asset_list']
+# dataloader_t = (dataloader, features_list, all_assets_list, _, _)
+x = performer.extract_portfolio(model, dataloader_t, rate_=configs.app_rate)
+x.to_csv('./out/{}/result_10.csv'.format(configs.f_name))
+
 
 
 
