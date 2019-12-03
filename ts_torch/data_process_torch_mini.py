@@ -339,69 +339,72 @@ class DataScheduler:
 
         return enc_in, dec_in, dec_out, features_list, add_infos, start_date, end_date
 
-    def _dataset_modified(self, mode='train', use_maml=False):
+    def _dataset_maml(self, mode='train'):
         c = self.configs
 
-        enc_in, dec_in, dec_out = [], [], []
-        add_infos_list = []  # test/predict 인경우 list, train/eval인 경우 dict
+        spt_list, tgt_list, importance_wgt = [], [], []
         start_idx, end_idx, data_params, decaying_factor = self.get_data_params(mode)
         features_list = c.key_list
 
         idx_balance = c.key_list.index(c.balancing_key)
 
-        balancing_list = ['mktcap', 'size_rnk', 'importance_wgt']
-        n_loop = np.ceil((end_idx - start_idx) / c.sampling_days)
-        for i, d in enumerate(range(start_idx, end_idx, c.sampling_days)):
-            fetch_data = self._fetch_data(d)
-            if fetch_data is None:
+        balancing_list = ['mktcap', 'size_rnk']
+        n_loop = np.ceil((end_idx - start_idx - c.k_days) / c.k_days)
+        for i, d in enumerate(range(start_idx + c.k_days, end_idx, c.k_days)):
+            support_data = self._fetch_data(d - c.k_days)
+            target_data = self._fetch_data(d)
+
+            if support_data is None or target_data is None:
                 continue
+            spt_ein, spt_din, spt_dout, spt_add_info = support_data
+            tgt_ein, tgt_din, tgt_dout, tgt_add_info = target_data
+            importance_wgt.append(decaying_factor ** (n_loop - i - 1))
 
-            tmp_ein, tmp_din, tmp_dout, add_info = fetch_data
-            add_info['importance_wgt'] = np.array([decaying_factor ** (n_loop - i - 1)
-                                                          for _ in range(len(tmp_ein))], dtype=np.float32)
-            if data_params['balance_class'] is True and c.balancing_method == 'each':
-                idx_bal = self.balanced_index(tmp_dout[:, 0, idx_balance])
-                tmp_ein, tmp_din, tmp_dout = tmp_ein[idx_bal], tmp_din[idx_bal], tmp_dout[idx_bal]
+            if c.pred_feature.split('_')[0] in c.features_structure['classification'].keys():
+                spt_idx_bal = self.balanced_index(spt_dout[:, 0, idx_balance])
+                spt_ein, spt_din, spt_dout = spt_ein[spt_idx_bal], spt_din[spt_idx_bal], spt_dout[spt_idx_bal]
+
+                tgt_idx_bal = self.balanced_index(tgt_dout[:, 0, idx_balance])
+                tgt_ein, tgt_din, tgt_dout = tgt_ein[tgt_idx_bal], tgt_din[tgt_idx_bal], tgt_dout[tgt_idx_bal]
                 for nm_ in balancing_list:
-                    add_info[nm_] = add_info[nm_].iloc[idx_bal]
+                    spt_add_info[nm_] = spt_add_info[nm_].iloc[spt_idx_bal]
+                    tgt_add_info[nm_] = tgt_add_info[nm_].iloc[tgt_idx_bal]
 
-            enc_in.append(tmp_ein)
-            dec_in.append(tmp_din)
-            dec_out.append(tmp_dout)
-            add_infos_list.append(add_info)
+            for nm_ in balancing_list:
+                spt_add_info[nm_] = np.array(spt_add_info[nm_], dtype=np.float32).squeeze()
+                tgt_add_info[nm_] = np.array(tgt_add_info[nm_], dtype=np.float32).squeeze()
 
-        if len(enc_in) == 0:
+            # TODO: 임시 처리 (nmsize nan값 0 처리)
+            spt_ein[np.isnan(spt_ein)] = 0
+            spt_din[np.isnan(spt_din)] = 0
+            spt_dout[np.isnan(spt_dout)] = 0
+            tgt_ein[np.isnan(tgt_ein)] = 0
+            tgt_din[np.isnan(tgt_din)] = 0
+            tgt_dout[np.isnan(tgt_dout)] = 0
+
+            assert np.nanmax(np.abs(spt_ein[:, -1, :] - spt_din[:, 0, :])) == 0
+            assert np.nanmax(np.abs(tgt_ein[:, -1, :] - tgt_din[:, 0, :])) == 0
+            # 미래데이터 안 땡겨쓰게
+            spt_new_dec_in = np.zeros_like(spt_din)
+            spt_new_dec_in[:, 0, :] = spt_din[:, 0, :]
+
+            tgt_new_dec_in = np.zeros_like(tgt_din)
+            tgt_new_dec_in[:, 0, :] = tgt_din[:, 0, :]
+
+            if c.size_encoding:
+                spt_new_dec_in[:] += spt_add_info['size_rnk'].reshape(-1, 1, 1)
+                tgt_new_dec_in[:] += tgt_add_info['size_rnk'].reshape(-1, 1, 1)
+
+            spt_list.append([spt_ein, spt_din, spt_dout, spt_add_info])
+            tgt_list.append([tgt_ein, tgt_din, tgt_dout, tgt_add_info])
+
+        if len(spt_list) == 0:
             return False
-
-        if mode in ['train', 'eval']:
-            add_infos = dict()
-            enc_in = np.concatenate(enc_in, axis=0)
-            dec_in = np.concatenate(dec_in, axis=0)
-            dec_out = np.concatenate(dec_out, axis=0)
-
-            if data_params['balance_class'] is True and c.balancing_method == 'once':
-                idx_bal = self.balanced_index(dec_out[:, 0, idx_balance])
-                enc_in, dec_in, dec_out = enc_in[idx_bal], dec_in[idx_bal], dec_out[idx_bal]
-
-                for nm_ in balancing_list:
-                    val_ = np.concatenate([np.squeeze(add_info[nm_]) for add_info in add_infos_list], axis=0)
-                    add_infos[nm_] = val_[idx_bal]
-            else:
-                for nm_ in balancing_list:
-                    val_ = np.concatenate([np.squeeze(add_info[nm_]) for add_info in add_infos_list], axis=0)
-                    add_infos[nm_] = val_[:]
-        else:
-            add_infos = []
-            for add_info in add_infos_list:
-                add_info_temp = add_info.copy()
-                for nm_ in balancing_list:
-                    add_info_temp[nm_] = np.array(add_info[nm_], dtype=np.float32).squeeze()
-                add_infos.append(add_info_temp)
 
         start_date = self.date_[start_idx]
         end_date = self.date_[end_idx]
 
-        return enc_in, dec_in, dec_out, features_list, add_infos, start_date, end_date
+        return spt_list, tgt_list, features_list, importance_wgt, start_date, end_date
 
     def balanced_index(self, balance_arr):
         where_p = (balance_arr > 0)
@@ -483,6 +486,23 @@ class DataScheduler:
             return dataloader, features_list, all_assets_list, start_d, end_d
         else:
             raise NotImplementedError
+
+    def _dataloader_maml(self, mode):
+        # self = ds; mode = 'test'; is_monthly=False
+        c = self.configs
+        batch_size = dict(train=c.train_batch_size, eval=c.eval_batch_size, test=1)
+
+        _dataset = self._dataset_maml(mode)
+
+        if _dataset is False:
+            print('[train] no {} data'.format(mode))
+            return False
+
+        spt_list, tgt_list, features_list, importance_wgt, start_date, end_date = _dataset
+
+        dataloader = data_loader_maml(spt_list, tgt_list, batch_size=batch_size[mode])
+
+        return dataloader, features_list
 
     def train(self, model, optimizer, performer, num_epochs, early_stopping_count=2):
         min_eval_loss = 99999
@@ -1333,9 +1353,42 @@ class AssetDataset(Dataset):
         return features, self.dec_out[idx], out_addinfos
 
 
+class MetaDataset(Dataset):
+    def __init__(self, spt_dataset, tgt_dataset):
+        self.spt_dataset = spt_dataset
+        self.tgt_dataset = tgt_dataset
+
+    def __len__(self):
+        return len(self.tgt_dataset)
+
+    def __getitem__(self, idx):
+        spt_ds = self.spt_dataset[idx]
+        tgt_ds = self.tgt_dataset[idx]
+        spt_features = {'input': spt_ds[0], 'output': spt_ds[1]}
+        spt_labels = spt_ds[2]
+
+        tgt_features = {'input': tgt_ds[0], 'output': tgt_ds[1]}
+        tgt_labels = tgt_ds[2]
+
+        spt_addinfos = dict()
+        tgt_addinfos = dict()
+        for key in spt_ds[3].keys():
+            spt_addinfos[key] = spt_ds[3][key]
+            tgt_addinfos[key] = tgt_ds[3][key]
+
+        spt_data = (spt_features, spt_labels, spt_addinfos)
+        tgt_data = (tgt_features, tgt_labels, tgt_addinfos)
+        return spt_data, tgt_data
+
+
 def data_loader(enc_in, dec_in, dec_out, add_infos_dict, batch_size=1, shuffle=True):
     asset_dataset = AssetDataset(enc_in, dec_in, dec_out, add_infos_dict)
     return DataLoader(asset_dataset, batch_size=batch_size, shuffle=shuffle, pin_memory=True)
+
+# spt_list, tgt_list, features_list, importance_wgt, start_date, end_date = ds._dataset_maml('train')
+def data_loader_maml(spt_dataset, tgt_dataset, batch_size=1, shuffle=True):
+    asset_dataset = MetaDataset(spt_dataset, tgt_dataset)
+    return DataLoader(asset_dataset, batch_size=2, shuffle=shuffle)
 
 
 def to_device(device, list_to_device):
@@ -1349,4 +1402,5 @@ def to_device(device, list_to_device):
             list_to_device[i] = value_.to(device)
         else:
             raise NotImplementedError
+
 

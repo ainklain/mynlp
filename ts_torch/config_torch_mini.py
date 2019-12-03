@@ -65,6 +65,10 @@ class Config:
         self.dropout_mm = 0.5
         self.embedding_size_mm = 10
 
+        # meta
+        self.use_maml = True
+        self.n_tasks = 10
+
 
     @property
     def balancing_key(self):
