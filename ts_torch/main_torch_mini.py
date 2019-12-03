@@ -2,7 +2,7 @@
 
 import os
 
-### TORCH TEST
+# ## TORCH TEST
 import torch
 from torch import nn, optim
 
@@ -19,7 +19,7 @@ from ts_torch import torch_util_mini as tu
 
 configs = Config()
 
-k_days = 20; w_scheme = 'mw'; univ_type='selected'; pred='nmlogy'; balancing_method='nothing';head=8
+k_days = 20; w_scheme = 'mw'; univ_type='selected'; pred='nmlogy'; balancing_method='nothing'; head=8
 configs.set_kdays(k_days)
 configs.pred_feature = pred
 configs.weight_scheme = w_scheme

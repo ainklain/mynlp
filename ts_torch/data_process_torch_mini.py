@@ -488,10 +488,7 @@ class DataScheduler:
             raise NotImplementedError
 
     def _dataloader_maml(self, mode):
-        # self = ds; mode = 'test'; is_monthly=False
-        c = self.configs
-        batch_size = dict(train=c.train_batch_size, eval=c.eval_batch_size, test=1)
-
+        # self = ds; mode = 'train'
         _dataset = self._dataset_maml(mode)
 
         if _dataset is False:
@@ -500,7 +497,7 @@ class DataScheduler:
 
         spt_list, tgt_list, features_list, importance_wgt, start_date, end_date = _dataset
 
-        dataloader = data_loader_maml(spt_list, tgt_list, batch_size=batch_size[mode])
+        dataloader = data_loader_maml(spt_list, tgt_list)
 
         return dataloader, features_list
 
@@ -585,6 +582,74 @@ class DataScheduler:
                 if is_train:
                     optimizer.zero_grad()
                     losses.backward()
+                    optimizer.step()
+
+                total_loss += losses
+                i += 1
+
+        total_loss = tu.np_ify(total_loss) / i
+        if is_train:
+            print_str = "[Ep {}][{}] ".format(ep, mode)
+            size_str = "[Ep {}][{}][size] ".format(ep, mode)
+            for key in loss_each.keys():
+                print_str += "{}- {:.4f} / ".format(key, tu.np_ify(loss_each[key].mean()))
+                size_str += "{} - {} / ".format(key, loss_each[key].shape)
+            print(print_str)
+            print(size_str)
+            return total_loss
+        else:
+            print('[Ep {}][{}] total - {:.4f}'.format(ep, mode, total_loss))
+            return total_loss
+
+    def step_epoch_maml(self, ep, model, optimizer, is_train=True):
+        if is_train:
+            mode = 'train'
+            model.train()
+        else:
+            mode = 'eval'
+            model.eval()
+
+        if ep == 0:
+            self.dataloader[mode] = self._dataloader_maml(mode)
+            if self.dataloader[mode] is False:
+                return False
+
+        taskloader, features_list = self.dataloader[mode]
+        if ep == 0:
+            print('f_list: {}'.format(features_list))
+
+        total_loss = 0
+        i = 0
+        for spt_ds, tgt_ds in taskloader:
+            #  spt_ds, tgt_ds = next(iter(dataloader))
+            with torch.set_grad_enabled(is_train):
+                features, labels, add_infos = spt_ds
+                features_with_noise = {'input': features['input'], 'output': features['output']}
+                labels_with_noise = labels
+                if is_train:
+                    # add random noise for features
+                    features_with_noise['input'] = Noise.random_noise(features_with_noise['input'], p=0.5)
+                    features_with_noise['input'] = Noise.random_mask(features_with_noise['input'], p=0.9, mask_p=0.2)
+
+                    # add random noise for labels
+                    labels_with_noise = Noise.random_noise(labels, p=0.2)
+                    labels_with_noise = Noise.random_flip(labels_with_noise, p=0.9, flip_p=0.2)
+
+                labels_mtl = self.labels_torch(features_list, labels_with_noise, add_infos)
+                to_device(tu.device, [features_with_noise, labels_mtl])
+                # pred, _, _, _ = model.forward(features_with_noise, labels_mtl)
+                pred, loss_each = model.forward_with_loss(features_with_noise, labels_mtl)
+
+                losses = 0
+                for key in loss_each.keys():
+                    losses += loss_each[key].mean()
+
+                if is_train:
+                    optimizer.zero_grad()
+                    losses.backward()
+
+                    grad = torch.autograd.grad(train_loss, model.parameters(), retain_graph=True, create_graph=True)
+
                     optimizer.step()
 
                 total_loss += losses
@@ -1386,9 +1451,9 @@ def data_loader(enc_in, dec_in, dec_out, add_infos_dict, batch_size=1, shuffle=T
     return DataLoader(asset_dataset, batch_size=batch_size, shuffle=shuffle, pin_memory=True)
 
 # spt_list, tgt_list, features_list, importance_wgt, start_date, end_date = ds._dataset_maml('train')
-def data_loader_maml(spt_dataset, tgt_dataset, batch_size=1, shuffle=True):
+def data_loader_maml(spt_dataset, tgt_dataset, shuffle=True):
     asset_dataset = MetaDataset(spt_dataset, tgt_dataset)
-    return DataLoader(asset_dataset, batch_size=2, shuffle=shuffle)
+    return DataLoader(asset_dataset, batch_size=1, shuffle=shuffle)
 
 
 def to_device(device, list_to_device):

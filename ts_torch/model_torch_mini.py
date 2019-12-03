@@ -33,6 +33,10 @@ class Linear(nn.Module):
     def forward(self, inputs):
         return self.linear(inputs)
 
+    def compute_graph(self, inputs, params_list):
+        assert len(params_list) == 2
+        return F.linear(inputs, weight=params_list[0], bias=params_list[1])
+
 
 class ScaledDotProductAttention(nn.Module):
     def __init__(self, d_k, dropout=.1):
