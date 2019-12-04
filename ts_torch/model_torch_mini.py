@@ -1,6 +1,7 @@
 # https://github.com/JayParks/transformer
 # from ts_mini.features_mini import labels_for_mtl
 
+from collections import Named
 import math
 import numpy as np
 import pickle
@@ -23,7 +24,35 @@ class Constant:
 const = Constant()
 
 
-class Linear(nn.Module):
+class Base(nn.Module):
+    def __init__(self):
+        super(Base, self).__init__()
+
+    def get_children_dict(self, weights_list):
+        self.debug(weights_list)
+
+        children_dict = dict()
+        params_pos = 0
+        for c in self.children():
+            c_params_len = len(c.state_dict())
+            # model, weights_list 순서
+            children_dict[c._get_name()] = dict(m=c, w=weights_list[params_pos:(params_pos + c_params_len)])
+            params_pos += c_params_len
+
+        return children_dict
+
+    def debug(self, weights_list):
+        assert len(weights_list) == len(self.state_dict()), "size of weights_list not matched."
+
+
+class Conv1D(nn.Conv1d, Base):
+    def __init__(self, *args, **kwargs):
+        Base.__init__(self)
+        nn.Conv1d.__init__(self, *args, **kwargs)
+
+
+
+class Linear(Base):
     def __init__(self, in_features, out_features, bias=True):
         super(Linear, self).__init__()
         self.linear = nn.Linear(in_features, out_features, bias=bias)
@@ -33,9 +62,9 @@ class Linear(nn.Module):
     def forward(self, inputs):
         return self.linear(inputs)
 
-    def compute_graph(self, inputs, params_list):
-        assert len(params_list) == 2
-        return F.linear(inputs, weight=params_list[0], bias=params_list[1])
+    def compute_graph(self, inputs, weights_list):
+        self.debug(weights_list)
+        return F.linear(inputs, weight=weights_list[0], bias=weights_list[1])
 
 
 class ScaledDotProductAttention(nn.Module):
@@ -63,7 +92,7 @@ class ScaledDotProductAttention(nn.Module):
         return context, attn
 
 
-class LayerNormalization(nn.Module):
+class LayerNormalization(Base):
     def __init__(self, d_hid, eps=1e-6):
         super(LayerNormalization, self).__init__()
         self.gamma = nn.Parameter(torch.ones(d_hid))
@@ -78,8 +107,19 @@ class LayerNormalization(nn.Module):
 
         return ln_out
 
+    def compute_graph(self, z, weights_list):
+        self.debug(weights_list)
 
-class PosEncoding(nn.Module):
+        gamma, beta = weights_list[0], weights_list[1]
+        mean = z.mean(dim=-1, keepdim=True,)
+        std = z.std(dim=-1, keepdim=True,)
+        ln_out = (z - mean) / (std + self.eps)
+        ln_out = gamma * ln_out + beta
+
+        return ln_out
+
+
+class PosEncoding(Base):
     def __init__(self, max_seq_len, d_word_vec):
         super(PosEncoding, self).__init__()
         pos_enc = np.array(
@@ -106,9 +146,19 @@ class PosEncoding(nn.Module):
 
         return self.pos_enc(input_pos)
 
+    def compute_graph(self, input_len, weights_list):
+        self.debug(weights_list)
+
+        max_len = torch.max(input_len)
+        tensor = torch.cuda.LongTensor if input_len.is_cuda else torch.LongTensor
+        # print("is cuda:{}".format(input_len.is_cuda))
+        # input_pos = torch.LongTensor([list(range(1, input_len+1))])
+        input_pos = tensor([list(range(1, int(len)+1)) + [0]*int(max_len-len) for len in input_len])
+
+        return F.embedding(input_pos, weight=weights_list[0])
 
 # ####################### Sublayers ##########################
-class _MultiHeadAttention(nn.Module):
+class _MultiHeadAttention(Base):
     def __init__(self, d_k, d_v, d_model, n_heads, dropout):
         super(_MultiHeadAttention, self).__init__()
         self.d_k = d_k
@@ -145,6 +195,33 @@ class _MultiHeadAttention(nn.Module):
         # return the context and attention weights
         return context, attn
 
+    def compute_graph(self, q, k, v, attn_mask, weights_list):
+        # q: [b_size x len_q x d_model]
+        # k: [b_size x len_k x d_model]
+        # v: [b_size x len_k x d_model]
+        b_size = q.size(0)
+
+        c_dict = self.get_children_dict(weights_list)
+        w_q = c_dict('w_q')
+        w_k, w_k_weights_list = c_dict('w_k')
+        w_v, w_v_weights_list = c_dict('w_v')
+        # q_s: [b_size x n_heads x len_q x d_k]
+        # k_s: [b_size x n_heads x len_k x d_k]
+        # v_s: [b_size x n_heads x len_k x d_v]
+        q_s = w_q['m'].compute_graph(q, w_q['w']).view(b_size, -1, self.n_heads, self.d_k).transpose(1, 2)
+        k_s = w_k['m'].compute_graph(k, w_k['w']).view(b_size, -1, self.n_heads, self.d_k).transpose(1, 2)
+        v_s = w_v['m'].compute_graph(v, w_v['w']).view(b_size, -1, self.n_heads, self.d_v).transpose(1, 2)
+
+        if attn_mask is not None:  # attn_mask: [b_size x len_q x len_k]
+            attn_mask = attn_mask.unsqueeze(1).repeat(1, self.n_heads, 1, 1)
+        # context: [b_size x n_heads x len_q x d_v], attn: [b_size x n_heads x len_q x len_k]
+        context, attn = self.attention(q_s, k_s, v_s, attn_mask=attn_mask)
+        # context: [b_size x len_q x n_heads * d_v]
+        context = context.transpose(1, 2).contiguous().view(b_size, -1, self.n_heads * self.d_v)
+
+        # return the context and attention weights
+        return context, attn
+
 
 class MultiHeadAttention(nn.Module):
     def __init__(self, d_k, d_v, d_model, n_heads, dropout):
@@ -167,7 +244,24 @@ class MultiHeadAttention(nn.Module):
         output = self.dropout(self.proj(context))
         return self.layer_norm(residual + output), attn
 
+    def compute_graph(self, q, k, v, attn_mask, weights_list):
+        c_dict = self.get_children_dict(weights_list)
+        multihead_attn = c_dict('multihead_attn')
+        proj = c_dict('proj')
+        layer_norm = c_dict('layer_norm')
+        # q: [b_size x len_q x d_model]
+        # k: [b_size x len_k x d_model]
+        # v: [b_size x len_v x d_model] note (len_k == len_v)
+        residual = q
+        # context: a tensor of shape [b_size x len_q x n_heads * d_v]
+        context, attn = multihead_attn['m'](q, k, v, attn_mask=attn_mask, weights_list=multihead_attn['w'])
 
+        # project back to the residual size, outputs: [b_size x len_q x d_model]
+        output = self.dropout(proj['m'].compute_graph(context, weights_list=proj['w']))
+        return layer_norm['m'].compute_graph(residual + output, weights_list=layer_norm['w']), attn
+
+
+# NOTE: error ?!
 class MultiBranchAttention(nn.Module):
     def __init__(self, d_k, d_v, d_model, d_ff, n_branches, dropout):
         super(MultiBranchAttention, self).__init__()
@@ -214,8 +308,34 @@ class MultiBranchAttention(nn.Module):
         output = self.dropout(torch.stack(outputs).sum(dim=0))
         return self.layer_norm(residual + output), attn
 
+    def compute_graph(self, q, k, v, attn_mask, weights_list):
+        # q: [b_size x len_q x d_model]
+        # k: [b_size x len_k x d_model]
+        # v: [b_size x len_v x d_model] note (len_k == len_v)
+        residual = q
 
-class FeedForward(nn.Module):
+        c_dict = self.get_children_dict(weights_list)
+        multihead_attn, = c_dict('multihead_attn')
+        proj = c_dict('proj')
+
+        # context: a tensor of shape [b_size x len_q x n_branches * d_v]
+        context, attn = self.multih_attn(q, k, v, attn_mask=attn_mask)
+
+        # context: a list of tensors of shape [b_size x len_q x d_v] len: n_branches
+        context = context.split(self.d_v, dim=-1)
+
+        # outputs: a list of tensors of shape [b_size x len_q x d_model] len: n_branches
+        outputs = [self.w_o[i](context[i]) for i in range(self.n_branches)]
+        outputs = [kappa * output for kappa, output in zip(self.w_kp, outputs)]
+        outputs = [pos_ffn(output) for pos_ffn, output in zip(self.pos_ffn, outputs)]
+        outputs = [alpha * output for alpha, output in zip(self.w_a, outputs)]
+
+        # output: [b_size x len_q x d_model]
+        output = self.dropout(torch.stack(outputs).sum(dim=0))
+        return self.layer_norm(residual + output), attn
+
+
+class FeedForward(Base):
     def __init__(self, d_in, d_ff, d_out, out_activation=None):
         super(FeedForward, self).__init__()
         self.relu = nn.ReLU()
@@ -239,8 +359,20 @@ class FeedForward(nn.Module):
 
         return output
 
+    def compute_graph(self, inputs, weights_list):
+        c_dict = self.get_children_dict(weights_list)
+        in_layer = c_dict['in_layer']
+        out_layer = c_dict['out_layer']
+        # inputs: [b_size x d_model]
+        output = self.relu(in_layer['m'].compute_graph(inputs, weights_list=in_layer['w']))
+        output = out_layer['m'].compute_graph(output, weights_list=out_layer['w'])
 
-class PoswiseFeedForwardNet(nn.Module):
+        if self.out_a is not None:
+            output = self.out_a(output)
+
+        return output
+
+class PoswiseFeedForwardNet(Base):
     def __init__(self, d_model, d_ff, dropout=0.1):
         super(PoswiseFeedForwardNet, self).__init__()
         self.relu = nn.ReLU()
@@ -260,6 +392,19 @@ class PoswiseFeedForwardNet(nn.Module):
 
         return self.layer_norm(residual + output)
 
+    def compute_graph(self, inputs, weights_list):
+        c_dict = self.get_children_dict(weights_list)
+        layer_norm = c_dict['layer_norm']
+
+        # inputs: [b_size x len_q x d_model]
+        residual = inputs
+        output = self.relu(self.conv1(inputs.transpose(1, 2)))
+
+        # outputs: [b_size x len_q x d_model]
+        output = self.conv2(output).transpose(1, 2)
+        output = self.dropout(output)
+
+        return layer_norm['m'].compute_graph(residual + output, weights_list=layer_norm['w'])
 
 # ####################### Layers ##########################
 class ConvEmbeddingLayer(nn.Module):
