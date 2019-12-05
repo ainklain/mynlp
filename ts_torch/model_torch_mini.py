@@ -1,7 +1,6 @@
 # https://github.com/JayParks/transformer
 # from ts_mini.features_mini import labels_for_mtl
 
-from collections import Named
 import math
 import numpy as np
 import pickle
@@ -28,29 +27,62 @@ class Base(nn.Module):
     def __init__(self):
         super(Base, self).__init__()
 
+    def split_wgt(self, weights_list, pos, len):
+        next_pos = pos + len
+        return weights_list[pos:next_pos], next_pos
+
     def get_children_dict(self, weights_list):
         self.debug(weights_list)
 
         children_dict = dict()
         params_pos = 0
-        for c in self.children():
-            c_params_len = len(c.state_dict())
+        for c in self.named_children():
+            # c: Tuple(name, module)
+            if type(c[1]) == nn.ModuleList:
+                wgt = []
+                for l in c[1]:
+                    params_len = len(l.state_dict())
+                    wgt_i, params_pos = self.split_wgt(weights_list, params_pos, params_len)
+                    wgt.append(wgt_i)
+            elif type(c[1]) == nn.ModuleDict:
+                wgt = dict()
+                for key in c[1].keys():
+                    params_len = len(c[1][key].state_dict())
+                    wgt_i, params_pos = self.split_wgt(weights_list, params_pos, params_len)
+                    wgt[key] = wgt_i
+            else:
+                params_len = len(c[1].state_dict())
+                wgt, params_pos = self.split_wgt(weights_list, params_pos, params_len)
+
             # model, weights_list 순서
-            children_dict[c._get_name()] = dict(m=c, w=weights_list[params_pos:(params_pos + c_params_len)])
-            params_pos += c_params_len
+            children_dict[c[0]] = dict(m=c[1], w=wgt)
 
         return children_dict
 
     def debug(self, weights_list):
-        assert len(weights_list) == len(self.state_dict()), "size of weights_list not matched."
+        assert len(weights_list) == len(self.state_dict()), "size of weights_list not matched. ({}/{})".format(len(weights_list), len(self.state_dict()))
 
 
-class Conv1D(nn.Conv1d, Base):
+class Conv2d(nn.Conv2d, Base):
     def __init__(self, *args, **kwargs):
-        Base.__init__(self)
-        nn.Conv1d.__init__(self, *args, **kwargs)
+        super(Conv2d, self).__init__(*args, **kwargs)
+
+    def compute_graph(self, inputs, weights_list):
+        self.debug(weights_list)
+
+        return F.conv2d(inputs, weight=weights_list[0], bias=weights_list[1], stride=self.stride, padding=self.padding,
+                        dilation=self.dilation, groups=self.groups)
 
 
+class Conv1d(nn.Conv1d, Base):
+    def __init__(self, *args, **kwargs):
+        super(Conv1d, self).__init__(*args, **kwargs)
+
+    def compute_graph(self, inputs, weights_list):
+        self.debug(weights_list)
+
+        return F.conv1d(inputs, weight=weights_list[0], bias=weights_list[1], stride=self.stride, padding=self.padding,
+                        dilation=self.dilation, groups=self.groups)
 
 class Linear(Base):
     def __init__(self, in_features, out_features, bias=True):
@@ -202,9 +234,9 @@ class _MultiHeadAttention(Base):
         b_size = q.size(0)
 
         c_dict = self.get_children_dict(weights_list)
-        w_q = c_dict('w_q')
-        w_k, w_k_weights_list = c_dict('w_k')
-        w_v, w_v_weights_list = c_dict('w_v')
+        w_q = c_dict['w_q']
+        w_k = c_dict['w_k']
+        w_v = c_dict['w_v']
         # q_s: [b_size x n_heads x len_q x d_k]
         # k_s: [b_size x n_heads x len_k x d_k]
         # v_s: [b_size x n_heads x len_k x d_v]
@@ -223,7 +255,7 @@ class _MultiHeadAttention(Base):
         return context, attn
 
 
-class MultiHeadAttention(nn.Module):
+class MultiHeadAttention(Base):
     def __init__(self, d_k, d_v, d_model, n_heads, dropout):
         super(MultiHeadAttention, self).__init__()
         self.n_heads = n_heads
@@ -246,15 +278,15 @@ class MultiHeadAttention(nn.Module):
 
     def compute_graph(self, q, k, v, attn_mask, weights_list):
         c_dict = self.get_children_dict(weights_list)
-        multihead_attn = c_dict('multihead_attn')
-        proj = c_dict('proj')
-        layer_norm = c_dict('layer_norm')
+        multihead_attn = c_dict['multihead_attn']
+        proj = c_dict['proj']
+        layer_norm = c_dict['layer_norm']
         # q: [b_size x len_q x d_model]
         # k: [b_size x len_k x d_model]
         # v: [b_size x len_v x d_model] note (len_k == len_v)
         residual = q
         # context: a tensor of shape [b_size x len_q x n_heads * d_v]
-        context, attn = multihead_attn['m'](q, k, v, attn_mask=attn_mask, weights_list=multihead_attn['w'])
+        context, attn = multihead_attn['m'].compute_graph(q, k, v, attn_mask=attn_mask, weights_list=multihead_attn['w'])
 
         # project back to the residual size, outputs: [b_size x len_q x d_model]
         output = self.dropout(proj['m'].compute_graph(context, weights_list=proj['w']))
@@ -315,8 +347,8 @@ class MultiBranchAttention(nn.Module):
         residual = q
 
         c_dict = self.get_children_dict(weights_list)
-        multihead_attn, = c_dict('multihead_attn')
-        proj = c_dict('proj')
+        multihead_attn, = c_dict['multihead_attn']
+        proj = c_dict['proj']
 
         # context: a tensor of shape [b_size x len_q x n_branches * d_v]
         context, attn = self.multih_attn(q, k, v, attn_mask=attn_mask)
@@ -372,12 +404,13 @@ class FeedForward(Base):
 
         return output
 
+
 class PoswiseFeedForwardNet(Base):
     def __init__(self, d_model, d_ff, dropout=0.1):
         super(PoswiseFeedForwardNet, self).__init__()
         self.relu = nn.ReLU()
-        self.conv1 = nn.Conv1d(in_channels=d_model, out_channels=d_ff, kernel_size=1)
-        self.conv2 = nn.Conv1d(in_channels=d_ff, out_channels=d_model, kernel_size=1)
+        self.conv1 = Conv1d(in_channels=d_model, out_channels=d_ff, kernel_size=1)
+        self.conv2 = Conv1d(in_channels=d_ff, out_channels=d_model, kernel_size=1)
         self.dropout = nn.Dropout(dropout)
         self.layer_norm = LayerNormalization(d_model)
 
@@ -394,25 +427,28 @@ class PoswiseFeedForwardNet(Base):
 
     def compute_graph(self, inputs, weights_list):
         c_dict = self.get_children_dict(weights_list)
+        conv1 = c_dict['conv1']
+        conv2 = c_dict['conv2']
         layer_norm = c_dict['layer_norm']
 
         # inputs: [b_size x len_q x d_model]
         residual = inputs
-        output = self.relu(self.conv1(inputs.transpose(1, 2)))
+        output = self.relu(conv1['m'].compute_graph(inputs.transpose(1, 2), weights_list=conv1['w']))
 
         # outputs: [b_size x len_q x d_model]
-        output = self.conv2(output).transpose(1, 2)
+        output = conv2['m'].compute_graph(output, weights_list=conv2['w']).transpose(1, 2)
         output = self.dropout(output)
 
         return layer_norm['m'].compute_graph(residual + output, weights_list=layer_norm['w'])
 
+
 # ####################### Layers ##########################
-class ConvEmbeddingLayer(nn.Module):
+class ConvEmbeddingLayer(Base):
     # input features의 수를 d_model만큼의 1d conv로 재생산
 
     def __init__(self, n_features, d_model):
         super(ConvEmbeddingLayer, self).__init__()
-        self.conv1 = nn.Conv1d(in_channels=n_features, out_channels=d_model-n_features, kernel_size=1)
+        self.conv1 = Conv1d(in_channels=n_features, out_channels=d_model-n_features, kernel_size=1)
 
     def forward(self, inputs):
         # input shape: (b_size, T, n_features)
@@ -423,8 +459,19 @@ class ConvEmbeddingLayer(nn.Module):
         outputs = torch.cat((inputs, outputs), axis=-1)
         return outputs
 
+    def compute_graph(self, inputs, weights_list):
+        c_dict = self.get_children_dict(weights_list)
+        conv1 = c_dict['conv1']
 
-class EncoderLayer(nn.Module):
+        # input shape: (b_size, T, n_features)
+        inputs_t = inputs.contiguous().transpose(-2, -1)
+        # (b_size, n_features, T) -> (b_size, T, d_model)
+        outputs = conv1['m'].compute_graph(inputs_t, conv1['w']).contiguous().transpose(-2, -1)
+        # (b_size, d_model, T) -> (b_size, T, d_model)
+        outputs = torch.cat((inputs, outputs), axis=-1)
+        return outputs
+
+class EncoderLayer(Base):
     def __init__(self, d_k, d_v, d_model, d_ff, n_heads, dropout=0.1):
         super(EncoderLayer, self).__init__()
         self.enc_self_attn = MultiHeadAttention(d_k, d_v, d_model, n_heads, dropout)
@@ -437,8 +484,20 @@ class EncoderLayer(nn.Module):
 
         return enc_outputs, attn
 
+    def compute_graph(self, enc_inputs, self_attn_mask, weights_list):
+        c_dict = self.get_children_dict(weights_list)
+        enc_self_attn = c_dict['enc_self_attn']
+        pos_ffn = c_dict['pos_ffn']
 
-class WeightedEncoderLayer(nn.Module):
+        enc_outputs, attn = enc_self_attn['m'].compute_graph(enc_inputs, enc_inputs, enc_inputs
+                                                             , attn_mask=self_attn_mask
+                                                             , weights_list=enc_self_attn['w'])
+        enc_outputs = pos_ffn['m'].compute_graph(enc_outputs, weights_list=pos_ffn['w'])
+
+        return enc_outputs, attn
+
+
+class WeightedEncoderLayer(Base):
     def __init__(self, d_k, d_v, d_model, d_ff, n_branches, dropout=0.1):
         super(WeightedEncoderLayer, self).__init__()
         self.enc_self_attn = MultiBranchAttention(d_k, d_v, d_model, d_ff, n_branches, dropout)
@@ -446,8 +505,15 @@ class WeightedEncoderLayer(nn.Module):
     def forward(self, enc_inputs, self_attn_mask):
         return self.enc_self_attn(enc_inputs, enc_inputs, enc_inputs, attn_mask=self_attn_mask)
 
+    def compute_graph(self, enc_inputs, self_attn_mask, weights_list):
+        c_dict = self.get_children_dict(weights_list)
+        enc_self_attn = c_dict['enc_self_attn']
+        return enc_self_attn['m'].compute_graph(enc_inputs, enc_inputs, enc_inputs
+                                                , attn_mask=self_attn_mask
+                                                , weights_list=enc_self_attn['w'])
 
-class DecoderLayer(nn.Module):
+
+class DecoderLayer(Base):
     def __init__(self, d_k, d_v, d_model, d_ff, n_heads, dropout=0.1):
         super(DecoderLayer, self).__init__()
         self.dec_self_attn = MultiHeadAttention(d_k, d_v, d_model, n_heads, dropout)
@@ -463,8 +529,22 @@ class DecoderLayer(nn.Module):
 
         return dec_outputs, dec_self_attn, dec_enc_attn
 
+    def compute_graph(self, dec_inputs, enc_outputs, self_attn_mask, enc_attn_mask, weights_list):
+        c_dict = self.get_children_dict(weights_list)
+        dec_self_attn = c_dict['dec_self_attn']
+        dec_enc_attn = c_dict['dec_enc_attn']
+        pos_ffn = c_dict['pos_ffn']
 
-class WeightedDecoderLayer(nn.Module):
+        dec_outputs, dec_self_attn = dec_self_attn['m'].compute_graph(dec_inputs, dec_inputs, dec_inputs
+                                                                      , attn_mask=self_attn_mask, weights_list=dec_self_attn['w'])
+        dec_outputs, dec_enc_attn = dec_enc_attn['m'].compute_graph(dec_outputs, enc_outputs, enc_outputs
+                                                                    , attn_mask=enc_attn_mask, weights_list=dec_enc_attn['w'])
+        dec_outputs = pos_ffn['m'].compute_graph(dec_outputs, weights_list=pos_ffn['w'])
+
+        return dec_outputs, dec_self_attn, dec_enc_attn
+
+
+class WeightedDecoderLayer(Base):
     def __init__(self, d_k, d_v, d_model, d_ff, n_branches, dropout=0.1):
         super(WeightedDecoderLayer, self).__init__()
         self.dec_self_attn = MultiHeadAttention(d_k, d_v, d_model, n_branches, dropout)
@@ -478,8 +558,22 @@ class WeightedDecoderLayer(nn.Module):
 
         return dec_outputs, dec_self_attn, dec_enc_attn
 
+    def compute_graph(self, dec_inputs, enc_outputs, self_attn_mask, enc_attn_mask, weights_list):
+        c_dict = self.get_children_dict(weights_list)
+        dec_self_attn = c_dict['dec_self_attn']
+        dec_enc_attn = c_dict['dec_enc_attn']
 
-class Encoder(nn.Module):
+        dec_outputs, dec_self_attn = dec_self_attn['m'].compute_graph(dec_inputs, dec_inputs, dec_inputs
+                                                                      , attn_mask=self_attn_mask
+                                                                      , weights_list=dec_self_attn['w'])
+        dec_outputs, dec_enc_attn = dec_enc_attn['m'].compute_graph(dec_outputs, enc_outputs, enc_outputs
+                                                                    , attn_mask=enc_attn_mask
+                                                                    , weights_list=dec_enc_attn['w'])
+
+        return dec_outputs, dec_self_attn, dec_enc_attn
+
+
+class Encoder(Base):
     def __init__(self, n_layers, d_k, d_v, d_model, d_ff, n_heads,
                  max_seq_len, dropout=0.1, weighted=False):
         # n_layers, d_k, d_v, d_model, d_ff, n_heads, max_seq_len, dropout, weighted = configs.n_layers, configs.d_k, configs.d_v, configs.d_model, configs.d_ff, configs.n_heads, configs.max_input_seq_len, configs.dropout, configs.weighted_model
@@ -505,8 +599,26 @@ class Encoder(nn.Module):
 
         return enc_outputs, enc_self_attns
 
+    def compute_graph(self, enc_inputs, enc_inputs_len, weights_list, return_attn=False):
+        c_dict = self.get_children_dict(weights_list)
+        pos_emb = c_dict['pos_emb']
+        layers = c_dict['layers']
 
-class Decoder(nn.Module):
+        # enc_outputs = self.src_emb(enc_inputs)
+        enc_outputs = enc_inputs + pos_emb['m'].compute_graph(enc_inputs_len, weights_list=pos_emb['w'])  # Adding positional encoding TODO: note
+        enc_outputs = self.dropout_emb(enc_outputs)
+
+        enc_self_attn_mask = get_attn_pad_mask(enc_inputs, enc_inputs)
+        enc_self_attns = []
+        for layer_m, layer_w in zip(layers['m'], layers['w']):
+            enc_outputs, enc_self_attn = layer_m.compute_graph(enc_outputs, enc_self_attn_mask, weights_list=layer_w)
+            if return_attn:
+                enc_self_attns.append(enc_self_attn)
+
+        return enc_outputs, enc_self_attns
+
+
+class Decoder(Base):
     def __init__(self, n_layers, d_k, d_v, d_model, d_ff, n_heads,
                  max_seq_len, dropout=0.1, weighted=False):
         super(Decoder, self).__init__()
@@ -534,6 +646,32 @@ class Decoder(nn.Module):
             dec_outputs, dec_self_attn, dec_enc_attn = layer(dec_outputs, enc_outputs,
                                                              self_attn_mask=dec_self_attn_mask,
                                                              enc_attn_mask=dec_enc_attn_pad_mask)
+            if return_attn:
+                dec_self_attns.append(dec_self_attn)
+                dec_enc_attns.append(dec_enc_attn)
+
+        return dec_outputs, dec_self_attns, dec_enc_attns
+
+    def compute_graph(self, dec_inputs, dec_inputs_len, enc_inputs, enc_outputs, weights_list, return_attn=False):
+        c_dict = self.get_children_dict(weights_list)
+        pos_emb = c_dict['pos_emb']
+        layers = c_dict['layers']
+
+        # dec_outputs = self.tgt_emb(dec_inputs)
+        dec_outputs = dec_inputs + pos_emb['m'].compute_graph(dec_inputs_len, weights_list=pos_emb['w'])  # Adding positional encoding # TODO: note
+        dec_outputs = self.dropout_emb(dec_outputs)
+
+        dec_self_attn_pad_mask = get_attn_pad_mask(dec_inputs, dec_inputs)
+        dec_self_attn_subsequent_mask = get_attn_subsequent_mask(dec_inputs)
+
+        dec_self_attn_mask = torch.gt((dec_self_attn_pad_mask + dec_self_attn_subsequent_mask), 0)
+        dec_enc_attn_pad_mask = get_attn_pad_mask(dec_inputs, enc_inputs)
+
+        dec_self_attns, dec_enc_attns = [], []
+        for layer_m, layer_w in zip(layers['m'], layers['w']):
+            dec_outputs, dec_self_attn, dec_enc_attn = layer_m.compute_graph(dec_outputs, enc_outputs,
+                                                             self_attn_mask=dec_self_attn_mask,
+                                                             enc_attn_mask=dec_enc_attn_pad_mask, weights_list=layer_w)
             if return_attn:
                 dec_self_attns.append(dec_self_attn)
                 dec_enc_attns.append(dec_enc_attn)
@@ -575,7 +713,7 @@ def get_attn_subsequent_mask(seq):
 
 
 # d_k, d_v, d_model, d_ff, n_heads, dropout
-class TSModel(nn.Module):
+class TSModel(Base):
     def __init__(self, configs, features_cls, weight_scheme='mw'):
         super(TSModel, self).__init__()
 
@@ -656,6 +794,32 @@ class TSModel(nn.Module):
 
         return pred_each, enc_self_attns, dec_self_attns, dec_enc_attns
 
+    def compute_graph(self, features, weights_list, return_attn=False):
+        # features = {'input': torch.zeros(2, 25, 23), 'output': torch.zeros(2, 1, 23)}
+        device = features['input'].device
+        self.to(device)
+
+        c_dict = self.get_children_dict(weights_list)
+        conv_embedding = c_dict['conv_embedding']
+        encoder = c_dict['encoder']
+        decoder = c_dict['decoder']
+        predictor = c_dict['predictor']
+
+        enc_in = conv_embedding['m'].compute_graph(features['input'], weights_list=conv_embedding['w'])
+        dec_in = conv_embedding['m'].compute_graph(features['output'], weights_list=conv_embedding['w'])
+
+        input_seq_size = torch.Tensor([enc_in.shape[1] for _ in range(enc_in.shape[0])]).to(device)
+        output_seq_size = torch.Tensor([dec_in.shape[1] for _ in range(dec_in.shape[0])]).to(device)
+
+        enc_out, enc_self_attns = encoder['m'].compute_graph(enc_in, input_seq_size, return_attn=return_attn, weights_list=encoder['w'])
+        predict, dec_self_attns, dec_enc_attns = decoder['m'].compute_graph(dec_in, output_seq_size, enc_in, enc_out, return_attn=return_attn, weights_list=decoder['w'])
+
+        pred_each = dict()
+        for key in predictor['m'].keys():
+            pred_each[key] = predictor['m'][key].compute_graph(predict, weights_list=predictor['w'][key])
+
+        return pred_each, enc_self_attns, dec_self_attns, dec_enc_attns
+
     def predict_mtl(self, features):
         ret = self.forward(features)
         return ret[0]
@@ -702,6 +866,54 @@ class TSModel(nn.Module):
 
         return pred_each, loss_each #, enc_self_attns, dec_self_attns, dec_enc_attns,
 
+    def compute_graph_with_loss(self, features, labels_mtl, weights_list, return_attn=False):
+        # features = {'input': torch.zeros(2, 25, 23), 'output': torch.zeros(2, 1, 23)}
+        device = features['input'].device
+        self.to(device)
+
+        c_dict = self.get_children_dict(weights_list)
+        conv_embedding = c_dict['conv_embedding']
+        encoder = c_dict['encoder']
+        decoder = c_dict['decoder']
+        predictor = c_dict['predictor']
+
+        enc_in = conv_embedding['m'].compute_graph(features['input'], weights_list=conv_embedding['w'])
+        dec_in = conv_embedding['m'].compute_graph(features['output'], weights_list=conv_embedding['w'])
+
+        input_seq_size = torch.Tensor([enc_in.shape[1] for _ in range(enc_in.shape[0])]).to(device)
+        output_seq_size = torch.Tensor([dec_in.shape[1] for _ in range(dec_in.shape[0])]).to(device)
+
+        enc_out, enc_self_attns = encoder['m'].compute_graph(enc_in, input_seq_size, return_attn=return_attn, weights_list=encoder['w'])
+        predict, dec_self_attns, dec_enc_attns = decoder['m'].compute_graph(dec_in, output_seq_size, enc_in, enc_out, return_attn=return_attn, weights_list=decoder['w'])
+
+        if self.weight_scheme == 'mw':
+            adj_weight = labels_mtl['size_rnk'] * 2.  # size_rnk: 0~1사이 랭크
+        else:
+            adj_weight = 1.
+
+        # adj_importance = labels_mtl['importance_wgt']   # TODO: maml 시 importance 현재 정의 안됨
+
+        pred_each = dict()
+        loss_each = dict()
+        for key in predictor['m'].keys():
+            pred_each[key] = predictor['m'][key].compute_graph(predict, weights_list=predictor['w'][key])
+
+            if key[:3] == 'pos':
+                criterion = torch.nn.CrossEntropyLoss(reduction='none')
+                pred_each[key] = pred_each[key].contiguous().transpose(1, -1)
+                loss_each[key] = criterion(pred_each[key], labels_mtl[key])
+                adj_logy = torch.abs(labels_mtl['logy'][:, :, self.predictor_helper[key]])
+                assert loss_each[key].shape == adj_logy.shape
+                loss_each[key] = loss_each[key] * adj_logy
+            else:
+                criterion = torch.nn.MSELoss(reduction='none')
+                loss_each[key] = criterion(pred_each[key], labels_mtl[key]).mean(axis=-1)
+
+            loss_shape = loss_each[key].shape
+            loss_each[key] = loss_each[key] * adj_weight.reshape(loss_shape)  # * adj_importance.reshape(loss_shape) # TODO: maml 시 importance 현재 정의 안됨
+
+        return pred_each, loss_each #, enc_self_attns, dec_self_attns, dec_enc_attns,
+
     def proj_grad(self):
         if self.weighted_model:
             for name, param in self.named_parameters():
@@ -718,6 +930,13 @@ class TSModel(nn.Module):
 
     def params2vec(self):
         paramsvec = torch.nn.ParameterList(self.parameters())
+        return paramsvec
+
+    def trainable_params2vec(self):
+        paramsvec = torch.nn.ParameterList()
+        for p in self.parameters():
+            if p.requires_grad:
+                paramsvec.append(p)
         return paramsvec
 
     def load_from_vecs(self, paramsvec):

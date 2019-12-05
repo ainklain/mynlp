@@ -499,6 +499,7 @@ class DataScheduler:
 
         dataloader = data_loader_maml(spt_list, tgt_list)
 
+        # TODO: maml시에 importance_wgt 사용 불가 (현재는 여기서 없어짐)
         return dataloader, features_list
 
     def train(self, model, optimizer, performer, num_epochs, early_stopping_count=2):
@@ -602,6 +603,7 @@ class DataScheduler:
             return total_loss
 
     def step_epoch_maml(self, ep, model, optimizer, is_train=True):
+        # ep=0;is_train = True;
         if is_train:
             mode = 'train'
             model.train()
@@ -621,34 +623,37 @@ class DataScheduler:
         total_loss = 0
         i = 0
         for spt_ds, tgt_ds in taskloader:
-            #  spt_ds, tgt_ds = next(iter(dataloader))
+            #  spt_ds, tgt_ds = next(iter(taskloader))
             with torch.set_grad_enabled(is_train):
                 features, labels, add_infos = spt_ds
-                features_with_noise = {'input': features['input'], 'output': features['output']}
-                labels_with_noise = labels
+                features_with_noise = {'input': features['input'].squeeze(0), 'output': features['output'].squeeze(0)}
+                labels_with_noise = labels.squeeze(0)
                 if is_train:
                     # add random noise for features
                     features_with_noise['input'] = Noise.random_noise(features_with_noise['input'], p=0.5)
                     features_with_noise['input'] = Noise.random_mask(features_with_noise['input'], p=0.9, mask_p=0.2)
 
                     # add random noise for labels
-                    labels_with_noise = Noise.random_noise(labels, p=0.2)
+                    labels_with_noise = Noise.random_noise(labels_with_noise, p=0.2)
                     labels_with_noise = Noise.random_flip(labels_with_noise, p=0.9, flip_p=0.2)
 
-                labels_mtl = self.labels_torch(features_list, labels_with_noise, add_infos)
+                # TODO: maml시에 importance_wgt 사용 불가 (임시로 labels_torch에서 maml 받아서 없앰)  dataloader_maml도 수정해야
+                labels_mtl = self.labels_torch(features_list, labels_with_noise, add_infos, maml=True)
                 to_device(tu.device, [features_with_noise, labels_mtl])
                 # pred, _, _, _ = model.forward(features_with_noise, labels_mtl)
-                pred, loss_each = model.forward_with_loss(features_with_noise, labels_mtl)
+                weights_list = model.params2vec()
+                pred, loss_each = model.compute_graph_with_loss(features_with_noise, labels_mtl, weights_list=weights_list)
 
-                losses = 0
+                train_losses = 0
                 for key in loss_each.keys():
-                    losses += loss_each[key].mean()
+                    train_losses += loss_each[key].mean()
 
                 if is_train:
                     optimizer.zero_grad()
-                    losses.backward()
-
-                    grad = torch.autograd.grad(train_loss, model.parameters(), retain_graph=True, create_graph=True)
+                    # train_losses.backward()
+                    lr_inner = 0.001
+                    grad = torch.autograd.grad(train_losses, weights_list, retain_graph=True, create_graph=True)
+                    fast_weights = list(map(lambda p: p[1] - lr_inner * p[0], zip(grad, model.parameters())))
 
                     optimizer.step()
 
@@ -694,7 +699,7 @@ class DataScheduler:
         performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}.png'.format(ep)
                        , ylog=False, ls_method='ls_5_20', plot_all_features=True)
 
-    def labels_torch(self, f_list, labels, add_infos):
+    def labels_torch(self, f_list, labels, add_infos, maml=False):
         c = self.configs
         labels_mtl = dict()
         for cls in c.features_structure.keys():
@@ -708,7 +713,8 @@ class DataScheduler:
                     labels_mtl[key] = torch.stack([labels[:, :, f_list.index("{}_{}".format(key, n))] for n in n_arr], axis=-1)
 
         labels_mtl['size_rnk'] = add_infos['size_rnk'].reshape(-1, 1, 1)
-        labels_mtl['importance_wgt'] = add_infos['importance_wgt'].reshape(-1, 1, 1)
+        if not maml:
+            labels_mtl['importance_wgt'] = add_infos['importance_wgt'].reshape(-1, 1, 1)
 
         return labels_mtl
 
