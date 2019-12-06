@@ -4,6 +4,7 @@ import torch
 
 
 device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+# device = 'cpu'
 
 
 def from_numpy(*args, **kwargs):

@@ -11,7 +11,7 @@ from ts_torch.model_torch_mini import TSModel
 from ts_mini.features_mini import FeatureNew
 
 # vtorch test
-from ts_torch.data_process_torch_mini import DataScheduler
+from ts_torch.data_process_torch_mini import DataScheduler, Noise
 from ts_torch.config_torch_mini import Config
 from ts_torch.performance_torch_mini import Performance
 from ts_torch import torch_util_mini as tu
@@ -25,7 +25,7 @@ configs.pred_feature = pred
 configs.weight_scheme = w_scheme
 configs.balancing_method = balancing_method
 # configs.learning_rate = 1e-4
-configs.f_name = 'kr_{}_{}_{}_{}_h{}_torch_nov01'.format(k_days, univ_type, balancing_method, pred, head)
+configs.f_name = 'kr_{}_{}_{}_{}_h{}_torch_maml_002'.format(k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100
 configs.eval_steps = 100
 configs.save_steps = 100
@@ -52,6 +52,8 @@ performer = Performance(configs)
 optimizer = optim.Adam(model.parameters(), lr=configs.learning_rate)
 
 ds.load(model, optimizer)
+
+# ds.train_maml(model, optimizer, performer, num_epochs=50, early_stopping_count=configs.early_stopping_count)
 
 while True:
     ds.save(0, model, optimizer)

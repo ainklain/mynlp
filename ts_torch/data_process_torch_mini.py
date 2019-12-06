@@ -538,6 +538,38 @@ class DataScheduler:
             if train_loss is False:
                 return False
 
+    def train_maml(self, model, optimizer, performer, num_epochs, early_stopping_count=2):
+        min_eval_loss = 99999
+        stop_count = 0
+        print('train start...')
+        for ep in range(num_epochs):
+            if ep % 2 == 0:
+                print('[Ep {}] plot'.format(ep))
+
+            print('[Ep {}] model evaluation ...'.format(ep))
+            eval_loss = self.step_epoch_maml(ep, model, optimizer, is_train=False)
+            if eval_loss is False:
+                return False
+
+            if eval_loss > min_eval_loss:
+                stop_count += 1
+            else:
+                model.save_to_optim()
+                min_eval_loss = eval_loss
+                stop_count = 0
+
+            print('[Ep {}] count: {}/{}'.format(ep, stop_count, early_stopping_count))
+            if stop_count >= early_stopping_count:
+                print('[Ep {}] Early Stopped'.format(ep))
+                model.load_from_optim()
+
+                break
+
+            print('[Ep {}] model train ...'.format(ep))
+            train_loss = self.step_epoch_maml(ep, model, optimizer, is_train=True)
+            if train_loss is False:
+                return False
+
     def step_epoch(self, ep, model, optimizer, is_train=True):
         if is_train:
             mode = 'train'
@@ -620,59 +652,73 @@ class DataScheduler:
         if ep == 0:
             print('f_list: {}'.format(features_list))
 
-        total_loss = 0
-        i = 0
+        total_losses = 0
+        n_task = 0
         for spt_ds, tgt_ds in taskloader:
+
             #  spt_ds, tgt_ds = next(iter(taskloader))
+            features_s, labels_s, add_infos_s = spt_ds
+            f_with_noise_s = {'input': features_s['input'].squeeze(0), 'output': features_s['output'].squeeze(0)}
+            labels_with_noise_s = labels_s.squeeze(0)
+
+            features_t, labels_t, add_infos_t = tgt_ds
+            f_with_noise_t = {'input': features_t['input'].squeeze(0), 'output': features_t['output'].squeeze(0)}
+            labels_with_noise_t = labels_t.squeeze(0)
+            if is_train:
+                # add random noise for features
+                f_with_noise_s['input'] = Noise.random_noise(f_with_noise_s['input'], p=0.5)
+                f_with_noise_s['input'] = Noise.random_mask(f_with_noise_s['input'], p=0.9, mask_p=0.2)
+
+                # add random noise for labels
+                labels_with_noise_s = Noise.random_noise(labels_with_noise_s, p=0.2)
+                labels_with_noise_s = Noise.random_flip(labels_with_noise_s, p=0.9, flip_p=0.2)
+
+                # add random noise for features
+                f_with_noise_t['input'] = Noise.random_noise(f_with_noise_t['input'], p=0.5)
+                f_with_noise_t['input'] = Noise.random_mask(f_with_noise_t['input'], p=0.9, mask_p=0.2)
+
+                # add random noise for labels
+                labels_with_noise_t = Noise.random_noise(labels_with_noise_t, p=0.2)
+                labels_with_noise_t = Noise.random_flip(labels_with_noise_t, p=0.9, flip_p=0.2)
+
+            # TODO: maml시에 importance_wgt 사용 불가 (임시로 labels_torch에서 maml 받아서 없앰)  dataloader_maml도 수정해야
+            labels_mtl_s = self.labels_torch(features_list, labels_with_noise_s, add_infos_s, maml=True)
+            to_device(tu.device, [f_with_noise_s, labels_mtl_s])
+            # pred, _, _, _ = model.forward(features_with_noise, labels_mtl)
+            weights_list = model.params2vec(requires_grad_only=True)
+            pred_s, loss_each_s = model.compute_graph_with_loss(f_with_noise_s, labels_mtl_s, weights_list=weights_list)
+            to_device('cpu', [f_with_noise_s, labels_mtl_s])
+
+            train_losses = 0
+            for key in loss_each_s.keys():
+                train_losses += loss_each_s[key].mean()
+
+            # train_losses.backward()
+            lr_inner = 0.001
+            grad = torch.autograd.grad(train_losses, weights_list, retain_graph=True, create_graph=True)
+            fast_weights = list(map(lambda p: p[1] - lr_inner * p[0], zip(grad, weights_list)))
+
             with torch.set_grad_enabled(is_train):
-                features, labels, add_infos = spt_ds
-                features_with_noise = {'input': features['input'].squeeze(0), 'output': features['output'].squeeze(0)}
-                labels_with_noise = labels.squeeze(0)
-                if is_train:
-                    # add random noise for features
-                    features_with_noise['input'] = Noise.random_noise(features_with_noise['input'], p=0.5)
-                    features_with_noise['input'] = Noise.random_mask(features_with_noise['input'], p=0.9, mask_p=0.2)
+                labels_mtl_t = self.labels_torch(features_list, labels_with_noise_t, add_infos_t, maml=True)
+                to_device(tu.device, [f_with_noise_t, labels_mtl_t])
+                pred_t, loss_each_t = model.compute_graph_with_loss(f_with_noise_t, labels_mtl_t, weights_list=fast_weights)
+                to_device('cpu', [f_with_noise_t, labels_mtl_t])
 
-                    # add random noise for labels
-                    labels_with_noise = Noise.random_noise(labels_with_noise, p=0.2)
-                    labels_with_noise = Noise.random_flip(labels_with_noise, p=0.9, flip_p=0.2)
+                task_losses = 0
+                for key in loss_each_t.keys():
+                    task_losses += loss_each_t[key].mean()
 
-                # TODO: maml시에 importance_wgt 사용 불가 (임시로 labels_torch에서 maml 받아서 없앰)  dataloader_maml도 수정해야
-                labels_mtl = self.labels_torch(features_list, labels_with_noise, add_infos, maml=True)
-                to_device(tu.device, [features_with_noise, labels_mtl])
-                # pred, _, _, _ = model.forward(features_with_noise, labels_mtl)
-                weights_list = model.params2vec()
-                pred, loss_each = model.compute_graph_with_loss(features_with_noise, labels_mtl, weights_list=weights_list)
+                total_losses += task_losses
+            n_task += 1
 
-                train_losses = 0
-                for key in loss_each.keys():
-                    train_losses += loss_each[key].mean()
-
-                if is_train:
-                    optimizer.zero_grad()
-                    # train_losses.backward()
-                    lr_inner = 0.001
-                    grad = torch.autograd.grad(train_losses, weights_list, retain_graph=True, create_graph=True)
-                    fast_weights = list(map(lambda p: p[1] - lr_inner * p[0], zip(grad, model.parameters())))
-
-                    optimizer.step()
-
-                total_loss += losses
-                i += 1
-
-        total_loss = tu.np_ify(total_loss) / i
+        total_losses = total_losses / n_task
         if is_train:
-            print_str = "[Ep {}][{}] ".format(ep, mode)
-            size_str = "[Ep {}][{}][size] ".format(ep, mode)
-            for key in loss_each.keys():
-                print_str += "{}- {:.4f} / ".format(key, tu.np_ify(loss_each[key].mean()))
-                size_str += "{} - {} / ".format(key, loss_each[key].shape)
-            print(print_str)
-            print(size_str)
-            return total_loss
-        else:
-            print('[Ep {}][{}] total - {:.4f}'.format(ep, mode, total_loss))
-            return total_loss
+            optimizer.zero_grad()
+            total_losses.backward()
+            optimizer.step()
+
+        print('[Ep {}][{}] total - {:.4f} (n tasks: {})'.format(ep, mode, total_losses, n_task))
+        return total_losses
 
     def test_plot(self, performer, model, ep, is_monthly):
         # self=ds; ep=0; is_monthly = False
@@ -1459,7 +1505,7 @@ def data_loader(enc_in, dec_in, dec_out, add_infos_dict, batch_size=1, shuffle=T
 # spt_list, tgt_list, features_list, importance_wgt, start_date, end_date = ds._dataset_maml('train')
 def data_loader_maml(spt_dataset, tgt_dataset, shuffle=True):
     asset_dataset = MetaDataset(spt_dataset, tgt_dataset)
-    return DataLoader(asset_dataset, batch_size=1, shuffle=shuffle)
+    return DataLoader(asset_dataset, batch_size=1, shuffle=shuffle, pin_memory=False)
 
 
 def to_device(device, list_to_device):

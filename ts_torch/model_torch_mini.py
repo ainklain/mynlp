@@ -27,12 +27,35 @@ class Base(nn.Module):
     def __init__(self):
         super(Base, self).__init__()
 
+    def params2vec(self, requires_grad_only=True):
+        if requires_grad_only:
+            paramsvec = torch.nn.ParameterList()
+            for p in self.parameters():
+                if p.requires_grad:
+                    paramsvec.append(p)
+        else:
+            paramsvec = torch.nn.ParameterList(self.parameters())
+
+        return paramsvec
+
+    def load_from_vecs(self, paramsvec, requires_grad_only=True):
+        dic = self.state_dict()
+        i = 0
+        for key in dic.keys():
+            if requires_grad_only and not dic[key].requires_grad:
+                continue
+
+            dic[key] = paramsvec[i]
+            i += 1
+
+        self.load_state_dict(dic)
+
     def split_wgt(self, weights_list, pos, len):
         next_pos = pos + len
         return weights_list[pos:next_pos], next_pos
 
-    def get_children_dict(self, weights_list):
-        self.debug(weights_list)
+    def get_children_dict(self, weights_list, requires_grad_only=True):
+        self.debug(weights_list, requires_grad_only)
 
         children_dict = dict()
         params_pos = 0
@@ -41,17 +64,23 @@ class Base(nn.Module):
             if type(c[1]) == nn.ModuleList:
                 wgt = []
                 for l in c[1]:
-                    params_len = len(l.state_dict())
+                    if not hasattr(l, 'params2vec'):
+                        continue
+                    params_len = len(l.params2vec(requires_grad_only))
                     wgt_i, params_pos = self.split_wgt(weights_list, params_pos, params_len)
                     wgt.append(wgt_i)
             elif type(c[1]) == nn.ModuleDict:
                 wgt = dict()
                 for key in c[1].keys():
-                    params_len = len(c[1][key].state_dict())
+                    if not hasattr(c[1][key], 'params2vec'):
+                        continue
+                    params_len = len(c[1][key].params2vec(requires_grad_only))
                     wgt_i, params_pos = self.split_wgt(weights_list, params_pos, params_len)
                     wgt[key] = wgt_i
             else:
-                params_len = len(c[1].state_dict())
+                if not hasattr(c[1], 'params2vec'):
+                    continue
+                params_len = len(c[1].params2vec(requires_grad_only))
                 wgt, params_pos = self.split_wgt(weights_list, params_pos, params_len)
 
             # model, weights_list 순서
@@ -59,8 +88,12 @@ class Base(nn.Module):
 
         return children_dict
 
-    def debug(self, weights_list):
-        assert len(weights_list) == len(self.state_dict()), "size of weights_list not matched. ({}/{})".format(len(weights_list), len(self.state_dict()))
+    def debug(self, weights_list, requires_grad_only=True):
+        assert len(weights_list) == len(self.params2vec(requires_grad_only)), "size of weights_list not matched. ({}/{})".format(len(weights_list), len(self.params2vec(requires_grad_only)))
+
+    def compute_graph(self, inputs, weights_list=[]):
+        if len(weights_list) == 0:
+            return self.forward(inputs)
 
 
 class Conv2d(nn.Conv2d, Base):
@@ -178,16 +211,16 @@ class PosEncoding(Base):
 
         return self.pos_enc(input_pos)
 
-    def compute_graph(self, input_len, weights_list):
-        self.debug(weights_list)
-
-        max_len = torch.max(input_len)
-        tensor = torch.cuda.LongTensor if input_len.is_cuda else torch.LongTensor
-        # print("is cuda:{}".format(input_len.is_cuda))
-        # input_pos = torch.LongTensor([list(range(1, input_len+1))])
-        input_pos = tensor([list(range(1, int(len)+1)) + [0]*int(max_len-len) for len in input_len])
-
-        return F.embedding(input_pos, weight=weights_list[0])
+    # def compute_graph(self, input_len, weights_list):
+    #     self.debug(weights_list)
+    #
+    #     max_len = torch.max(input_len)
+    #     tensor = torch.cuda.LongTensor if input_len.is_cuda else torch.LongTensor
+    #     # print("is cuda:{}".format(input_len.is_cuda))
+    #     # input_pos = torch.LongTensor([list(range(1, input_len+1))])
+    #     input_pos = tensor([list(range(1, int(len)+1)) + [0]*int(max_len-len) for len in input_len])
+    #
+    #     return F.embedding(input_pos, weight=weights_list[0])
 
 # ####################### Sublayers ##########################
 class _MultiHeadAttention(Base):
@@ -928,23 +961,6 @@ class TSModel(Base):
     def load_from_optim(self):
         self.load_state_dict(self.optim_state_dict)
 
-    def params2vec(self):
-        paramsvec = torch.nn.ParameterList(self.parameters())
-        return paramsvec
-
-    def trainable_params2vec(self):
-        paramsvec = torch.nn.ParameterList()
-        for p in self.parameters():
-            if p.requires_grad:
-                paramsvec.append(p)
-        return paramsvec
-
-    def load_from_vecs(self, paramsvec):
-        dic = self.state_dict()
-        for i, key in enumerate(dic.keys()):
-            dic[key] = paramsvec[i]
-        self.load_state_dict(dic)
-
     def save_model(self, save_path):
         torch.save(self.optim_state_dict, save_path)
 
@@ -952,6 +968,5 @@ class TSModel(Base):
         self.optim_state_dict = torch.load(load_path)
         self.load_state_dict(self.optim_state_dict)
         self.eval()
-
 
 

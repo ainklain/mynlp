@@ -589,7 +589,6 @@ def train_maml2(model, criterion, optimizer, scheduler, dataloaders, lr_inner=0.
     # 가장 나은 모델 가중치를 불러옴
     model.load_state_dict(best_model_wts)
 
-
     return model
 
 
