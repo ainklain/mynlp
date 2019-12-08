@@ -283,7 +283,7 @@ class DataScheduler:
             if _dataset_list is False:
                 print('[test] no test data')
                 return False
-            self.features_cls.predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=test_out_path, file_nm=file_nm, ylog=ylog, time_step=time_step)
+            self.features_cls.predict_plot_mtl(model, _dataset_list, save_dir=test_out_path, file_nm=file_nm, ylog=ylog, time_step=time_step)
             self.features_cls.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "2", file_nm=file_nm, ylog=ylog, t_stepsize=time_step, invest_rate=0.8)
             self.features_cls.predict_plot_mtl_cross_section_test_long(model, _dataset_list, save_dir=test_out_path + "3", file_nm=file_nm, ylog=ylog, t_stepsize=time_step, invest_rate=0.6)
 

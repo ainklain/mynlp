@@ -177,7 +177,367 @@ class Performance:
 
         return result_t
 
-    def predict_plot_mtl_cross_section_test(self, model, dataloader_set, save_dir
+    def predict_plot_mtl(self, model, dataloader_set, save_dir
+                         , file_nm='test.png'
+                         , ylog=False
+                         , ls_method='ls_5_20'
+                         , plot_all_features=True):
+        # save_dir = test_out_path; file_nm = 'test_{}.png'.format(0); ylog = False; ls_method = 'ls_5_20'; plot_all_features = True
+
+        c = self.configs
+
+        m_args = ls_method.split('_')
+        if m_args[0] == 'ls':
+            n_tile = int(m_args[1])
+            def_variables = self.define_variables_ntile
+            kw = {'n_tile': n_tile}
+        else:
+            n_tile = -1
+            def_variables = self.define_variables
+            kw = {}
+
+        # dataloader: (features: dict of torch.Tensor, add_infos: dict of np.array)
+        dataloader, features_list, all_assets_list, start_d, end_d = dataloader_set
+
+        t_stepsize = self.configs.k_days // self.configs.sampling_days
+        t_steps = int(np.ceil(len(dataloader[0]) / t_stepsize)) + 1
+
+        # define variables to save values
+        if plot_all_features:
+            model_keys = list(model.predictor.keys())
+            features_for_plot = ['main'] + model_keys
+        else:
+            model_keys = None
+            features_for_plot = ['main']
+
+        ew_dict = dict(bm=self.define_variables(t_steps=t_steps, assets=all_assets_list),
+                       model=def_variables(t_steps=t_steps, assets=all_assets_list, f_keys=model_keys, **kw))
+        mw_dict = dict(bm=self.define_variables(t_steps=t_steps, assets=all_assets_list),
+                       model=def_variables(t_steps=t_steps, assets=all_assets_list, f_keys=model_keys, **kw))
+
+        # nickname
+        bm_ew = ew_dict['bm']
+        bm_mw = mw_dict['bm']
+        model_ew = ew_dict['model']
+        model_mw = mw_dict['model']
+
+        for i, (features, add_info) in enumerate(zip(*dataloader)):
+            # i=0; ein_t, din_t, dout_t, add_info = ie_list[i], od_list[i], td_list[i], add_infos[i]
+            if i % t_stepsize != 0:
+                continue
+            t = i // t_stepsize + 1
+
+            mc = np.array(add_info['mktcap'], dtype=np.float32).squeeze()
+            label_y = np.array(add_info['next_y'])
+
+            assets = np.array(add_info['asset_list'], dtype=np.float32)
+
+            # ############ For BenchMark ############
+
+            bm_ew['y'][t] = np.mean(label_y)
+            bm_mw['y'][t] = np.sum(label_y * mc) / np.sum(mc)
+
+            # cost calculation
+            bm_ew['wgt'].loc[:, 'new'] = 0
+            bm_ew['wgt'].loc[assets, 'new'] = 1. / len(assets)
+            self.calculate_cost(t, bm_ew, assets, label_y)
+
+            bm_mw['wgt'].loc[:, 'new'] = 0
+            bm_mw['wgt'].loc[assets, 'new'] = mc / np.sum(mc)
+            self.calculate_cost(t, bm_mw, assets, label_y)
+
+            # ############ For Model ############
+            # prediction
+            predictions = model.predict_mtl(features)
+            for key in predictions.keys():
+                predictions[key] = tu.np_ify(predictions[key])
+            value_ = dict()
+
+            value_[self.adj_feature] = predictions[self.adj_feature][:, 0, 0]
+            for f_ in features_for_plot:
+                f_for_y = ('y' if f_ == 'main' else f_)
+                if f_ == 'main':
+                    value_['main'] = predictions[self.pred_feature][:, 0, 0]
+                else:
+                    value_[f_] = predictions[f_][:, 0, 0]
+
+                if m_args[0] == 'ls':
+                    # ntile 별 수익률
+                    scale_n = weight_scale(value_[f_], method='each_{}'.format(n_tile))
+                    model_ew[f_for_y + '_each'][t, :] = np.matmul(label_y, scale_n) / np.sum(scale_n, axis=0)
+                    model_mw[f_for_y + '_each'][t, :] = np.matmul(label_y * mc, scale_n) / np.matmul(mc, scale_n)
+                    # or np.sum((label_y * mc).reshape([-1, 1]) * scale, axis=0) / np.sum(mc.reshape(-1, 1) * scale, axis=0)
+
+                    # pf 수익률
+                    scale = weight_scale(value_[f_], method=ls_method)
+                elif m_args[0] == 'l':
+                    scale1 = weight_scale(value_[f_], method=ls_method)
+                    scale = scale1 * weight_scale(value_[self.adj_feature], method=ls_method)
+                elif m_args[0] == 'limit-LS':
+                    pass
+
+                model_ew[f_for_y][t] = np.sum(label_y * scale) / np.sum(scale)
+                model_mw[f_for_y][t] = np.sum(label_y * mc * scale) / np.sum(mc * scale)
+
+                if f_ == 'main':
+                    # cost calculation
+                    model_ew['wgt'].loc[:, 'new'] = 0
+                    model_ew['wgt'].loc[assets, 'new'] = scale / np.sum(scale)
+                    self.calculate_cost(t, model_ew, assets, label_y)
+
+                    model_mw['wgt'].loc[:, 'new'] = 0
+                    model_mw['wgt'].loc[assets, 'new'] = mc * scale / np.sum(mc * scale)
+                    self.calculate_cost(t, model_mw, assets, label_y)
+
+        for f_ in features_for_plot:
+            f_for_y = ('y' if f_ == 'main' else f_)
+            if m_args[0] == 'ls':
+                y_arr = np.concatenate([bm_ew['y'], bm_mw['y']
+                                        , model_ew[f_for_y]
+                                        , model_mw[f_for_y]
+                                        , model_ew[f_for_y + '_each']
+                                        , model_mw[f_for_y + '_each']], axis=-1)
+                data = pd.DataFrame(np.cumprod(1. + y_arr, axis=0)
+                                    , columns=['bm_ew', 'bm_mw', 'model_ew', 'model_mw']
+                                              + ['model_e{}'.format(i+1) for i in range(n_tile)]
+                                              + ['model_m{}'.format(i+1) for i in range(n_tile)])
+                data['model_ls_ew'] = np.cumprod(1. + np.mean(model_ew[f_for_y + '_each'][:, :1], axis=1) - np.mean(model_ew[f_for_y + '_each'][:, -1:], axis=1))
+                data['model_ls_mw'] = np.cumprod(1. + np.mean(model_mw[f_for_y + '_each'][:, :1], axis=1) - np.mean(model_mw[f_for_y + '_each'][:, -1:], axis=1))
+
+            else:
+                y_arr = np.concatenate([bm_ew['y'], bm_mw['y'], model_ew[f_for_y], model_mw[f_for_y]], axis=-1)
+                data = pd.DataFrame(np.cumprod(1. + y_arr, axis=0), columns=['bm_ew', 'bm_mw', 'model_ew', 'model_mw'])
+            data['diff_ew'] = np.cumprod(1. + model_ew[f_for_y] - bm_ew['y'])
+            data['diff_mw'] = np.cumprod(1. + model_mw[f_for_y] - bm_mw['y'])
+
+            if f_ == 'main':
+                data['bm_cost_ew'] = bm_ew['total_cost']
+                data['bm_cost_mw'] = bm_mw['total_cost']
+                data['bm_turnover_ew'] = bm_ew['turnover']
+                data['bm_turnover_mw'] = bm_mw['turnover']
+                data['bm_y_w_cost_ew'] = np.cumprod(1. + bm_ew['y_w_cost'], axis=0)
+                data['bm_y_w_cost_mw'] = np.cumprod(1. + bm_mw['y_w_cost'], axis=0)
+                data['model_cost_ew'] = model_ew['total_cost']
+                data['model_cost_mw'] = model_mw['total_cost']
+                data['model_turnover_ew'] = model_ew['turnover']
+                data['model_turnover_mw'] = model_mw['turnover']
+                data['model_y_w_cost_ew'] = np.cumprod(1. + model_ew['y_w_cost'], axis=0)
+                data['model_y_w_cost_mw'] = np.cumprod(1. + model_mw['y_w_cost'], axis=0)
+                data['diff_w_cost_ew'] = np.cumprod(1. + model_ew['y_w_cost'] - bm_ew['y_w_cost'], axis=0)
+                data['diff_w_cost_mw'] = np.cumprod(1. + model_mw['y_w_cost'] - bm_mw['y_w_cost'], axis=0)
+
+            # ################################ figure 1
+            if m_args[0] == 'ls':
+                # equal fig
+                fig = plt.figure()
+                fig.suptitle('{} ~ {}'.format(start_d, end_d))
+                if f_ == 'main':
+                    grid = plt.GridSpec(ncols=2, nrows=4, figure=fig)
+                    ax1 = fig.add_subplot(grid[0, 0])
+                    ax2 = fig.add_subplot(grid[0, 1])
+                    ax3 = fig.add_subplot(grid[1, 0])
+                    ax4 = fig.add_subplot(grid[1, 1])
+                    ax5 = fig.add_subplot(grid[2, :])
+                    ax6 = fig.add_subplot(grid[3, :])
+                else:
+                    ax1 = fig.add_subplot(221)
+                    ax2 = fig.add_subplot(222)
+                    ax3 = fig.add_subplot(223)
+                    ax4 = fig.add_subplot(224)
+                ax1.plot(data[['bm_ew', 'model_ew', 'model_ls_ew', 'model_e1', 'model_e{}'.format(n_tile)]])
+                box = ax1.get_position()
+                ax1.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax1.legend(['bm_ew', 'model_ew', 'long-short', 'long', 'short'], loc='center left', bbox_to_anchor=(1, 0.5))
+                if ylog:
+                    ax1.set_yscale('log', basey=2)
+                # print max point
+                x_pt1 = np.argmax(data['model_ew'].values)
+                y_pt1 = data['model_ew'].iloc[x_pt1]
+                ax1.annotate("{:.3f}".format(y_pt1), xy=(x_pt1 - 0.5, y_pt1))
+
+                ax2.plot(data[['bm_ew'] + ['model_e{}'.format(i + 1) for i in range(n_tile)]])
+                box = ax2.get_position()
+                ax2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax2.legend(['true_y'] + ['q{}'.format(i + 1) for i in range(n_tile)], loc='center left',
+                           bbox_to_anchor=(1, 0.5))
+                ax2.set_yscale('log', basey=2)
+
+                # value fig
+                ax3.plot(data[['bm_mw', 'model_mw', 'model_ls_mw', 'model_m1', 'model_m{}'.format(n_tile)]])
+                box = ax3.get_position()
+                ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax3.legend(['bm_mw', 'model_mw', 'long-short', 'long', 'short'], loc='center left',
+                           bbox_to_anchor=(1, 0.5))
+                if ylog:
+                    ax3.set_yscale('log', basey=2)
+                # print max point
+                x_pt3 = np.argmax(data['model_mw'].values)
+                y_pt3 = data['model_mw'].iloc[x_pt3]
+                ax3.annotate("{:.3f}".format(y_pt3), xy=(x_pt3 - 0.5, y_pt3))
+
+                ax4.plot(data[['bm_mw'] + ['model_m{}'.format(i + 1) for i in range(n_tile)]])
+                box = ax4.get_position()
+                ax4.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax4.legend(['true_y(mw)'] + ['q{}'.format(i + 1) for i in range(n_tile)], loc='center left',
+                           bbox_to_anchor=(1, 0.5))
+                ax4.set_yscale('log', basey=2)
+
+                if f_ == 'main':
+                    data[['bm_y_w_cost_ew', 'model_y_w_cost_ew', 'bm_y_w_cost_mw', 'model_y_w_cost_mw']].plot(ax=ax5, colormap=cm.Set2)
+                    box = ax5.get_position()
+                    ax5.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                    ax5.legend(['bm_y_w_cost_ew', 'model_y_w_cost_ew', 'bm_y_w_cost_mw', 'model_y_w_cost_mw'], loc='center left', bbox_to_anchor=(1, 0.8))
+                    if ylog:
+                        ax5.set_yscale('log', basey=2)
+
+                    ax5_2 = ax5.twinx()
+                    data[['diff_w_cost_ew', 'diff_w_cost_mw']].plot(ax=ax5_2, colormap=cm.jet)
+                    box = ax5_2.get_position()
+                    ax5_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                    ax5_2.legend(['diff_w_cost_ew', 'diff_w_cost_mw'], loc='center left', bbox_to_anchor=(1, 0.2))
+                    if ylog:
+                        ax5_2.set_yscale('log', basey=2)
+
+                    # print max point
+                    x_pt_ew = np.argmax(data['diff_w_cost_ew'].values)
+                    y_pt_ew = data['diff_w_cost_ew'].iloc[x_pt_ew]
+                    x_pt_mw = np.argmax(data['diff_w_cost_mw'].values)
+                    y_pt_mw = data['diff_w_cost_mw'].iloc[x_pt_mw]
+                    ax5_2.annotate("{:.3f}".format(y_pt_ew), xy=(x_pt_ew - 0.5, y_pt_ew))
+                    ax5_2.annotate("{:.3f}".format(y_pt_mw), xy=(x_pt_mw - 0.5, y_pt_mw))
+
+                    data[['bm_cost_ew', 'bm_cost_mw', 'model_cost_ew', 'model_cost_mw']].plot(ax=ax6, colormap=cm.Set2)
+                    box = ax6.get_position()
+                    ax6.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                    ax6.legend(['bm_cost_ew', 'bm_cost_mw', 'model_cost_ew', 'model_cost_mw'], loc='center left', bbox_to_anchor=(1, 0.3))
+                    if ylog:
+                        ax6.set_yscale('log', basey=2)
+
+                    # ax6_2 = ax6.twinx()
+                    # data[['bm_turnover_ew', 'bm_turnover_mw', 'model_turnover_ew', 'model_turnover_mw']].plot(ax=ax6_2, colormap=cm.jet)
+                    # box = ax6_2.get_position()
+                    # ax6_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                    # ax6_2.legend(['bm_turnover_ew', 'bm_turnover_mw', 'model_turnover_ew', 'model_turnover_mw'], loc='center left', bbox_to_anchor=(1, 0.2))
+                    # if ylog:
+                    #     ax6_2.set_yscale('log', basey=2)
+
+                if file_nm is None:
+                    save_file_name = '{}/{}'.format(save_dir, '_all.png')
+                else:
+                    save_dir_v = os.path.join(save_dir, f_)
+                    os.makedirs(save_dir_v, exist_ok=True)
+                    file_nm_v = file_nm.replace(file_nm[-4:], "_{}{}".format(f_, file_nm[-4:]))
+                    save_file_name = '{}/{}'.format(save_dir_v, file_nm_v)
+
+                fig.savefig(save_file_name)
+                # print("figure saved. (dir: {})".format(save_file_name))
+                plt.close(fig)
+
+            elif m_args[0] == 'l':
+                # equal fig
+                fig = plt.figure()
+                fig.suptitle('{} ~ {}'.format(start_d, end_d))
+                if f_ == 'main':
+                    ax1 = fig.add_subplot(411)
+                    ax2 = fig.add_subplot(412)
+                    ax3 = fig.add_subplot(413)
+                    ax4 = fig.add_subplot(414)
+                else:
+                    ax1 = fig.add_subplot(211)
+                    ax2 = fig.add_subplot(212)
+
+                data[['bm_ew', 'model_ew']].plot(ax=ax1, colormap=cm.Set2)
+                box = ax1.get_position()
+                ax1.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax1.legend(['bm_ew', 'model_ew'], loc='center left', bbox_to_anchor=(1, 0.8))
+                if ylog:
+                    ax1.set_yscale('log', basey=2)
+
+                ax1_2 = ax1.twinx()
+                data[['diff_ew']].plot(ax=ax1_2, colormap=cm.jet)
+                box = ax1_2.get_position()
+                ax1_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax1_2.legend(['diff_ew'], loc='center left', bbox_to_anchor=(1, 0.2))
+                if ylog:
+                    ax1_2.set_yscale('log', basey=2)
+
+                # print max point
+                x_pt1 = np.argmax(data['diff_ew'].values)
+                y_pt1 = data['diff_ew'].iloc[x_pt1]
+                ax1_2.annotate("{:.3f}".format(y_pt1), xy=(x_pt1 - 0.5, y_pt1))
+
+                data[['bm_mw', 'model_mw']].plot(ax=ax2, colormap=cm.Set2)
+                box = ax2.get_position()
+                ax2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax2.legend(['bm_mw', 'model_mw'], loc='center left', bbox_to_anchor=(1, 0.8))
+                if ylog:
+                    ax2.set_yscale('log', basey=2)
+
+                ax2_2 = ax2.twinx()
+                data[['diff_mw']].plot(ax=ax2_2, colormap=cm.jet)
+                box = ax2_2.get_position()
+                ax2_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                ax2_2.legend(['diff_mw'], loc='center left', bbox_to_anchor=(1, 0.2))
+                if ylog:
+                    ax2_2.set_yscale('log', basey=2)
+
+                # print max point
+                x_pt2 = np.argmax(data['diff_mw'].values)
+                y_pt2 = data['diff_mw'].iloc[x_pt2]
+                ax2_2.annotate("{:.3f}".format(y_pt2), xy=(x_pt2 - 0.5, y_pt2))
+
+                if f_ == 'main':
+                    data[['bm_y_w_cost_ew', 'model_y_w_cost_ew', 'bm_y_w_cost_mw', 'model_y_w_cost_mw']].plot(ax=ax3, colormap=cm.Set2)
+                    box = ax3.get_position()
+                    ax3.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                    ax3.legend(['bm_y_w_cost_ew', 'model_y_w_cost_ew', 'bm_y_w_cost_mw', 'model_y_w_cost_mw'], loc='center left', bbox_to_anchor=(1, 0.8))
+                    if ylog:
+                        ax3.set_yscale('log', basey=2)
+
+                    ax3_2 = ax3.twinx()
+                    data[['diff_w_cost_ew', 'diff_w_cost_mw']].plot(ax=ax3_2, colormap=cm.jet)
+                    box = ax3_2.get_position()
+                    ax3_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                    ax3_2.legend(['diff_w_cost_ew', 'diff_w_cost_mw'], loc='center left', bbox_to_anchor=(1, 0.2))
+                    if ylog:
+                        ax3_2.set_yscale('log', basey=2)
+
+                    # print max point
+                    x_pt_ew = np.argmax(data['diff_w_cost_ew'].values)
+                    y_pt_ew = data['diff_w_cost_ew'].iloc[x_pt_ew]
+                    x_pt_mw = np.argmax(data['diff_w_cost_mw'].values)
+                    y_pt_mw = data['diff_w_cost_mw'].iloc[x_pt_mw]
+                    ax3_2.annotate("{:.3f}".format(y_pt_ew), xy=(x_pt_ew - 0.5, y_pt_ew))
+                    ax3_2.annotate("{:.3f}".format(y_pt_mw), xy=(x_pt_mw - 0.5, y_pt_mw))
+
+                    data[['bm_cost_ew', 'bm_cost_mw', 'model_cost_ew', 'model_cost_mw']].plot(ax=ax4, colormap=cm.Set2)
+                    box = ax4.get_position()
+                    ax4.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                    ax4.legend(['bm_cost_ew', 'bm_cost_mw', 'model_cost_ew', 'model_cost_mw'], loc='center left', bbox_to_anchor=(1, 0.5))
+                    if ylog:
+                        ax4.set_yscale('log', basey=2)
+
+                    # ax4_2 = ax4.twinx()
+                    # data[['bm_turnover_ew', 'bm_turnover_mw', 'model_turnover_ew', 'model_turnover_mw']].plot(ax=ax4_2, colormap=cm.jet)
+                    # box = ax4_2.get_position()
+                    # ax4_2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+                    # ax4_2.legend(['bm_turnover_ew', 'bm_turnover_mw', 'model_turnover_ew', 'model_turnover_mw'], loc='center left', bbox_to_anchor=(1, 0.2))
+                    # if ylog:
+                    #     ax4_2.set_yscale('log', basey=2)
+
+                if file_nm is None:
+                    save_file_name = '{}/{}'.format(save_dir, '_all.png')
+                else:
+                    save_dir_v = os.path.join(save_dir, f_)
+                    os.makedirs(save_dir_v, exist_ok=True)
+                    file_nm_v = file_nm.replace(file_nm[-4:], "_{}{}".format(f_, file_nm[-4:]))
+                    save_file_name = '{}/{}'.format(save_dir_v, file_nm_v)
+
+                fig.savefig(save_file_name)
+                # print("figure saved. (dir: {})".format(save_file_name))
+                plt.close(fig)
+
+    def predict_plot_maml(self, model, dataloader_set, save_dir
                                             , file_nm='test.png'
                                             , ylog=False
                                             , ls_method='ls_5_20'

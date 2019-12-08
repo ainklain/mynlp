@@ -3,7 +3,7 @@ import pandas as pd
 import pickle
 import time
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from ts_torch import torch_util_mini as tu
 import numpy as np
 import os
@@ -350,6 +350,7 @@ class DataScheduler:
 
         balancing_list = ['mktcap', 'size_rnk']
         n_loop = np.ceil((end_idx - start_idx - c.k_days) / c.k_days)
+        # for i, d in enumerate(reversed(range(start_idx + c.k_days, end_idx, c.k_days))):
         for i, d in enumerate(range(start_idx + c.k_days, end_idx, c.k_days)):
             support_data = self._fetch_data(d - c.k_days)
             target_data = self._fetch_data(d)
@@ -496,11 +497,17 @@ class DataScheduler:
             return False
 
         spt_list, tgt_list, features_list, importance_wgt, start_date, end_date = _dataset
+        if mode in ['train', 'eval']:
+            sampler = WeightedRandomSampler(importance_wgt, self.configs.n_tasks, replacement=False)
+            dataloader = data_loader_maml(spt_list, tgt_list, sampler=sampler)
+        elif mode in ['test', 'predict']:
+            all_assets_list = []
+            for spt_, tgt_ in zip(spt_list, tgt_list):
+                # spt_, tgt_ = spt_list[0], tgt_list[0]
+                all_assets_list = sorted(list(set(all_assets_list + spt_[-1]['asset_list'] + tgt_[-1]['asset_list'])))
+            dataloader = [spt_list, tgt_list]
 
-        dataloader = data_loader_maml(spt_list, tgt_list)
-
-        # TODO: maml시에 importance_wgt 사용 불가 (현재는 여기서 없어짐)
-        return dataloader, features_list
+        return dataloader, features_list, all_assets_list, start_date, end_date
 
     def train(self, model, optimizer, performer, num_epochs, early_stopping_count=2):
         min_eval_loss = 99999
@@ -636,6 +643,8 @@ class DataScheduler:
 
     def step_epoch_maml(self, ep, model, optimizer, is_train=True):
         # ep=0;is_train = True;
+        c = self.configs
+
         if is_train:
             mode = 'train'
             model.train()
@@ -694,9 +703,8 @@ class DataScheduler:
                 train_losses += loss_each_s[key].mean()
 
             # train_losses.backward()
-            lr_inner = 0.001
             grad = torch.autograd.grad(train_losses, weights_list, retain_graph=True, create_graph=True)
-            fast_weights = list(map(lambda p: p[1] - lr_inner * p[0], zip(grad, weights_list)))
+            fast_weights = list(map(lambda p: p[1] - c.lr_inner * p[0], zip(grad, weights_list)))
 
             with torch.set_grad_enabled(is_train):
                 labels_mtl_t = self.labels_torch(features_list, labels_with_noise_t, add_infos_t, maml=True)
@@ -730,10 +738,35 @@ class DataScheduler:
 
         else:
             mode = 'test'
-            performer_func = performer.predict_plot_mtl_cross_section_test
+            performer_func = performer.predict_plot_mtl
 
         if (ep == 0) or (self.dataloader.get(mode) is None):
             self.dataloader[mode] = self._dataloader('test', is_monthly=is_monthly)
+
+        if self.dataloader[mode] is False:
+            return False
+
+        dataloader_set = self.dataloader[mode]
+        test_out_path = os.path.join(self.data_out_path, '{}/{}'.format(self.base_idx, mode))
+        os.makedirs(test_out_path, exist_ok=True)
+
+        performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}.png'.format(ep)
+                       , ylog=False, ls_method='ls_5_20', plot_all_features=True)
+
+    def test_plot_maml(self, performer, model, ep, is_monthly):
+        # self=ds; ep=0; is_monthly = False
+        model.eval()
+
+        if is_monthly:
+            mode = 'test_monthly'
+            performer_func = performer.predict_plot_monthly
+
+        else:
+            mode = 'test'
+            performer_func = performer.predict_plot_mtl
+
+        if (ep == 0) or (self.dataloader.get(mode) is None):
+            self.dataloader[mode] = self._dataloader_maml('test')
 
         if self.dataloader[mode] is False:
             return False
@@ -785,10 +818,10 @@ class DataScheduler:
             if _dataset_list is False:
                 print('[test] no test data')
                 return False
-            performer.predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=test_out_path, file_nm=file_nm
-                                                          , ylog=ylog, ls_method='ls_5_20', plot_all_features=True)
-            performer.predict_plot_mtl_cross_section_test(model, _dataset_list, save_dir=test_out_path + "2", file_nm=file_nm,
-                                                          ylog=ylog, ls_method='l_60', plot_all_features=True)
+            performer.predict_plot_mtl(model, _dataset_list, save_dir=test_out_path, file_nm=file_nm
+                                       , ylog=ylog, ls_method='ls_5_20', plot_all_features=True)
+            performer.predict_plot_mtl(model, _dataset_list, save_dir=test_out_path + "2", file_nm=file_nm,
+                                       ylog=ylog, ls_method='l_60', plot_all_features=True)
             if _dataset_list_m is not None:
                 performer.predict_plot_monthly(model, _dataset_list_m, save_dir=test_out_path + "_ml", file_nm=file_nm,
                                                               ylog=ylog, ls_method='l_60', plot_all_features=True, rate_=self.configs.app_rate)
@@ -1503,9 +1536,15 @@ def data_loader(enc_in, dec_in, dec_out, add_infos_dict, batch_size=1, shuffle=T
     return DataLoader(asset_dataset, batch_size=batch_size, shuffle=shuffle, pin_memory=True)
 
 # spt_list, tgt_list, features_list, importance_wgt, start_date, end_date = ds._dataset_maml('train')
-def data_loader_maml(spt_dataset, tgt_dataset, shuffle=True):
+def data_loader_maml(spt_dataset, tgt_dataset, sampler):
     asset_dataset = MetaDataset(spt_dataset, tgt_dataset)
-    return DataLoader(asset_dataset, batch_size=1, shuffle=shuffle, pin_memory=False)
+    if sampler is None:
+        dataloader = DataLoader(asset_dataset, batch_size=1, shuffle=False, pin_memory=False)
+    else:
+        dataloader = DataLoader(asset_dataset, batch_size=1, sampler=sampler, pin_memory=False)  # sampler가 있으면 shuffle은 반드시 False
+
+    return dataloader
+
 
 
 def to_device(device, list_to_device):

@@ -472,10 +472,10 @@ class DataScheduler:
             if _dataset_list is False:
                 print('[test] no test data')
                 return False
-            performer.predict_plot_mtl_cross_section_test(model, _dataset_list,  save_dir=test_out_path, file_nm=file_nm
-                                                          , ylog=ylog, ls_method='ls_5_20', plot_all_features=True)
-            performer.predict_plot_mtl_cross_section_test(model, _dataset_list, save_dir=test_out_path + "2", file_nm=file_nm,
-                                                          ylog=ylog, ls_method='l_60', plot_all_features=True)
+            performer.predict_plot_mtl(model, _dataset_list, save_dir=test_out_path, file_nm=file_nm
+                                       , ylog=ylog, ls_method='ls_5_20', plot_all_features=True)
+            performer.predict_plot_mtl(model, _dataset_list, save_dir=test_out_path + "2", file_nm=file_nm,
+                                       ylog=ylog, ls_method='l_60', plot_all_features=True)
             if _dataset_list_m is not None:
                 performer.predict_plot_monthly(model, _dataset_list_m, save_dir=test_out_path + "_ml", file_nm=file_nm,
                                                               ylog=ylog, ls_method='l_60', plot_all_features=True, rate_=self.configs.app_rate)
