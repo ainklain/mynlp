@@ -537,7 +537,7 @@ class Performance:
                 # print("figure saved. (dir: {})".format(save_file_name))
                 plt.close(fig)
 
-    def predict_plot_maml(self, model, dataloader_set, save_dir
+    def predict_plot_maml(self, model, dataloader_set, labels_func, save_dir
                                             , file_nm='test.png'
                                             , ylog=False
                                             , ls_method='ls_5_20'
@@ -582,6 +582,7 @@ class Performance:
         model_mw = mw_dict['model']
 
         for i, (spt_ds, tgt_ds) in enumerate(dataloader):
+            # i=0; spt_ds, tgt_ds = next(iter(dataloader))
             # i=0; ein_t, din_t, dout_t, add_info = ie_list[i], od_list[i], td_list[i], add_infos[i]
             if i % t_stepsize != 0:
                 continue
@@ -595,7 +596,7 @@ class Performance:
             features_t = {'input': features_t['input'].squeeze(0), 'output': features_t['output'].squeeze(0)}
 
             mc = np.array(add_infos_t['mktcap'], dtype=np.float32).squeeze()
-            label_y = np.array(add_infos_t['next_y'])
+            label_y = np.array(add_infos_t['next_y'], dtype=np.float32).squeeze()
 
             assets = np.array(add_infos_t['asset_list'], dtype=np.float32)
 
@@ -615,7 +616,9 @@ class Performance:
 
             # ############ For Model ############
             # prediction
-            predictions = model.fast_predict(features_s, labels_s, features_t)
+            # TODO: maml시에 importance_wgt 사용 불가 (임시로 labels_torch에서 maml 받아서 없앰)  dataloader_maml도 수정해야
+            labels_mtl_s = labels_func(features_list, labels_s, add_infos_s, maml=True)
+            predictions = model.fast_predict(features_s, labels_mtl_s, features_t)
 
             for key in predictions.keys():
                 predictions[key] = tu.np_ify(predictions[key])

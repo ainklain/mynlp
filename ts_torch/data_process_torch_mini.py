@@ -511,7 +511,7 @@ class DataScheduler:
                 dataloader = data_loader_maml(spt_list, tgt_list, sampler=sampler)
             all_assets_list = []
 
-        elif mode in ['test', 'predict']:
+        elif mode in ['test', 'predict', 'test_insample']:
             all_assets_list = []
             for spt_, tgt_ in zip(spt_list, tgt_list):
                 # spt_, tgt_ = spt_list[0], tgt_list[0]
@@ -565,7 +565,8 @@ class DataScheduler:
         for ep in range(num_epochs):
             if ep % 2 == 0:
                 print('[Ep {}] plot'.format(ep))
-                self.test_plot(performer, model, ep, is_monthly=False)
+                self.test_plot_maml(performer, model, ep, is_monthly=False)
+                self.test_plot_maml(performer, model, ep, is_monthly=False, is_insample=True)
 
             print('[Ep {}] model evaluation ...'.format(ep))
             eval_loss = self.step_epoch_maml(ep, model, optimizer, is_train=False)
@@ -584,7 +585,7 @@ class DataScheduler:
             if stop_count >= early_stopping_count:
                 print('[Ep {}] Early Stopped'.format(ep))
                 model.load_from_optim()
-                self.test_plot(performer, model, ep, is_monthly=False)
+                self.test_plot_maml(performer, model, ep, is_monthly=False)
 
                 break
 
@@ -769,20 +770,23 @@ class DataScheduler:
         performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}.png'.format(ep)
                        , ylog=False, ls_method='ls_5_20', plot_all_features=True)
 
-    def test_plot_maml(self, performer, model, ep, is_monthly):
+    def test_plot_maml(self, performer, model, ep, is_monthly, is_insample=False):
         # self=ds; ep=0; is_monthly = False
         model.eval()
 
         if is_monthly:
             mode = 'test_monthly'
             performer_func = performer.predict_plot_monthly
-
+            raise NotImplementedError
         else:
-            mode = 'test'
-            performer_func = performer.predict_plot_mtl
+            if is_insample:
+                mode = 'test_insample'
+            else:
+                mode = 'test'
+            performer_func = performer.predict_plot_maml
 
         if (ep == 0) or (self.dataloader.get(mode) is None):
-            self.dataloader[mode] = self._dataloader_maml('test')
+            self.dataloader[mode] = self._dataloader_maml(mode)
 
         if self.dataloader[mode] is False:
             return False
@@ -791,7 +795,7 @@ class DataScheduler:
         test_out_path = os.path.join(self.data_out_path, '{}/{}'.format(self.base_idx, mode))
         os.makedirs(test_out_path, exist_ok=True)
 
-        performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}.png'.format(ep)
+        performer_func(model, dataloader_set, self.labels_torch, save_dir=test_out_path, file_nm='test_{}.png'.format(ep)
                        , ylog=False, ls_method='ls_5_20', plot_all_features=True)
 
     def labels_torch(self, f_list, labels, add_infos, maml=False):
@@ -1540,6 +1544,8 @@ class MetaDataset(Dataset):
         tgt_addinfos = dict()
         for key in spt_ds[3].keys():
             spt_addinfos[key] = spt_ds[3][key]
+
+        for key in tgt_ds[3].keys():
             tgt_addinfos[key] = tgt_ds[3][key]
 
         spt_data = (spt_features, spt_labels, spt_addinfos)

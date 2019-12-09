@@ -11,7 +11,7 @@ class Config:
         self.delay_days = 1
 
         self.sampling_days = 5          # get data every 'sampling_days' days
-        self.trainset_rate = 0.8
+        self.trainset_rate = 0.5
         self.cost_rate = 0.003
 
         self.train_batch_size = 256
@@ -67,7 +67,7 @@ class Config:
 
         # meta
         self.use_maml = True
-        self.n_tasks = 10
+        self.n_tasks = 20
         self.inner_lr = 1e-2
         self.meta_lr = 1e-3
 
