@@ -25,13 +25,13 @@ configs.pred_feature = pred
 configs.weight_scheme = w_scheme
 configs.balancing_method = balancing_method
 # configs.learning_rate = 1e-4
-configs.f_name = 'kr_{}_{}_{}_{}_h{}_torch_maml_002'.format(k_days, univ_type, balancing_method, pred, head)
+configs.f_name = 'kr_{}_{}_{}_{}_h{}_torch_maml_005'.format(k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100
 configs.eval_steps = 100
 configs.save_steps = 100
 configs.size_encoding = True
 configs.attention_head_size = head
-configs.early_stopping_count = 5
+configs.early_stopping_count = 50
 configs.learning_rate = 5e-4
 configs.update_comment = 'save and load'
 config_str = configs.export()
@@ -39,7 +39,7 @@ config_str = configs.export()
 
 features_cls = FeatureNew(configs)
 ds = DataScheduler(configs, features_cls)
-ds.set_idx(8250)
+ds.set_idx(6500)
 
 os.makedirs(os.path.join(ds.data_out_path), exist_ok=True)
 with open(os.path.join(ds.data_out_path, 'config.txt'), 'w') as f:
@@ -49,7 +49,10 @@ with open(os.path.join(ds.data_out_path, 'config.txt'), 'w') as f:
 model = TSModel(configs, features_cls, weight_scheme=configs.weight_scheme)
 
 performer = Performance(configs)
-optimizer = optim.Adam(model.parameters(), lr=configs.learning_rate)
+if configs.use_maml:
+    optimizer = optim.Adam(model.parameters(), lr=configs.meta_lr)
+else:
+    optimizer = optim.Adam(model.parameters(), lr=configs.learning_rate)
 
 ds.load(model, optimizer)
 
@@ -57,7 +60,10 @@ ds.load(model, optimizer)
 
 while True:
     ds.save(0, model, optimizer)
-    ds.train(model, optimizer, performer, num_epochs=50, early_stopping_count=configs.early_stopping_count)
+    if configs.use_maml:
+        ds.train_maml(model, optimizer, performer, num_epochs=50, early_stopping_count=configs.early_stopping_count)
+    else:
+        ds.train(model, optimizer, performer, num_epochs=50, early_stopping_count=configs.early_stopping_count)
     ds.next()
     if ds.done:
         break

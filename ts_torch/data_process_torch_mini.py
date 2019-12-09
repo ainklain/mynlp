@@ -118,21 +118,22 @@ class DataScheduler:
 
         return start_idx, end_idx, data_params, decaying_factor
 
-    def _fetch_data(self, date_i):
+    def _fetch_data(self, date_i, force_calc=False):
         dg = self.data_generator
         data_path = self.data_path
         key_list = self.configs.key_list
         configs = self.configs
 
         file_nm = os.path.join(self.data_path, '{}.pkl'.format(date_i))
-        if os.path.exists(file_nm):
-            result = pickle.load(open(file_nm, 'rb'))
-        else:
+        if force_calc or not os.path.exists(file_nm):
             result = dg.sample_data(date_i)
             if result is False:
                 return None
 
             pickle.dump(result, open(os.path.join(data_path, '{}.pkl'.format(date_i)), 'wb'))
+
+        else:
+            result = pickle.load(open(file_nm, 'rb'))
 
         features_dict, labels_dict, spot_dict = result
 
@@ -285,7 +286,7 @@ class DataScheduler:
 
         idx_balance = c.key_list.index(c.balancing_key)
 
-        balancing_list = ['mktcap', 'size_rnk', 'importance_wgt']
+        balancing_list = ['mktcap', 'size_rnk', 'importance_wgt']   # TODO: configs로 옮겨야됨
         n_loop = np.ceil((end_idx - start_idx) / c.sampling_days)
         for i, d in enumerate(range(start_idx, end_idx, c.sampling_days)):
             fetch_data = self._fetch_data(d)
@@ -348,7 +349,7 @@ class DataScheduler:
 
         idx_balance = c.key_list.index(c.balancing_key)
 
-        balancing_list = ['mktcap', 'size_rnk']
+        balancing_list = ['mktcap', 'size_rnk']     # TODO: configs로 옮겨야됨
         n_loop = np.ceil((end_idx - start_idx - c.k_days) / c.k_days)
         # for i, d in enumerate(reversed(range(start_idx + c.k_days, end_idx, c.k_days))):
         for i, d in enumerate(range(start_idx + c.k_days, end_idx, c.k_days)):
@@ -395,6 +396,10 @@ class DataScheduler:
             if c.size_encoding:
                 spt_new_dec_in[:] += spt_add_info['size_rnk'].reshape(-1, 1, 1)
                 tgt_new_dec_in[:] += tgt_add_info['size_rnk'].reshape(-1, 1, 1)
+
+            # plot용
+            idx_y = features_list.index(c.label_feature)
+            tgt_add_info['next_y'] = tgt_dout[:, 0, idx_y]
 
             spt_list.append([spt_ein, spt_din, spt_dout, spt_add_info])
             tgt_list.append([tgt_ein, tgt_din, tgt_dout, tgt_add_info])
@@ -498,14 +503,22 @@ class DataScheduler:
 
         spt_list, tgt_list, features_list, importance_wgt, start_date, end_date = _dataset
         if mode in ['train', 'eval']:
-            sampler = WeightedRandomSampler(importance_wgt, self.configs.n_tasks, replacement=False)
-            dataloader = data_loader_maml(spt_list, tgt_list, sampler=sampler)
+            n_tasks = self.configs.n_tasks
+            if n_tasks < 0:
+                dataloader = data_loader_maml(spt_list, tgt_list, sampler=None, shuffle=True)
+            else:
+                sampler = WeightedRandomSampler(importance_wgt, self.configs.n_tasks, replacement=False)
+                dataloader = data_loader_maml(spt_list, tgt_list, sampler=sampler)
+            all_assets_list = []
+
         elif mode in ['test', 'predict']:
             all_assets_list = []
             for spt_, tgt_ in zip(spt_list, tgt_list):
                 # spt_, tgt_ = spt_list[0], tgt_list[0]
                 all_assets_list = sorted(list(set(all_assets_list + spt_[-1]['asset_list'] + tgt_[-1]['asset_list'])))
-            dataloader = [spt_list, tgt_list]
+
+            dataloader = data_loader_maml(spt_list, tgt_list, sampler=None)
+            # dataloader = [spt_list, tgt_list]
 
         return dataloader, features_list, all_assets_list, start_date, end_date
 
@@ -552,6 +565,7 @@ class DataScheduler:
         for ep in range(num_epochs):
             if ep % 2 == 0:
                 print('[Ep {}] plot'.format(ep))
+                self.test_plot(performer, model, ep, is_monthly=False)
 
             print('[Ep {}] model evaluation ...'.format(ep))
             eval_loss = self.step_epoch_maml(ep, model, optimizer, is_train=False)
@@ -559,6 +573,7 @@ class DataScheduler:
                 return False
 
             if eval_loss > min_eval_loss:
+                model.load_from_optim()
                 stop_count += 1
             else:
                 model.save_to_optim()
@@ -569,6 +584,7 @@ class DataScheduler:
             if stop_count >= early_stopping_count:
                 print('[Ep {}] Early Stopped'.format(ep))
                 model.load_from_optim()
+                self.test_plot(performer, model, ep, is_monthly=False)
 
                 break
 
@@ -657,7 +673,7 @@ class DataScheduler:
             if self.dataloader[mode] is False:
                 return False
 
-        taskloader, features_list = self.dataloader[mode]
+        taskloader, features_list, _, _, _ = self.dataloader[mode]
         if ep == 0:
             print('f_list: {}'.format(features_list))
 
@@ -704,7 +720,7 @@ class DataScheduler:
 
             # train_losses.backward()
             grad = torch.autograd.grad(train_losses, weights_list, retain_graph=True, create_graph=True)
-            fast_weights = list(map(lambda p: p[1] - c.lr_inner * p[0], zip(grad, weights_list)))
+            fast_weights = list(map(lambda p: p[1] - c.inner_lr * p[0], zip(grad, weights_list)))
 
             with torch.set_grad_enabled(is_train):
                 labels_mtl_t = self.labels_torch(features_list, labels_with_noise_t, add_infos_t, maml=True)
@@ -1536,14 +1552,15 @@ def data_loader(enc_in, dec_in, dec_out, add_infos_dict, batch_size=1, shuffle=T
     return DataLoader(asset_dataset, batch_size=batch_size, shuffle=shuffle, pin_memory=True)
 
 # spt_list, tgt_list, features_list, importance_wgt, start_date, end_date = ds._dataset_maml('train')
-def data_loader_maml(spt_dataset, tgt_dataset, sampler):
+def data_loader_maml(spt_dataset, tgt_dataset, sampler, shuffle=False):
     asset_dataset = MetaDataset(spt_dataset, tgt_dataset)
     if sampler is None:
-        dataloader = DataLoader(asset_dataset, batch_size=1, shuffle=False, pin_memory=False)
+        dataloader = DataLoader(asset_dataset, batch_size=1, shuffle=shuffle, pin_memory=False)
     else:
         dataloader = DataLoader(asset_dataset, batch_size=1, sampler=sampler, pin_memory=False)  # sampler가 있으면 shuffle은 반드시 False
 
     return dataloader
+
 
 
 

@@ -68,7 +68,8 @@ class Config:
         # meta
         self.use_maml = True
         self.n_tasks = 10
-        self.lr_inner = 1e-4
+        self.inner_lr = 1e-2
+        self.meta_lr = 1e-3
 
 
     @property

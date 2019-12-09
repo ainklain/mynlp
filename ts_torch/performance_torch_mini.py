@@ -559,8 +559,8 @@ class Performance:
         # dataloader: (features: dict of torch.Tensor, add_infos: dict of np.array)
         dataloader, features_list, all_assets_list, start_d, end_d = dataloader_set
 
-        t_stepsize = self.configs.k_days // self.configs.sampling_days
-        t_steps = int(np.ceil(len(dataloader[0]) / t_stepsize)) + 1
+        t_stepsize = 1
+        t_steps = len(dataloader) + 1  # TODO: maml에서는 sampling_freq을 k_days로 고정 적용 (ds._dataset_maml)
 
         # define variables to save values
         if plot_all_features:
@@ -581,16 +581,23 @@ class Performance:
         model_ew = ew_dict['model']
         model_mw = mw_dict['model']
 
-        for i, (features, add_info) in enumerate(zip(*dataloader)):
+        for i, (spt_ds, tgt_ds) in enumerate(dataloader):
             # i=0; ein_t, din_t, dout_t, add_info = ie_list[i], od_list[i], td_list[i], add_infos[i]
             if i % t_stepsize != 0:
                 continue
             t = i // t_stepsize + 1
 
-            mc = np.array(add_info['mktcap'], dtype=np.float32).squeeze()
-            label_y = np.array(add_info['next_y'])
+            features_s, labels_s, add_infos_s = spt_ds
+            features_s = {'input': features_s['input'].squeeze(0), 'output': features_s['output'].squeeze(0)}
+            labels_s = labels_s.squeeze(0)
 
-            assets = np.array(add_info['asset_list'], dtype=np.float32)
+            features_t, labels_t, add_infos_t = tgt_ds
+            features_t = {'input': features_t['input'].squeeze(0), 'output': features_t['output'].squeeze(0)}
+
+            mc = np.array(add_infos_t['mktcap'], dtype=np.float32).squeeze()
+            label_y = np.array(add_infos_t['next_y'])
+
+            assets = np.array(add_infos_t['asset_list'], dtype=np.float32)
 
             # ############ For BenchMark ############
 
@@ -608,7 +615,8 @@ class Performance:
 
             # ############ For Model ############
             # prediction
-            predictions = model.predict_mtl(features)
+            predictions = model.fast_predict(features_s, labels_s, features_t)
+
             for key in predictions.keys():
                 predictions[key] = tu.np_ify(predictions[key])
             value_ = dict()

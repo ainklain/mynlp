@@ -783,6 +783,7 @@ class TSModel(Base):
 
         self.optim_state_dict = self.state_dict()
         self.dropout_train = configs.dropout
+        self.inner_lr = configs.inner_lr
 
     def trainable_params(self):
         # Avoid updating the position encoding
@@ -851,7 +852,7 @@ class TSModel(Base):
         for key in predictor['m'].keys():
             pred_each[key] = predictor['m'][key].compute_graph(predict, weights_list=predictor['w'][key])
 
-        return pred_each, enc_self_attns, dec_self_attns, dec_enc_attns
+        return pred_each #, enc_self_attns, dec_self_attns, dec_enc_attns
 
     def predict_mtl(self, features):
         ret = self.forward(features)
@@ -946,6 +947,21 @@ class TSModel(Base):
             loss_each[key] = loss_each[key] * adj_weight.reshape(loss_shape)  # * adj_importance.reshape(loss_shape) # TODO: maml 시 importance 현재 정의 안됨
 
         return pred_each, loss_each #, enc_self_attns, dec_self_attns, dec_enc_attns,
+
+    def fast_predict(self, features_s, labels_s, features_t):
+        weights_list = self.params2vec(requires_grad_only=True)
+        pred_s, loss_each_s = self.compute_graph_with_loss(features_s, labels_s, weights_list=weights_list)
+
+        train_losses = 0
+        for key in loss_each_s.keys():
+            train_losses += loss_each_s[key].mean()
+
+        grad = torch.autograd.grad(train_losses, weights_list, retain_graph=True, create_graph=True)
+        fast_weights = list(map(lambda p: p[1] - self.inner_lr * p[0], zip(grad, weights_list)))
+
+        pred_t = self.compute_graph(features_t, weights_list=fast_weights)
+
+        return pred_t
 
     def proj_grad(self):
         if self.weighted_model:
