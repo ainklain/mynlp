@@ -617,6 +617,7 @@ class Performance:
             # ############ For Model ############
             # prediction
             # TODO: maml시에 importance_wgt 사용 불가 (임시로 labels_torch에서 maml 받아서 없앰)  dataloader_maml도 수정해야
+            model.eval()
             labels_mtl_s = labels_func(features_list, labels_s, add_infos_s, maml=True)
             predictions = model.fast_predict(features_s, labels_mtl_s, features_t)
 

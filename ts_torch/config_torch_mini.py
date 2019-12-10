@@ -2,7 +2,7 @@
 class Config:
     def __init__(self):
         # time series parameter
-        self.train_set_length = 2500    # previous 10 years data
+        self.train_set_length = 1000    # previous 10 years data
         self.retrain_days = 250         # re-train every year
         self.m_days = 120                # input length of encoding layer (key, value)
         self.k_days = 20                # input and output length of decoding layer (query)
@@ -10,7 +10,7 @@ class Config:
         self.calc_length_label = 120
         self.delay_days = 1
 
-        self.sampling_days = 5          # get data every 'sampling_days' days
+        self.sampling_days = 20          # get data every 'sampling_days' days
         self.trainset_rate = 0.5
         self.cost_rate = 0.003
 
@@ -67,9 +67,9 @@ class Config:
 
         # meta
         self.use_maml = True
-        self.n_tasks = 20
-        self.inner_lr = 1e-2
-        self.meta_lr = 1e-3
+        self.n_tasks = 10
+        self.inner_lr = 1e-2  # 5e-3
+        self.meta_lr = 1e-3  # 1e-4
 
 
     @property

@@ -82,7 +82,7 @@ class DataScheduler:
             end_idx = self.eval_begin_idx - c.k_days
             data_params['balance_class'] = True
             data_params['label_type'] = 'trainable_label'   # trainable: calc_length 반영
-            decaying_factor = 0.995   # 기간별 샘플 중요도
+            decaying_factor = 0.99   # 기간별 샘플 중요도
         elif mode == 'eval':
             start_idx = self.eval_begin_idx + c.m_days
             end_idx = self.test_begin_idx - c.k_days
@@ -362,7 +362,7 @@ class DataScheduler:
             tgt_ein, tgt_din, tgt_dout, tgt_add_info = target_data
             importance_wgt.append(decaying_factor ** (n_loop - i - 1))
 
-            if c.pred_feature.split('_')[0] in c.features_structure['classification'].keys():
+            if mode in ['train','eval'] and c.pred_feature.split('_')[0] in c.features_structure['classification'].keys():
                 spt_idx_bal = self.balanced_index(spt_dout[:, 0, idx_balance])
                 spt_ein, spt_din, spt_dout = spt_ein[spt_idx_bal], spt_din[spt_idx_bal], spt_dout[spt_idx_bal]
 
@@ -462,7 +462,7 @@ class DataScheduler:
             print('dataloader: mode-{} batchsize-{}'.format(mode, batch_size))
             return dataloader, features_list
 
-        elif mode in ['test', 'test_monthly', 'predict']:
+        elif mode in ['test', 'test_monthly', 'predict', 'test_insample']:
             idx_y = features_list.index(c.label_feature)
             all_assets_list = list()
             features = list()
@@ -515,7 +515,7 @@ class DataScheduler:
             all_assets_list = []
             for spt_, tgt_ in zip(spt_list, tgt_list):
                 # spt_, tgt_ = spt_list[0], tgt_list[0]
-                all_assets_list = sorted(list(set(all_assets_list + spt_[-1]['asset_list'] + tgt_[-1]['asset_list'])))
+                all_assets_list = sorted(list(set(all_assets_list + list(spt_[-1]['asset_list']) + list(tgt_[-1]['asset_list']))))
 
             dataloader = data_loader_maml(spt_list, tgt_list, sampler=None)
             # dataloader = [spt_list, tgt_list]
@@ -563,10 +563,12 @@ class DataScheduler:
         stop_count = 0
         print('train start...')
         for ep in range(num_epochs):
-            if ep % 2 == 0:
+            if ep % 5 == 0:
                 print('[Ep {}] plot'.format(ep))
                 self.test_plot_maml(performer, model, ep, is_monthly=False)
                 self.test_plot_maml(performer, model, ep, is_monthly=False, is_insample=True)
+                self.test_plot(performer, model, ep, is_monthly=False)
+                self.test_plot(performer, model, ep, is_monthly=False, is_insample=True)
 
             print('[Ep {}] model evaluation ...'.format(ep))
             eval_loss = self.step_epoch_maml(ep, model, optimizer, is_train=False)
@@ -745,7 +747,7 @@ class DataScheduler:
         print('[Ep {}][{}] total - {:.4f} (n tasks: {})'.format(ep, mode, total_losses, n_task))
         return total_losses
 
-    def test_plot(self, performer, model, ep, is_monthly):
+    def test_plot(self, performer, model, ep, is_monthly, is_insample=False):
         # self=ds; ep=0; is_monthly = False
         model.eval()
 
@@ -754,17 +756,21 @@ class DataScheduler:
             performer_func = performer.predict_plot_monthly
 
         else:
-            mode = 'test'
+            if is_insample:
+                mode = 'test_insample'
+            else:
+                mode = 'test'
+            self_mode = 'single_' + mode
             performer_func = performer.predict_plot_mtl
 
-        if (ep == 0) or (self.dataloader.get(mode) is None):
-            self.dataloader[mode] = self._dataloader('test', is_monthly=is_monthly)
+        if (ep == 0) or (self.dataloader.get(self_mode) is None):
+            self.dataloader[self_mode] = self._dataloader(mode, is_monthly=is_monthly)
 
-        if self.dataloader[mode] is False:
+        if self.dataloader[self_mode] is False:
             return False
 
-        dataloader_set = self.dataloader[mode]
-        test_out_path = os.path.join(self.data_out_path, '{}/{}'.format(self.base_idx, mode))
+        dataloader_set = self.dataloader[self_mode]
+        test_out_path = os.path.join(self.data_out_path, '{}/{}'.format(self.base_idx, self_mode))
         os.makedirs(test_out_path, exist_ok=True)
 
         performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}.png'.format(ep)
