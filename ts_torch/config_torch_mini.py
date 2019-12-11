@@ -23,6 +23,8 @@ class Config:
         self.dropout = 0.5
         self.learning_rate = 1e-4
 
+        self.train_decaying_factor = 0.99
+
         self.use_beta = False
         self.univ_type = 'selected'     # all / selected
         self.balancing_method = 'each'  # each / once / nothing
@@ -67,9 +69,11 @@ class Config:
 
         # meta
         self.use_maml = True
-        self.n_tasks = 10
+        self.n_tasks = 5
         self.inner_lr = 1e-2  # 5e-3
         self.meta_lr = 1e-3  # 1e-4
+
+
 
 
     @property

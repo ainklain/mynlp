@@ -25,15 +25,15 @@ configs.pred_feature = pred
 configs.weight_scheme = w_scheme
 configs.balancing_method = balancing_method
 # configs.learning_rate = 1e-4
-configs.f_name = 'kr_{}_{}_{}_{}_h{}_torch_maml_009'.format(k_days, univ_type, balancing_method, pred, head)
+configs.f_name = 'kr_{}_{}_{}_{}_h{}_torch_maml_012'.format(k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100
 configs.eval_steps = 100
 configs.save_steps = 100
 configs.size_encoding = True
 configs.attention_head_size = head
-configs.early_stopping_count = 20
+configs.early_stopping_count = 50
 configs.learning_rate = 5e-4
-configs.update_comment = 'save and load'
+configs.update_comment = 'task 5'
 config_str = configs.export()
 
 
@@ -61,9 +61,9 @@ ds.load(model, optimizer)
 while True:
     ds.save(0, model, optimizer)
     if configs.use_maml:
-        ds.train_maml(model, optimizer, performer, num_epochs=50, early_stopping_count=configs.early_stopping_count)
+        ds.train_maml(model, optimizer, performer, num_epochs=100, early_stopping_count=configs.early_stopping_count)
     else:
-        ds.train(model, optimizer, performer, num_epochs=50, early_stopping_count=configs.early_stopping_count)
+        ds.train(model, optimizer, performer, num_epochs=100, early_stopping_count=configs.early_stopping_count)
     ds.next()
     if ds.done:
         break
@@ -71,6 +71,7 @@ while True:
     if ds.base_idx >= 10000:
         print('something wrong')
         break
+
 
 
 
@@ -91,8 +92,6 @@ dataloader_t = ds.dataloader_t(recent_month_end)
 # dataloader_t = (dataloader, features_list, all_assets_list, _, _)
 x = performer.extract_portfolio(model, dataloader_t, rate_=configs.app_rate)
 x.to_csv('./out/{}/result_10.csv'.format(configs.f_name))
-
-
 
 
 if os.path.exists(os.path.join(ds.data_out_path, configs.f_name, configs.f_name + '.pkl')):

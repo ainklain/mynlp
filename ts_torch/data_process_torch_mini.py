@@ -82,7 +82,7 @@ class DataScheduler:
             end_idx = self.eval_begin_idx - c.k_days
             data_params['balance_class'] = True
             data_params['label_type'] = 'trainable_label'   # trainable: calc_length 반영
-            decaying_factor = 0.99   # 기간별 샘플 중요도
+            decaying_factor = c.train_decaying_factor   # 기간별 샘플 중요도
         elif mode == 'eval':
             start_idx = self.eval_begin_idx + c.m_days
             end_idx = self.test_begin_idx - c.k_days
@@ -350,9 +350,16 @@ class DataScheduler:
         idx_balance = c.key_list.index(c.balancing_key)
 
         balancing_list = ['mktcap', 'size_rnk']     # TODO: configs로 옮겨야됨
-        n_loop = np.ceil((end_idx - start_idx - c.k_days) / c.k_days)
         # for i, d in enumerate(reversed(range(start_idx + c.k_days, end_idx, c.k_days))):
-        for i, d in enumerate(range(start_idx + c.k_days, end_idx, c.k_days)):
+        # for i, d in enumerate(range(start_idx + c.k_days, end_idx, c.k_days)):
+        if mode in ['test', 'test_insample', 'predict', 'test_monthly']:
+            n_loop = np.ceil((end_idx - start_idx - c.k_days) / c.k_days)
+            tasks = np.arange(start_idx + c.k_days, end_idx, c.k_days)
+        else:
+            n_loop = c.n_tasks+1
+            tasks = np.random.choice(np.arange(start_idx + c.k_days, end_idx, c.k_days), c.n_tasks+1, replace=False)
+
+        for i, d in enumerate(tasks):
             support_data = self._fetch_data(d - c.k_days)
             target_data = self._fetch_data(d)
 
