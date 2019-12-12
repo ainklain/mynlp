@@ -749,41 +749,44 @@ def get_attn_subsequent_mask(seq):
 class TSModel(Base):
     def __init__(self, configs, features_cls, weight_scheme='mw'):
         super(TSModel, self).__init__()
+        c = configs
 
         self.weight_scheme = weight_scheme
 
-        self.input_seq_size = configs.m_days // configs.sampling_days + 1
+        self.input_seq_size = c.m_days // c.sampling_days + 1
         # self.output_seq_size = configs.k_days // configs.sampling_days
         self.output_seq_size = 1
 
-        self.conv_embedding = ConvEmbeddingLayer(n_features=configs.embedding_size, d_model=configs.d_model)
-        self.encoder = Encoder(configs.n_layers, configs.d_k, configs.d_v, configs.d_model, configs.d_ff,
-                               configs.n_heads, configs.max_input_seq_len, configs.dropout, configs.weighted_model)
-        self.decoder = Decoder(configs.n_layers, configs.d_k, configs.d_v, configs.d_model, configs.d_ff,
-                               configs.n_heads, configs.max_output_seq_len, configs.dropout, configs.weighted_model)
-        self.weighted_model = configs.weighted_model
+        self.conv_embedding = ConvEmbeddingLayer(n_features=c.embedding_size, d_model=c.d_model)
+        self.encoder = Encoder(c.n_layers, c.d_k, c.d_v, c.d_model, c.d_ff,
+                               c.n_heads, c.max_input_seq_len, c.dropout, c.weighted_model)
+        self.decoder = Decoder(c.n_layers, c.d_k, c.d_v, c.d_model, c.d_ff,
+                               c.n_heads, c.max_output_seq_len, c.dropout, c.weighted_model)
+        self.weighted_model = c.weighted_model
 
         self.predictor = nn.ModuleDict()
         self.predictor_helper = dict()
-        n_size = 32
-        for key in configs.model_predictor_list:
+        n_size = 64
+        for key in c.model_predictor_list:
             tags = key.split('_')
-            if tags[0] in configs.features_structure['regression'].keys():
+            if tags[0] in c.features_structure['regression'].keys():
                 if key in ['cslogy', 'csstd']:
-                    self.predictor[key] = FeedForward(configs.d_model, n_size, len(configs.features_structure['regression'][key]), out_activation='sigmoid')
+                    self.predictor[key] = FeedForward(c.d_model, n_size, 1, out_activation='sigmoid')
+                    # self.predictor[key] = FeedForward(c.d_model, n_size, len(c.features_structure['regression'][key]), out_activation='sigmoid')
                 else:
-                    self.predictor[key] = FeedForward(configs.d_model, n_size, len(configs.features_structure['regression'][key]))
-            elif tags[0] in configs.features_structure['classification'].keys():
-                self.predictor[key] = FeedForward(configs.d_model, n_size, 2, out_activation='linear')
-                self.predictor_helper[key] = configs.features_structure['regression']['logy'].index(int(tags[1]))
+                    self.predictor[key] = FeedForward(c.d_model, n_size, 1, out_activation='linear')
+                    # self.predictor[key] = FeedForward(c.d_model, n_size, len(c.features_structure['regression'][key]))
+            elif tags[0] in c.features_structure['classification'].keys():
+                self.predictor[key] = FeedForward(c.d_model, n_size, 2, out_activation='linear')
+                self.predictor_helper[key] = c.features_structure['regression']['logy'].index(int(tags[1]))
             # elif tags[0] in configs.features_structure['crosssection'].keys():
             #     self.predictor[key] = FeedForward(64, len(configs.features_structure['regression'][key]))
 
         self.features_cls = features_cls
 
         self.optim_state_dict = self.state_dict()
-        self.dropout_train = configs.dropout
-        self.inner_lr = configs.inner_lr
+        self.dropout_train = c.dropout
+        self.inner_lr = c.inner_lr
 
     def trainable_params(self):
         # Avoid updating the position encoding

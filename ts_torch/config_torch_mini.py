@@ -153,6 +153,20 @@ class Config:
 
             # self.model_predictor_list = ['std']
             self.model_predictor_list = ['nmlogy', 'nmstd', 'pos_20']
+            # self.model_predictor_list = ['nmlogy']
+
+            # self.features_structure = \
+            #     {'regression':
+            #          {'logy': [20],
+            #           'std': [20],
+            #           'stdnew': [20],
+            #           'mdd': [20],
+            #           'fft': [100],
+            #           'nmlogy': [20],
+            #           'nmstd': [20],
+            #           },
+            #      'classification':
+            #          {'pos': [20]}}
 
             self.features_structure = \
                 {'regression':

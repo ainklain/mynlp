@@ -203,9 +203,9 @@ class FeatureNew:
                 label_ = label[n]
         return feature[::self.sampling_days], label_
 
-    def calc_features(self, log_p_arr, transpose=False, debug=False):
+    def calc_features(self, logp_arr, transpose=False, debug=False):
         if transpose:
-            log_p_arr = np.transpose(log_p_arr)
+            logp_arr = np.transpose(logp_arr)
 
         # log_p_arr shape : [n_days per each base_d, codes_list]
         features_dict = dict()
@@ -214,11 +214,11 @@ class FeatureNew:
             if func_nm == 'fft':
                 for n in [3, 6, 100]:
                     nm = '{}_{}'.format(func_nm, n)
-                    features_dict[nm], labels_dict[nm] = self.calc_func(log_p_arr, nm, debug)
+                    features_dict[nm], labels_dict[nm] = self.calc_func(logp_arr, nm, debug)
             else:
                 for n in [5, 10, 20, 60, 120, 250]:
                     nm = '{}_{}'.format(func_nm, n)
-                    features_dict[nm], labels_dict[nm] = self.calc_func(log_p_arr, nm, debug)
+                    features_dict[nm], labels_dict[nm] = self.calc_func(logp_arr, nm, debug)
 
         if transpose:
             for key in features_dict.keys():

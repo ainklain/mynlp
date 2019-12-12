@@ -54,6 +54,9 @@ class DataScheduler:
 
         self.dataloader = {'train': False, 'eval': False}
 
+        if configs.univ_type == 'selected':
+            self.set_idx(5100)
+
     def _make_dir(self, configs):
         # data path for fetching data
         self.data_path = os.path.join(os.getcwd(), 'data', '{}_{}_{}'.format(configs.univ_type, configs.sampling_days, configs.m_days))
@@ -690,7 +693,6 @@ class DataScheduler:
         total_losses = 0
         n_task = 0
         for spt_ds, tgt_ds in taskloader:
-
             #  spt_ds, tgt_ds = next(iter(taskloader))
             features_s, labels_s, add_infos_s = spt_ds
             f_with_noise_s = {'input': features_s['input'].squeeze(0), 'output': features_s['output'].squeeze(0)}
@@ -811,7 +813,7 @@ class DataScheduler:
         performer_func(model, dataloader_set, self.labels_torch, save_dir=test_out_path, file_nm='test_{}.png'.format(ep)
                        , ylog=False, ls_method='ls_5_20', plot_all_features=True)
 
-    def labels_torch(self, f_list, labels, add_infos, maml=False):
+    def labels_torch_multi(self, f_list, labels, add_infos, maml=False):
         c = self.configs
         labels_mtl = dict()
         for cls in c.features_structure.keys():
@@ -823,6 +825,28 @@ class DataScheduler:
                         labels_mtl[f_nm] = (labels[:, :, f_list.index(f_nm)] > 0).long()
                 else:
                     labels_mtl[key] = torch.stack([labels[:, :, f_list.index("{}_{}".format(key, n))] for n in n_arr], axis=-1)
+
+        labels_mtl['size_rnk'] = add_infos['size_rnk'].reshape(-1, 1, 1)
+        if not maml:
+            labels_mtl['importance_wgt'] = add_infos['importance_wgt'].reshape(-1, 1, 1)
+
+        return labels_mtl
+
+    def labels_torch(self, f_list, labels, add_infos, maml=False):
+        # 카테고리별 대표값만
+        c = self.configs
+        labels_mtl = dict()
+        for cls in c.features_structure.keys():
+            for key in c.features_structure[cls].keys():
+                if key == 'fft':
+                    n = c.features_structure[cls][key][0]
+                else:
+                    n = c.k_days
+                if cls == 'classification':    # classification
+                    f_nm = '{}_{}'.format(key, n)
+                    labels_mtl[f_nm] = (labels[:, :, f_list.index(f_nm)] > 0).long()
+                else:
+                    labels_mtl[key] = labels[:, :, f_list.index("{}_{}".format(key, n))].unsqueeze(-1)
 
         labels_mtl['size_rnk'] = add_infos['size_rnk'].reshape(-1, 1, 1)
         if not maml:
