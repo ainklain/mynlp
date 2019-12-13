@@ -140,7 +140,7 @@ def preprocessing(arr, image_size=64, to_dataloader=True, balancing=True, batch_
         return (d, l)
 
 
-def make_dataloader(arr_y, split_r=[0.6, 0.8], batch_size=32, classification=True):
+def make_dataloader(arr_y, split_r=[0.4, 0.8], batch_size=32, classification=True):
     # arr_y = np.array(data_df['kospi'], dtype=np.float32);split_r=[0.6, 0.8]; batch_size=32
     arr_logp = np.log(np.cumprod(1 + arr_y) / (1 + arr_y[0]))
 
@@ -164,7 +164,7 @@ def arr_to_dataset_ntasks(log_arr, sampling_freq=20):
 
     arr_list, label_list = [], []
     for i in range(m_days, len(log_arr) - (k_days_adj + 1), sampling_freq):
-        arr_list.append(log_arr[(i - m_days):(i + 1)])
+        arr_list.append(log_arr[(i - m_days):(i + 1)] - log_arr[i-m_days])
         label_list.append(log_arr[(i + delay_days):][k_days] - log_arr[(i + delay_days):][0])
     return arr_list, label_list
 
@@ -211,10 +211,11 @@ def preprocessing_ntasks(arr, image_size=64):
 
     figs = torch.stack([transformer(torch.from_numpy(fig)) for fig in figs]).numpy()
 
-    n_spt = 24  # n_spt * sampling_freq = n_days for support
+    n_spt = 48  # n_spt * sampling_freq = n_days for support
 
     k_shot = 5
     d_spt_list, l_spt_list, d_qry_list, l_qry_list = [], [], [], []
+    y_qry_list = []
     for i in range(n_spt, len(figs)):
         selected = label_class[(i - n_spt):i]
         idx = np.arange(len(selected))
@@ -228,13 +229,15 @@ def preprocessing_ntasks(arr, image_size=64):
         l_spt_list.append(label_class[(i - n_spt):i][idx_balanced])
         d_qry_list.append(figs[i:(i+1)])
         l_qry_list.append(label_class[i:(i+1)])
+        y_qry_list.append(label_arr[i:(i+1)])
 
     spt_x = torch.from_numpy(np.stack(d_spt_list))  # transform to torch tensors
     spt_y = torch.from_numpy(np.stack(l_spt_list))
     qry_x = torch.from_numpy(np.stack(d_qry_list))  # transform to torch tensors
     qry_y = torch.from_numpy(np.stack(l_qry_list))
+    qry_logy = torch.from_numpy(np.stack(y_qry_list))
 
-    return (spt_x, spt_y, qry_x, qry_y)
+    return (spt_x, spt_y, qry_x, qry_y, qry_logy)
 
 
 def make_dataloader_ntasks(arr_y, split_r=[0.6, 0.8]):
@@ -252,6 +255,22 @@ def make_dataloader_ntasks(arr_y, split_r=[0.6, 0.8]):
 
     return dataset_train, dataset_valid, dataset_test
 
+
+def make_dataloader_ntasks2(arr_y, split_r=[0.5]):
+    # test는 차트용, 전체데이터를 train, valid로 나눔
+    # arr_y = np.array(data_df['kospi'], dtype=np.float32);split_r=[0.6, 0.8]; batch_size=32
+    arr_logp = np.log(np.cumprod(1 + arr_y) / (1 + arr_y[0]))
+
+    train_arr = arr_logp[:int(len(arr_logp) * split_r[0])]
+    valid_arr = arr_logp[int(len(arr_logp) * split_r[0]):]
+    test_arr = arr_logp[:]
+
+    image_size = 64
+    dataset_train = preprocessing_ntasks(train_arr, image_size=image_size)
+    dataset_valid = preprocessing_ntasks(valid_arr, image_size=image_size)
+    dataset_test = preprocessing_ntasks(test_arr, image_size=image_size)
+
+    return dataset_train, dataset_valid, dataset_test
 
 
 def np_to_tensor(list_of_numpy_objs):
@@ -496,6 +515,42 @@ def train_maml(model, criterion, optimizer, scheduler, dataloaders, dataset_size
 
     return model
 
+
+def plot_model(model, dataloader_test, criterion, lr_inner=0.01):
+
+    x_spt, y_spt, x_qry, y_qry = dataloader_test
+    result1, result2 = [], []
+    pred1, pred2 = [], []
+    for i in range(len(x_spt)):
+        x_spt_i, y_spt_i, x_qry_i, y_qry_i = x_spt[i], y_spt[i], x_qry[i], y_qry[i]
+        device = 'cpu'
+        model.to(device)
+        inputs_spt = x_spt_i.to(device)
+        labels_spt = y_spt_i.long().to(device)
+        inputs_qry = x_qry_i.to(device)
+        labels_qry = y_qry_i.long().to(device)
+
+        # # 매개변수 경사도를 0으로 설정
+        # optimizer.zero_grad()
+
+        outputs_spt = model.forward(inputs_spt)
+
+        # before train
+        # 0보다 크면 0, 작으면 1
+        outputs_qry = model.forward(inputs_qry)
+        _, pred_before = torch.max(outputs_qry, 1)
+        pred1.append(pred_before[0])
+        result1.append()
+
+        _, preds = torch.max(outputs_spt, 1)
+        train_loss = criterion(outputs_spt, labels_spt)
+        # Step 6
+        grad = torch.autograd.grad(train_loss, model.parameters(), retain_graph=True, create_graph=True)
+
+        fast_weights = list(map(lambda p: p[1] - lr_inner * p[0], zip(grad, model.parameters())))
+
+    pass
+
 # many tasks
 def train_maml2(model, criterion, optimizer, scheduler, dataloaders, lr_inner=0.01, num_epochs=25):
     # num_epochs=25;phase='train';lr_inner=0.01
@@ -507,6 +562,11 @@ def train_maml2(model, criterion, optimizer, scheduler, dataloaders, lr_inner=0.
     for epoch in range(num_epochs):
         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
         print('-' * 10)
+
+        if epoch % 2 == 0:
+            model.eval()
+            plot_model(model)
+            dataloader_test = dataloaders['test']
 
         # 각 에폭(epoch)은 학습 단계와 검증 단계를 갖습니다.
         for phase in ['train', 'valid']:
@@ -784,7 +844,7 @@ def main_maml2():
         output_size = 1
 
     # make dataloader
-    dl_train, dl_valid, dl_test = make_dataloader_ntasks(arr_y)
+    dl_train, dl_valid, dl_test = make_dataloader_ntasks2(arr_y)
     dataloaders = {'train': dl_train, 'valid': dl_valid, 'test': dl_test}
 
 
