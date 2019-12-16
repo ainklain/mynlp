@@ -215,7 +215,7 @@ def preprocessing_ntasks(arr, image_size=64):
 
     k_shot = 5
     d_spt_list, l_spt_list, d_qry_list, l_qry_list = [], [], [], []
-    y_qry_list = []
+    y_spt_list, y_qry_list = []
     for i in range(n_spt, len(figs)):
         selected = label_class[(i - n_spt):i]
         idx = np.arange(len(selected))
@@ -229,15 +229,17 @@ def preprocessing_ntasks(arr, image_size=64):
         l_spt_list.append(label_class[(i - n_spt):i][idx_balanced])
         d_qry_list.append(figs[i:(i+1)])
         l_qry_list.append(label_class[i:(i+1)])
+        y_spt_list.append(label_arr[(i - n_spt):i][idx_balanced])
         y_qry_list.append(label_arr[i:(i+1)])
 
     spt_x = torch.from_numpy(np.stack(d_spt_list))  # transform to torch tensors
     spt_y = torch.from_numpy(np.stack(l_spt_list))
     qry_x = torch.from_numpy(np.stack(d_qry_list))  # transform to torch tensors
     qry_y = torch.from_numpy(np.stack(l_qry_list))
+    spt_logy = torch.from_numpy(np.stack(y_spt_list))
     qry_logy = torch.from_numpy(np.stack(y_qry_list))
 
-    return (spt_x, spt_y, qry_x, qry_y, qry_logy)
+    return (spt_x, spt_y, qry_x, qry_y, spt_logy, qry_logy)
 
 
 def make_dataloader_ntasks(arr_y, split_r=[0.6, 0.8]):
@@ -516,40 +518,74 @@ def train_maml(model, criterion, optimizer, scheduler, dataloaders, dataset_size
     return model
 
 
-def plot_model(model, dataloader_test, criterion, lr_inner=0.01):
+def plot_model(model, dataloader_test, criterion, ep, lr_inner=0.01):
 
-    x_spt, y_spt, x_qry, y_qry = dataloader_test
+    x_spt, y_spt, x_qry, y_qry, spt_logy, logy_qry = dataloader_test
     result1, result2 = [], []
     pred1, pred2 = [], []
+    acc1, acc2 = [], []
+
+    device = 'cuda:0'
+    model.to(device)
+    s_t = time.time()
     for i in range(len(x_spt)):
-        x_spt_i, y_spt_i, x_qry_i, y_qry_i = x_spt[i], y_spt[i], x_qry[i], y_qry[i]
-        device = 'cpu'
-        model.to(device)
-        inputs_spt = x_spt_i.to(device)
-        labels_spt = y_spt_i.long().to(device)
-        inputs_qry = x_qry_i.to(device)
-        labels_qry = y_qry_i.long().to(device)
+        x_spt_i, y_spt_i, x_qry_i, y_qry_i, spt_logy_i, logy_qry_i = x_spt[i], y_spt[i], x_qry[i], y_qry[i], spt_logy[i], logy_qry[i]
+
+        x_spt_i = x_spt_i.to(device)
+        y_spt_i = y_spt_i.long().to(device)
+        x_qry_i = x_qry_i.to(device)
+        y_qry_i = y_qry_i.long().to(device)
+
+        logy_qry_i = logy_qry_i.cpu()
 
         # # 매개변수 경사도를 0으로 설정
         # optimizer.zero_grad()
 
-        outputs_spt = model.forward(inputs_spt)
+        with torch.no_grad():
+            # before train
+            # 0보다 크면 0, 작으면 1
+            out_qry_i_before = model.forward(x_qry_i)
+            _, pred_before = torch.max(out_qry_i_before.cpu(), 1)
+            pred1.append(pred_before.numpy()[0])
+            acc1.append((pred_before == y_qry_i.cpu()).numpy()[0])
+            result1.append(int(not (pred1[-1])) * logy_qry_i.numpy()[0])
+            # result1.append(int(not(pred1[-1])) * logy_qry_i.numpy()[0] + int(pred1[-1]) * logy_qry_i.numpy()[0])
 
-        # before train
-        # 0보다 크면 0, 작으면 1
-        outputs_qry = model.forward(inputs_qry)
-        _, pred_before = torch.max(outputs_qry, 1)
-        pred1.append(pred_before[0])
-        result1.append()
+        outputs_spt_i = model.forward(x_spt_i)
 
-        _, preds = torch.max(outputs_spt, 1)
-        train_loss = criterion(outputs_spt, labels_spt)
+        _, preds = torch.max(outputs_spt_i, 1)
+        train_loss = criterion(outputs_spt_i, y_spt_i)
         # Step 6
         grad = torch.autograd.grad(train_loss, model.parameters(), retain_graph=True, create_graph=True)
 
         fast_weights = list(map(lambda p: p[1] - lr_inner * p[0], zip(grad, model.parameters())))
 
-    pass
+        with torch.no_grad():
+            out_qry_i_after = model.forward(x_qry_i, fast_weights)
+            _, pred_after = torch.max(out_qry_i_after.cpu(), 1)
+            pred2.append(pred_after.numpy()[0])
+            acc2.append((pred_after == y_qry_i.cpu()).numpy()[0])
+            result2.append(int(not(pred2[-1])) * logy_qry_i.numpy()[0])
+            # result2.append(int(not(pred2[-1])) * logy_qry_i.numpy()[0] + int(pred2[-1]) * logy_qry_i.numpy()[0])
+
+    e_t = time.time()
+    print("{} {} sec".format(i, e_t - s_t))
+
+    print("acc1: {}, acc2: {}".format(np.sum(acc1) / len(acc1), np.sum(acc2) / len(acc2)))
+    result_arr1 = np.array(result1, dtype=np.float32)
+    result_arr2 = np.array(result2, dtype=np.float32)
+    result_plot1 = np.cumsum(result_arr1) - result_arr1[0]
+    result_plot2 = np.cumsum(result_arr2) - result_arr2[0]
+    result_bm = np.cumsum(logy_qry.squeeze()) - logy_qry.squeeze()[0]
+
+    fig = plt.figure()
+    plt.plot(np.arange(len(result_bm)), result_bm, 'b')
+    plt.plot(np.arange(len(result_bm)), result_plot1, 'k')
+    plt.plot(np.arange(len(result_bm)), result_plot2, 'r')
+    fig.legend(['bm', 'before', 'after'])
+    fig.savefig('./out/maml/{}.png'.format(ep))
+    plt.close(fig)
+
 
 # many tasks
 def train_maml2(model, criterion, optimizer, scheduler, dataloaders, lr_inner=0.01, num_epochs=25):
@@ -558,15 +594,15 @@ def train_maml2(model, criterion, optimizer, scheduler, dataloaders, lr_inner=0.
 
     best_model_wts = copy.deepcopy(model.state_dict())
     best_acc = 0.0
-
+    min_eval_loss = 9999
     for epoch in range(num_epochs):
         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
         print('-' * 10)
 
-        if epoch % 2 == 0:
+        if epoch % 20 == 0:
             model.eval()
-            plot_model(model)
             dataloader_test = dataloaders['test']
+            plot_model(model, dataloader_test, criterion, ep=epoch, lr_inner=lr_inner)
 
         # 각 에폭(epoch)은 학습 단계와 검증 단계를 갖습니다.
         for phase in ['train', 'valid']:
@@ -579,36 +615,44 @@ def train_maml2(model, criterion, optimizer, scheduler, dataloaders, lr_inner=0.
             running_loss = 0.0
             running_corrects = 0
 
-            n_tasks = 20
-            tasks_idxs = np.random.choice(len(dataloaders), n_tasks, replace=True)
-            task_losses = None
+            x_spt, y_spt, x_qry, y_qry, logy_spt, logy_qry = dataloaders[phase]
 
-            x_spt, y_spt, x_qry, y_qry = dataloaders[phase]
+            if phase == 'train':
+                n_tasks = 20
+                tasks_idxs = np.random.choice(len(x_spt), n_tasks, replace=True)
+            else:
+                n_tasks = 100
+                tasks_idxs = np.arange(n_tasks)
+
+            task_losses = None
             for i, task_i in enumerate(tasks_idxs):
-                x_spt_i, y_spt_i, x_qry_i, y_qry_i = x_spt[task_i], y_spt[task_i], x_qry[task_i], y_qry[task_i]
+                # print(i)
+                x_spt_i, y_spt_i, x_qry_i, y_qry_i, logy_spt_i, logy_qry_i = x_spt[task_i], y_spt[task_i], x_qry[task_i], y_qry[task_i], logy_spt[task_i], logy_qry[task_i]
                 # print('after balancing: {}'.format(torch.sum(labels_balanced, axis=0)))
-                inputs_spt = x_spt_i.to(device)
-                labels_spt = y_spt_i.long().to(device)
-                inputs_qry = x_qry_i.to(device)
-                labels_qry = y_qry_i.long().to(device)
+                x_spt_i = x_spt_i.to(device)
+                y_spt_i = y_spt_i.long().to(device)
+                logy_spt_i = logy_spt_i.cpu()
+                x_qry_i = x_qry_i.to(device)
+                y_qry_i = y_qry_i.long().to(device)
+                logy_qry_i = logy_qry_i.cpu()
 
                 # # 매개변수 경사도를 0으로 설정
                 # optimizer.zero_grad()
 
                 # 순전파
                 # 학습 시에만 연산 기록을 추적
-                outputs_spt = model.forward(inputs_spt)
+                outputs_spt = model.forward(x_spt_i)
                 # outputs = F.softmax(outputs)
                 _, preds = torch.max(outputs_spt, 1)
-                train_loss = criterion(outputs_spt, labels_spt)
+                train_loss = criterion(outputs_spt, y_spt_i) * (1 + logy_qry_i).to(device)
                 # Step 6
                 grad = torch.autograd.grad(train_loss, model.parameters(), retain_graph=True, create_graph=True)
 
                 fast_weights = list(map(lambda p: p[1] - lr_inner * p[0], zip(grad, model.parameters())))
 
                 with torch.set_grad_enabled(phase == 'train'):
-                    outputs_qry = model.forward(inputs_qry, fast_weights)  # run forward pass to initialize weights
-                    test_loss = criterion(outputs_qry, labels_qry)
+                    outputs_qry = model.forward(x_qry_i, fast_weights)  # run forward pass to initialize weights
+                    test_loss = criterion(outputs_qry, y_qry_i)
                     if task_losses is None:
                         task_losses = test_loss
                     else:
@@ -616,9 +660,9 @@ def train_maml2(model, criterion, optimizer, scheduler, dataloaders, lr_inner=0.
 
                 with torch.no_grad():
                     # 통계
-                    running_loss += test_loss.item() * inputs_qry.size(0)
+                    running_loss += test_loss.item() * x_qry_i.size(0)
                     # running_corrects += torch.sum(preds == labels.data)
-                    running_corrects += torch.sum(torch.max(outputs_qry, 1)[1] == labels_qry.data)
+                    running_corrects += torch.sum(torch.max(outputs_qry, 1)[1] == y_qry_i.data)
 
             # 학습 단계인 경우 역전파 + 최적화
             if phase == 'train':
@@ -632,6 +676,12 @@ def train_maml2(model, criterion, optimizer, scheduler, dataloaders, lr_inner=0.
 
             print('{} Loss: {:.4f} Acc: {:.4f}'.format(
                 phase, epoch_loss, epoch_acc))
+
+            if phase == 'eval':
+                if epoch_loss < min_eval_loss:
+                    best_model_wts = copy.deepcopy(model.state_dict())
+                else:
+                    model.load_state_dict(best_model_wts)
 
             # 모델을 깊은 복사(deep copy)함
             if phase == 'valid' and epoch_acc > best_acc:
@@ -834,8 +884,8 @@ def main_maml2():
     # get dataset
     data_df = prepare_dataset()
 
-    # arr_y = np.array(data_df['mkt_rf'], dtype=np.float32)
-    arr_y = np.array(data_df['mom'], dtype=np.float32)
+    arr_y = np.array(data_df['mkt_rf'], dtype=np.float32)
+    # arr_y = np.array(data_df['mom'], dtype=np.float32)
 
     classification = True
     if classification:
@@ -851,7 +901,7 @@ def main_maml2():
     model = ImageModel(output_size, base_model='resnet50')
     model = model.to(device)
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(reduce=False)
 
     # 이전과는 다르게 마지막 계층의 매개변수들만 최적화되는지 관찰
     optimizer = optim.Adam(model.parameters(), lr=0.001)
@@ -859,6 +909,6 @@ def main_maml2():
     # 7 에폭마다 0.1씩 학습율 감소
     scheduler = lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
     model_conv = train_maml2(model, criterion, optimizer, scheduler,
-                             dataloaders, lr_inner=0.01, num_epochs=100)
+                             dataloaders, lr_inner=0.01, num_epochs=1000)
 
 
