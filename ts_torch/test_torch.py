@@ -215,7 +215,7 @@ def preprocessing_ntasks(arr, image_size=64):
 
     k_shot = 5
     d_spt_list, l_spt_list, d_qry_list, l_qry_list = [], [], [], []
-    y_spt_list, y_qry_list = []
+    y_spt_list, y_qry_list = [], []
     for i in range(n_spt, len(figs)):
         selected = label_class[(i - n_spt):i]
         idx = np.arange(len(selected))
@@ -529,13 +529,14 @@ def plot_model(model, dataloader_test, criterion, ep, lr_inner=0.01):
     model.to(device)
     s_t = time.time()
     for i in range(len(x_spt)):
-        x_spt_i, y_spt_i, x_qry_i, y_qry_i, spt_logy_i, logy_qry_i = x_spt[i], y_spt[i], x_qry[i], y_qry[i], spt_logy[i], logy_qry[i]
+        x_spt_i, y_spt_i, x_qry_i, y_qry_i, logy_spt_i, logy_qry_i = x_spt[i], y_spt[i], x_qry[i], y_qry[i], spt_logy[i], logy_qry[i]
 
         x_spt_i = x_spt_i.to(device)
         y_spt_i = y_spt_i.long().to(device)
         x_qry_i = x_qry_i.to(device)
         y_qry_i = y_qry_i.long().to(device)
 
+        logy_spt_i = logy_spt_i.to(device)
         logy_qry_i = logy_qry_i.cpu()
 
         # # 매개변수 경사도를 0으로 설정
@@ -554,7 +555,8 @@ def plot_model(model, dataloader_test, criterion, ep, lr_inner=0.01):
         outputs_spt_i = model.forward(x_spt_i)
 
         _, preds = torch.max(outputs_spt_i, 1)
-        train_loss = criterion(outputs_spt_i, y_spt_i)
+        train_loss = criterion(outputs_spt_i, y_spt_i) * torch.exp(logy_spt_i)
+        train_loss = torch.mean(train_loss)
         # Step 6
         grad = torch.autograd.grad(train_loss, model.parameters(), retain_graph=True, create_graph=True)
 
@@ -631,10 +633,10 @@ def train_maml2(model, criterion, optimizer, scheduler, dataloaders, lr_inner=0.
                 # print('after balancing: {}'.format(torch.sum(labels_balanced, axis=0)))
                 x_spt_i = x_spt_i.to(device)
                 y_spt_i = y_spt_i.long().to(device)
-                logy_spt_i = logy_spt_i.cpu()
+                logy_spt_i = logy_spt_i.to(device)
                 x_qry_i = x_qry_i.to(device)
                 y_qry_i = y_qry_i.long().to(device)
-                logy_qry_i = logy_qry_i.cpu()
+                logy_qry_i = logy_qry_i.to(device)
 
                 # # 매개변수 경사도를 0으로 설정
                 # optimizer.zero_grad()
@@ -644,7 +646,8 @@ def train_maml2(model, criterion, optimizer, scheduler, dataloaders, lr_inner=0.
                 outputs_spt = model.forward(x_spt_i)
                 # outputs = F.softmax(outputs)
                 _, preds = torch.max(outputs_spt, 1)
-                train_loss = criterion(outputs_spt, y_spt_i) * (1 + logy_qry_i).to(device)
+                train_loss = criterion(outputs_spt, y_spt_i) * torch.exp(logy_spt_i)
+                train_loss = torch.mean(train_loss)
                 # Step 6
                 grad = torch.autograd.grad(train_loss, model.parameters(), retain_graph=True, create_graph=True)
 
@@ -652,7 +655,7 @@ def train_maml2(model, criterion, optimizer, scheduler, dataloaders, lr_inner=0.
 
                 with torch.set_grad_enabled(phase == 'train'):
                     outputs_qry = model.forward(x_qry_i, fast_weights)  # run forward pass to initialize weights
-                    test_loss = criterion(outputs_qry, y_qry_i)
+                    test_loss = criterion(outputs_qry, y_qry_i) * torch.exp(logy_qry_i)
                     if task_losses is None:
                         task_losses = test_loss
                     else:
