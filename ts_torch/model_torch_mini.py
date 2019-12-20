@@ -117,6 +117,7 @@ class Conv1d(nn.Conv1d, Base):
         return F.conv1d(inputs, weight=weights_list[0], bias=weights_list[1], stride=self.stride, padding=self.padding,
                         dilation=self.dilation, groups=self.groups)
 
+
 class Linear(Base):
     def __init__(self, in_features, out_features, bias=True):
         super(Linear, self).__init__()
@@ -221,6 +222,7 @@ class PosEncoding(Base):
     #     input_pos = tensor([list(range(1, int(len)+1)) + [0]*int(max_len-len) for len in input_len])
     #
     #     return F.embedding(input_pos, weight=weights_list[0])
+
 
 # ####################### Sublayers ##########################
 class _MultiHeadAttention(Base):

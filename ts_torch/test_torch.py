@@ -19,20 +19,26 @@ from torchsummary import summary
 
 
 # define device
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+class Configs:
+    def __init__(self):
+        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        self.image_size = 64
 
+        self.m_days = 1000           # 이걸 input_length로 정정예정
+        self.lookback_period = 500  # class balance를 위해 보는 기간, 이걸 m_days로 정정예정
+        self.k_days = 5
 
-# dataset example
-def ex_dataloader():
-    my_x = [np.array([[1.0, 2], [3, 4]]), np.array([[5., 6], [7, 8]])]  # a list of numpy arrays
-    my_y = [np.array([4.]), np.array([2.])]  # another list of numpy arrays (targets)
+        self.downsampling_size = 5
 
-    tensor_x = torch.stack([torch.Tensor(i) for i in my_x])  # transform to torch tensors
-    tensor_y = torch.stack([torch.Tensor(i) for i in my_y])
+        self.k_shot = 20
+        self.n_tasks = 50
+        self.lr_inner = 0.01
+        self.lr_meta = 0.001
+        self.num_epochs = 200
+        self.test_period = 60  # test 적용기간
 
-    my_dataset = TensorDataset(tensor_x, tensor_y)  # create your datset
-    my_dataloader = DataLoader(my_dataset)  # create your dataloader
-
+        self.early_stopping = 10
+        self.print_step = 10
 
 def prepare_dataset():
     data_path = './data/data_for_metarl.csv'
@@ -48,6 +54,7 @@ def minmax_scaler(arr, axis=0):
 
 def arr_to_dataset_ntasks(log_arr, m_days, k_days=5):
     delay_days = 1
+
     k_days_adj = k_days + delay_days
     sampling_days = k_days
 
@@ -56,6 +63,26 @@ def arr_to_dataset_ntasks(log_arr, m_days, k_days=5):
         arr_list.append(log_arr[(i - m_days):(i + 1)] - log_arr[i-m_days])
         label_list.append(log_arr[(i + delay_days):][k_days] - log_arr[(i + delay_days):][0])
     return arr_list, label_list
+
+
+def arr_to_dataset_ntasks2(log_arr, m_days, k_days=5):
+    delay_days = 1
+    k_days_adj = k_days + delay_days
+    sampling_days = k_days
+
+    log_arr_spt, log_arr_qry = log_arr[:(-k_days_adj)], log_arr[-(k_days_adj+m_days+1):]  # QRY LABEL 분리
+
+    assert len(log_arr_spt) > m_days + k_days_adj + 1
+    assert len(log_arr_qry) == m_days + k_days_adj + 1
+
+    arr_list_spt, label_list_spt, arr_list_qry, label_list_qry = [], [], [], []
+    for i in range(m_days, len(log_arr_spt) - k_days_adj, sampling_days):
+        arr_list_spt.append(log_arr[(i - m_days):(i + 1)] - log_arr[i-m_days])
+        label_list_spt.append(log_arr[(i + delay_days):][k_days] - log_arr[(i + delay_days):][0])
+
+    arr_list_qry.append(log_arr_qry[:(m_days + 1)] - log_arr_qry[0])
+    label_list_qry.append(log_arr_qry[(m_days + delay_days):][k_days] - log_arr_qry[(m_days + delay_days)])
+    return arr_list_spt, label_list_spt, arr_list_qry, label_list_qry
 
 
 def convert_to_image(data_arr, image_size, downsampling_size=5):
@@ -130,33 +157,39 @@ def preprocessing_ntasks(arr, image_size=64):
     spt_logy = torch.from_numpy(np.stack(y_spt_list))
     qry_logy = torch.from_numpy(np.stack(y_qry_list))
 
-    return (spt_x, spt_y, qry_x, qry_y, spt_logy, qry_logy)
+    return spt_x, spt_y, qry_x, qry_y, spt_logy, qry_logy
 
 
-def make_onetask(arr, image_size=64, k_shot=5):
+def make_onetask(arr, configs):
+    # 항상 가장 마지막 값을 qry, 이전의 데이터를 spt
+    image_size = configs.image_size
+    k_shot = configs.k_shot
 
-    m_days = 500
+    m_days = configs.m_days
     downsampling_size = 5
     assert m_days > image_size * downsampling_size
-    data_, label_ = arr_to_dataset_ntasks(arr, m_days=m_days, k_days=5)
-    data_arr = np.stack(data_, axis=0)
-    label_arr = np.stack(label_, axis=0)
+    data_list_spt, label_list_spt, data_list_qry, label_list_qry = arr_to_dataset_ntasks2(arr, m_days=m_days, k_days=5)
+    data_arr_spt = np.stack(data_list_spt, axis=0)
+    label_arr_spt = np.stack(label_list_spt, axis=0)
+    data_arr_qry = np.stack(data_list_qry, axis=0)
+    label_arr_qry = np.stack(label_list_qry, axis=0)
 
     n_classes = 2
-    label_class = ((label_arr < 0) * 1).astype(np.int32)  # 0보다 크면 0, 작으면 1
+    labels_spt = ((label_arr_spt < 0) * 1).astype(np.int32)  # 0보다 크면 0, 작으면 1
+    labels_qry = ((label_arr_qry < 0) * 1).astype(np.int32)  # 0보다 크면 0, 작으면 1
 
-    figs = convert_to_image(data_arr, image_size, downsampling_size=downsampling_size).astype(np.float32)
+    figs_spt = convert_to_image(data_arr_spt, image_size, downsampling_size=downsampling_size).astype(np.float32)
+    figs_qry = convert_to_image(data_arr_qry, image_size, downsampling_size=downsampling_size).astype(np.float32)
 
     transformer = transforms.Compose([
         transforms.ToPILImage(),
         transforms.Resize((224, 224)),
         transforms.ToTensor()])
 
-    figs = torch.stack([transformer(torch.from_numpy(fig)) for fig in figs]).numpy()
+    figs_spt = torch.stack([transformer(torch.from_numpy(fig)) for fig in figs_spt]).numpy()
+    figs_qry = torch.stack([transformer(torch.from_numpy(fig)) for fig in figs_qry]).numpy()
 
-    figs_spt, figs_qry = figs[:-1], figs[-1:]
-    labels_spt, labels_qry = label_class[:-1], label_class[-1:]
-    y_spt, y_qry = label_arr[:-1], label_arr[-1:]
+    y_spt, y_qry = label_arr_spt, label_arr_qry
 
     idx = np.arange(len(labels_spt))
     idx_p = np.array([np.power(0.99, len(idx) - i - 1) for i in idx])
@@ -182,51 +215,32 @@ def make_dataloader_ntasks(arr_y, split_r=[0.6, 0.8]):
     arr_logp = np.log(np.cumprod(1 + arr_y) / (1 + arr_y[0]))
 
     train_arr = arr_logp[:int(len(arr_logp) * split_r[0])]
-    valid_arr = arr_logp[int(len(arr_logp) * split_r[0]):int(len(arr_logp) * split_r[1])]
+    eval_arr = arr_logp[int(len(arr_logp) * split_r[0]):int(len(arr_logp) * split_r[1])]
     test_arr = arr_logp[int(len(arr_logp) * split_r[1]):]
 
     image_size = 64
     dataset_train = preprocessing_ntasks(train_arr, image_size=image_size)
-    dataset_valid = preprocessing_ntasks(valid_arr, image_size=image_size)
+    dataset_eval = preprocessing_ntasks(eval_arr, image_size=image_size)
     dataset_test = preprocessing_ntasks(test_arr, image_size=image_size)
 
-    return dataset_train, dataset_valid, dataset_test
+    return dataset_train, dataset_eval, dataset_test
 
 
 def make_dataloader_ntasks2(arr_y, split_r=[0.5]):
-    # test는 차트용, 전체데이터를 train, valid로 나눔
+    # test는 차트용, 전체데이터를 train, eval로 나눔
     # arr_y = np.array(data_df['kospi'], dtype=np.float32);split_r=[0.6, 0.8]; batch_size=32
     arr_logp = np.log(np.cumprod(1 + arr_y) / (1 + arr_y[0]))
 
     train_arr = arr_logp[:int(len(arr_logp) * split_r[0])]
-    valid_arr = arr_logp[int(len(arr_logp) * split_r[0]):]
+    eval_arr = arr_logp[int(len(arr_logp) * split_r[0]):]
     test_arr = arr_logp[:]
 
     image_size = 64
     dataset_train = preprocessing_ntasks(train_arr, image_size=image_size)
-    dataset_valid = preprocessing_ntasks(valid_arr, image_size=image_size)
+    dataset_eval = preprocessing_ntasks(eval_arr, image_size=image_size)
     dataset_test = preprocessing_ntasks(test_arr, image_size=image_size)
 
-    return dataset_train, dataset_valid, dataset_test
-
-
-def make_dataloader_ntasks2_roll(arr_y, split_r=[0.5]):
-    arr_logp = np.log(np.cumprod(1 + arr_y) / (1 + arr_y[0]))
-
-    dataset_list = []
-
-    len_arr_per_task = 500 + 250  # 500: for image, 250: for lookback period
-    for i in range(len_arr_per_task, len(arr_logp)):
-        arr = arr_logp[(i-len_arr_per_task):(i+1)]
-        dataset_list.append()
-
-
-    image_size = 64
-    dataset_train = preprocessing_ntasks(train_arr, image_size=image_size)
-    dataset_valid = preprocessing_ntasks(valid_arr, image_size=image_size)
-    dataset_test = preprocessing_ntasks(test_arr, image_size=image_size)
-
-    return dataset_train, dataset_valid, dataset_test
+    return dataset_train, dataset_eval, dataset_test
 
 
 def np_to_tensor(list_of_numpy_objs):
@@ -237,7 +251,6 @@ def compute_loss(model, x, y, loss_fn=nn.MSELoss()):
     logits = model.forward(x)
     mse = loss_fn(y, logits)
     return mse, logits
-
 
 
 def plot_model(model, dataloader_test, criterion, ep, lr_inner=0.01):
@@ -311,6 +324,84 @@ def plot_model(model, dataloader_test, criterion, ep, lr_inner=0.01):
     plt.close(fig)
 
 
+def plot_model2(configs, model, dataloaders, criterion, ep):
+    lr_inner = configs.lr_inner
+
+    before = {'result': [], 'pred': [], 'acc': []}
+    after = {'result': [], 'pred': [], 'acc': []}
+    bm = []
+
+    dataloader_test = dataloaders['train'] + dataloaders['eval'] + dataloaders['test']
+    data_len = [len(dataloaders['train']), len(dataloaders['eval']), len(dataloaders['test'])]
+    device = 'cuda:0'
+    model.to(device)
+    s_t = time.time()
+    for i, dataset in enumerate(dataloader_test):
+        x_spt_i, y_spt_i, x_qry_i, y_qry_i, logy_spt_i, logy_qry_i = dataset
+
+        x_spt_i = x_spt_i.to(device)
+        y_spt_i = y_spt_i.long().to(device)
+        x_qry_i = x_qry_i.to(device)
+        y_qry_i = y_qry_i.long().to(device)
+
+        logy_spt_i = logy_spt_i.to(device)
+        logy_qry_i = logy_qry_i.cpu()
+        bm.append(logy_qry_i.numpy())
+
+        # # 매개변수 경사도를 0으로 설정
+        # optimizer.zero_grad()
+
+        with torch.no_grad():
+            # before train
+            # 0보다 크면 0, 작으면 1
+            out_qry_i_before = model.forward(x_qry_i)
+            _, pred_before = torch.max(out_qry_i_before.cpu(), 1)
+            before['pred'].append(pred_before.numpy()[0])
+            before['acc'].append((pred_before == y_qry_i.cpu()).numpy()[0])
+            before['result'].append(int(not (before['pred'][-1])) * logy_qry_i.numpy()[0])
+            # result1.append(int(not(pred1[-1])) * logy_qry_i.numpy()[0] + int(pred1[-1]) * logy_qry_i.numpy()[0])
+
+        outputs_spt_i = model.forward(x_spt_i)
+
+        _, preds = torch.max(outputs_spt_i, 1)
+        train_loss = criterion(outputs_spt_i, y_spt_i) * torch.abs(torch.exp(logy_spt_i))
+        train_loss = torch.mean(train_loss)
+        # Step 6
+        grad = torch.autograd.grad(train_loss, model.parameters(), retain_graph=True, create_graph=True)
+
+        fast_weights = list(map(lambda p: p[1] - lr_inner * p[0], zip(grad, model.parameters())))
+
+        with torch.no_grad():
+            out_qry_i_after = model.forward(x_qry_i, fast_weights)
+            _, pred_after = torch.max(out_qry_i_after.cpu(), 1)
+            after['pred'].append(pred_after.numpy()[0])
+            after['acc'].append((pred_after == y_qry_i.cpu()).numpy()[0])
+            after['result'].append(int(not(after['pred'][-1])) * logy_qry_i.numpy()[0])
+            # result2.append(int(not(pred2[-1])) * logy_qry_i.numpy()[0] + int(pred2[-1]) * logy_qry_i.numpy()[0])
+
+    e_t = time.time()
+    print("{} {} sec".format(i, e_t - s_t))
+
+    print("acc1: {}, acc2: {}".format(np.sum(before['acc']) / len(before['acc']), np.sum(after['acc']) / len(after['acc'])))
+    before['result'] = np.array(before['result'], dtype=np.float32)
+    after['result'] = np.array(after['result'], dtype=np.float32)
+    bm = np.array(bm, dtype=np.float32)
+    result_plot1 = np.cumsum(before['result']) - before['result'][0]
+    result_plot2 = np.cumsum(after['result']) - after['result'][0]
+    result_bm = np.cumsum(bm.squeeze()) - bm.squeeze()[0]
+
+    fig = plt.figure()
+    plt.plot(np.arange(len(result_bm)), result_bm, 'b')
+    plt.plot(np.arange(len(result_bm)), result_plot1, 'k')
+    plt.plot(np.arange(len(result_bm)), result_plot2, 'r')
+    plt.axvline(x=data_len[0])
+    plt.axvline(x=data_len[0]+data_len[1])
+    fig.legend(['bm', 'before', 'after'])
+    fig.savefig('./out/maml/{}.png'.format(ep))
+    plt.close(fig)
+
+    return before, after, bm
+
 # many tasks
 def train_maml2(model, criterion, optimizer, scheduler, dataloaders, lr_inner=0.01, num_epochs=25):
     # num_epochs=25;phase='train';lr_inner=0.01
@@ -329,7 +420,7 @@ def train_maml2(model, criterion, optimizer, scheduler, dataloaders, lr_inner=0.
             plot_model(model, dataloader_test, criterion, ep=epoch, lr_inner=lr_inner)
 
         # 각 에폭(epoch)은 학습 단계와 검증 단계를 갖습니다.
-        for phase in ['train', 'valid']:
+        for phase in ['train', 'eval']:
             if phase == 'train':
                 scheduler.step()
                 model.train()  # 모델을 학습 모드로 설정
@@ -409,7 +500,7 @@ def train_maml2(model, criterion, optimizer, scheduler, dataloaders, lr_inner=0.
                     model.load_state_dict(best_model_wts)
 
             # 모델을 깊은 복사(deep copy)함
-            if phase == 'valid' and epoch_acc > best_acc:
+            if phase == 'eval' and epoch_acc > best_acc:
                 best_acc = epoch_acc
                 best_model_wts = copy.deepcopy(model.state_dict())
 
@@ -425,6 +516,132 @@ def train_maml2(model, criterion, optimizer, scheduler, dataloaders, lr_inner=0.
     model.load_state_dict(best_model_wts)
 
     return model
+
+
+def train_maml3(configs, model, criterion, optimizer, scheduler, dataloaders, base_i):
+    # num_epochs=25;phase='train';lr_inner=0.01
+    since = time.time()
+
+    c = configs
+    device = c.device
+    num_epochs = c.num_epochs
+    lr_inner = c.lr_inner
+    early_stopping = c.early_stopping
+
+    test_result = {'before': [], 'after': [], 'bm': []}
+
+    best_model_wts = copy.deepcopy(model.state_dict())
+    best_acc = 0.0
+    min_eval_loss = 9999
+    stop_count = 0
+    for epoch in range(num_epochs):
+        print('Epoch {}/{}'.format(epoch, num_epochs - 1))
+        print('-' * 10)
+
+        if epoch % c.print_step == 0:
+            model.eval()
+            before, after, bm = plot_model2(configs, model, dataloaders, criterion, ep= base_i * num_epochs + epoch)
+            test_result['before'].append(before['result'][-len(dataloaders['test']):])
+            test_result['after'].append(after['result'][-len(dataloaders['test']):])
+            test_result['bm'].append(bm[-len(dataloaders['test']):])
+
+        # 각 에폭(epoch)은 학습 단계와 검증 단계를 갖습니다.
+        for phase in ['train', 'eval']:
+            if phase == 'train':
+                if scheduler is not None:
+                    scheduler.step()
+                model.train()  # 모델을 학습 모드로 설정
+            else:
+                model.eval()   # 모델을 평가 모드로 설정
+
+            running_loss = 0.0
+            running_corrects = 0
+
+            weights_per_task = []
+            task_losses = None
+            for i_task in dataloaders[phase]:
+                # print(i)
+                x_spt_i, y_spt_i, x_qry_i, y_qry_i, logy_spt_i, logy_qry_i = i_task
+                # print('after balancing: {}'.format(torch.sum(labels_balanced, axis=0)))
+                x_spt_i = x_spt_i.to(device)
+                y_spt_i = y_spt_i.long().to(device)
+                logy_spt_i = logy_spt_i.to(device)
+                x_qry_i = x_qry_i.to(device)
+                y_qry_i = y_qry_i.long().to(device)
+                logy_qry_i = logy_qry_i.to(device)
+
+                # # 매개변수 경사도를 0으로 설정
+                # optimizer.zero_grad()
+
+                # 순전파
+                # 학습 시에만 연산 기록을 추적
+                outputs_spt = model.forward(x_spt_i)
+                # outputs = F.softmax(outputs)
+                _, preds = torch.max(outputs_spt, 1)
+                train_loss = criterion(outputs_spt, y_spt_i) * torch.abs(logy_spt_i) / torch.sum(torch.abs(logy_spt_i))
+                train_loss = torch.sum(train_loss)
+                # Step 6
+                grad = torch.autograd.grad(train_loss, model.parameters(), retain_graph=True, create_graph=True)
+
+                fast_weights = list(map(lambda p: p[1] - lr_inner * p[0], zip(grad, model.parameters())))
+
+                with torch.set_grad_enabled(phase == 'train'):
+                    outputs_qry = model.forward(x_qry_i, fast_weights)  # run forward pass to initialize weights
+                    test_loss = criterion(outputs_qry, y_qry_i) * torch.abs(logy_qry_i)
+                    weights_per_task.append(torch.abs(logy_qry_i).cpu().numpy())
+                    if task_losses is None:
+                        task_losses = test_loss
+                    else:
+                        task_losses += test_loss
+
+                with torch.no_grad():
+                    # 통계
+                    running_loss += test_loss.item() * x_qry_i.size(0)
+                    # running_corrects += torch.sum(preds == labels.data)
+                    running_corrects += torch.sum(torch.max(outputs_qry, 1)[1] == y_qry_i.data)
+
+            # 학습 단계인 경우 역전파 + 최적화
+            if phase == 'train':
+                total_losses = task_losses / np.sum(weights_per_task)
+                optimizer.zero_grad()
+                total_losses.backward()
+                optimizer.step()
+
+            epoch_loss = running_loss / np.sum(weights_per_task)
+            epoch_acc = running_corrects.double() / len(dataloaders[phase])
+
+
+            if phase == 'eval':
+                if epoch_loss < min_eval_loss:
+                    min_eval_loss = epoch_loss
+                    stop_count = 0
+                    best_model_wts = copy.deepcopy(model.state_dict())
+                else:
+                    stop_count += 1
+                    model.load_state_dict(best_model_wts)
+
+            print('{} Loss: {:.4f} Acc: {:.4f} count: {}/{}'.format(
+                phase, epoch_loss, epoch_acc, stop_count, early_stopping))
+
+            # 모델을 깊은 복사(deep copy)함
+            if phase == 'eval' and epoch_acc > best_acc:
+                best_acc = epoch_acc
+                best_model_wts = copy.deepcopy(model.state_dict())
+
+        if stop_count >= early_stopping:
+            print('early stopped')
+            break
+
+    time_elapsed = time.time() - since
+    print('Training complete in {:.0f}m {:.0f}s'.format(
+        time_elapsed // 60, time_elapsed % 60))
+    print('Best val Acc: {:4f}'.format(best_acc))
+
+    # 가장 나은 모델 가중치를 불러옴
+    model.load_state_dict(best_model_wts)
+
+    return model, test_result
+
 
 
 class ImageModel(nn.Module):
@@ -528,8 +745,8 @@ def main_maml2():
         output_size = 1
 
     # make dataloader
-    dl_train, dl_valid, dl_test = make_dataloader_ntasks2(arr_y)
-    dataloaders = {'train': dl_train, 'valid': dl_valid, 'test': dl_test}
+    dl_train, dl_eval, dl_test = make_dataloader_ntasks2(arr_y)
+    dataloaders = {'train': dl_train, 'eval': dl_eval, 'test': dl_test}
 
 
     model = ImageModel(output_size, base_model='resnet50')
@@ -546,7 +763,78 @@ def main_maml2():
                              dataloaders, lr_inner=0.01, num_epochs=1000)
 
 
+def main_maml3():
+    configs = Configs()
+    c = configs
+    # get dataset
+    data_df = prepare_dataset()
 
+    arr_y = np.array(data_df['mkt_rf'], dtype=np.float32)
+    arr_logp = np.log(np.cumprod(1 + arr_y) / (1 + arr_y[0]))
+    # arr_y = np.array(data_df['mom'], dtype=np.float32)
+
+    classification = True
+    if classification:
+        output_size = 2
+    else:
+        output_size = 1
+
+    results_all = {'before': [], 'after': [], 'bm': []}
+
+    model = ImageModel(output_size, base_model='resnet50')
+    model = model.to(c.device)
+
+    criterion = nn.CrossEntropyLoss(reduce=False)
+
+    # 이전과는 다르게 마지막 계층의 매개변수들만 최적화되는지 관찰
+    optimizer = optim.Adam(model.parameters(), lr=c.lr_meta)
+
+    begin_i = 2000
+    for i, t in enumerate(range(begin_i, len(arr_logp) - c.test_period, c.test_period)):
+
+        train_tasks = np.random.choice(np.arange(t - c.lookback_period, t - c.k_days * (c.n_tasks + 2), c.k_days), c.n_tasks)
+        eval_tasks = np.arange(t - c.k_days * (c.n_tasks + 2), t - c.k_days * 2, c.k_days)
+        test_tasks = np.arange(t, t + c.test_period, c.k_days)
+        dl_train, dl_eval, dl_test = [], [], []
+        len_arr_per_task = c.m_days + c.lookback_period  # 500: for image, 250: for lookback period
+        print('preparing train set...')
+        for j in train_tasks:
+            arr_train = arr_logp[(j-len_arr_per_task):(j+1)]
+            dl_train.append(make_onetask(arr_train, c))
+        print('preparing train set...done')
+        print('preparing eval set...')
+        for j in eval_tasks:
+            arr_eval = arr_logp[(j-len_arr_per_task):(j+1)]
+            dl_eval.append(make_onetask(arr_eval, c))
+        print('preparing eval set...done')
+        print('preparing test set...')
+        for j in test_tasks:
+            arr_test = arr_logp[(j-len_arr_per_task):(j + 1)]
+            dl_test.append(make_onetask(arr_test, c))
+        print('preparing test set...done')
+
+        dataloaders = {'train': dl_train, 'eval': dl_eval, 'test': dl_test}
+        # 7 에폭마다 0.1씩 학습율 감소
+        # scheduler = lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
+        scheduler = None
+        model_conv, test_result = train_maml3(c, model, criterion, optimizer, scheduler, dataloaders, i)
+        for key in ['before', 'after', 'bm']:
+            results_all[key] += test_result[key]
+
+
+
+# dataset example
+# def ex_dataloader():
+#     my_x = [np.array([[1.0, 2], [3, 4]]), np.array([[5., 6], [7, 8]])]  # a list of numpy arrays
+#     my_y = [np.array([4.]), np.array([2.])]  # another list of numpy arrays (targets)
+#
+#     tensor_x = torch.stack([torch.Tensor(i) for i in my_x])  # transform to torch tensors
+#     tensor_y = torch.stack([torch.Tensor(i) for i in my_y])
+#
+#     my_dataset = TensorDataset(tensor_x, tensor_y)  # create your datset
+#     my_dataloader = DataLoader(my_dataset)  # create your dataloader
+#
+#
 # def arr_to_dataset(log_arr, sampling_freq=20):
 #     m_days = 500
 #     k_days = 20
