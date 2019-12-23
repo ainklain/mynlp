@@ -24,21 +24,21 @@ class Configs:
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.image_size = 64
 
-        self.m_days = 1000           # 이걸 input_length로 정정예정
-        self.lookback_period = 500  # class balance를 위해 보는 기간, 이걸 m_days로 정정예정
+        self.m_days = 500           # 이걸 input_length로 정정예정
+        self.lookback_period = 250  # class balance를 위해 보는 기간, 이걸 m_days로 정정예정
         self.k_days = 5
 
-        self.downsampling_size = 5
+        self.downsampling_size = 2
 
         self.k_shot = 20
-        self.n_tasks = 50
+        self.n_tasks = 20
         self.lr_inner = 0.01
-        self.lr_meta = 0.001
+        self.lr_meta = 0.0005
         self.num_epochs = 200
-        self.test_period = 60  # test 적용기간
+        self.test_period = 260  # test 적용기간
 
-        self.early_stopping = 10
-        self.print_step = 10
+        self.early_stopping = 20
+        self.print_step = 5
 
 def prepare_dataset():
     data_path = './data/data_for_metarl.csv'
@@ -386,16 +386,22 @@ def plot_model2(configs, model, dataloaders, criterion, ep):
     before['result'] = np.array(before['result'], dtype=np.float32)
     after['result'] = np.array(after['result'], dtype=np.float32)
     bm = np.array(bm, dtype=np.float32)
-    result_plot1 = np.cumsum(before['result']) - before['result'][0]
-    result_plot2 = np.cumsum(after['result']) - after['result'][0]
     result_bm = np.cumsum(bm.squeeze()) - bm.squeeze()[0]
+    len1 = data_len[0]
+    len2 = data_len[0] + data_len[1]
+    result_plot1 = np.cumsum(before['result']) - before['result'][0]
+    result_plot1[len1:] = result_plot1[len1:] - result_plot1[len1] + result_bm[len1]
 
+    result_plot1[len2:] = result_plot1[len2:] - result_plot1[len2] + result_bm[len2]
+    result_plot2 = np.cumsum(after['result']) - after['result'][0]
+    result_plot2[len1:] = result_plot2[len1:] - result_plot2[len1] + result_bm[len1]
+    result_plot2[len2:] = result_plot2[len2:] - result_plot2[len2] + result_bm[len2]
     fig = plt.figure()
     plt.plot(np.arange(len(result_bm)), result_bm, 'b')
     plt.plot(np.arange(len(result_bm)), result_plot1, 'k')
     plt.plot(np.arange(len(result_bm)), result_plot2, 'r')
-    plt.axvline(x=data_len[0])
-    plt.axvline(x=data_len[0]+data_len[1])
+    plt.axvline(x=len1)
+    plt.axvline(x=len2)
     fig.legend(['bm', 'before', 'after'])
     fig.savefig('./out/maml/{}.png'.format(ep))
     plt.close(fig)
@@ -540,10 +546,7 @@ def train_maml3(configs, model, criterion, optimizer, scheduler, dataloaders, ba
 
         if epoch % c.print_step == 0:
             model.eval()
-            before, after, bm = plot_model2(configs, model, dataloaders, criterion, ep= base_i * num_epochs + epoch)
-            test_result['before'].append(before['result'][-len(dataloaders['test']):])
-            test_result['after'].append(after['result'][-len(dataloaders['test']):])
-            test_result['bm'].append(bm[-len(dataloaders['test']):])
+            _ = plot_model2(configs, model, dataloaders, criterion, ep=base_i * num_epochs + epoch)
 
         # 각 에폭(epoch)은 학습 단계와 검증 단계를 갖습니다.
         for phase in ['train', 'eval']:
@@ -578,7 +581,7 @@ def train_maml3(configs, model, criterion, optimizer, scheduler, dataloaders, ba
                 outputs_spt = model.forward(x_spt_i)
                 # outputs = F.softmax(outputs)
                 _, preds = torch.max(outputs_spt, 1)
-                train_loss = criterion(outputs_spt, y_spt_i) * torch.abs(logy_spt_i) / torch.sum(torch.abs(logy_spt_i))
+                train_loss = criterion(outputs_spt, y_spt_i) * torch.exp(logy_spt_i) / torch.sum(torch.exp(logy_spt_i))
                 train_loss = torch.sum(train_loss)
                 # Step 6
                 grad = torch.autograd.grad(train_loss, model.parameters(), retain_graph=True, create_graph=True)
@@ -587,8 +590,8 @@ def train_maml3(configs, model, criterion, optimizer, scheduler, dataloaders, ba
 
                 with torch.set_grad_enabled(phase == 'train'):
                     outputs_qry = model.forward(x_qry_i, fast_weights)  # run forward pass to initialize weights
-                    test_loss = criterion(outputs_qry, y_qry_i) * torch.abs(logy_qry_i)
-                    weights_per_task.append(torch.abs(logy_qry_i).cpu().numpy())
+                    test_loss = criterion(outputs_qry, y_qry_i) * torch.exp(logy_qry_i)
+                    weights_per_task.append(torch.exp(logy_qry_i).cpu().numpy())
                     if task_losses is None:
                         task_losses = test_loss
                     else:
@@ -618,7 +621,7 @@ def train_maml3(configs, model, criterion, optimizer, scheduler, dataloaders, ba
                     best_model_wts = copy.deepcopy(model.state_dict())
                 else:
                     stop_count += 1
-                    model.load_state_dict(best_model_wts)
+                    # model.load_state_dict(best_model_wts)
 
             print('{} Loss: {:.4f} Acc: {:.4f} count: {}/{}'.format(
                 phase, epoch_loss, epoch_acc, stop_count, early_stopping))
@@ -630,6 +633,12 @@ def train_maml3(configs, model, criterion, optimizer, scheduler, dataloaders, ba
 
         if stop_count >= early_stopping:
             print('early stopped')
+            model.load_state_dict(best_model_wts)
+            before, after, bm = plot_model2(configs, model, dataloaders, criterion, ep=base_i * num_epochs + epoch + 1)
+            test_result['before'].append(before['result'][-len(dataloaders['test']):])
+            test_result['after'].append(after['result'][-len(dataloaders['test']):])
+            test_result['bm'].append(bm[-len(dataloaders['test']):])
+
             break
 
     time_elapsed = time.time() - since
@@ -659,11 +668,19 @@ class ImageModel(nn.Module):
         # 새로 생성된 모듈의 매개변수는 기본값이 requires_grad=True 임
         self.vars = nn.ParameterList()
         if configs is None:
-            self.structure = [('linear', [32, num_ftrs]),
+            self.structure = [('linear', [64, num_ftrs]),
                               ('relu', []),
-                              ('linear', [16, 32]),
+                              ('dropout', [0.5]),
+                              ('layer_norm', [64]),
+                              ('linear', [64, 64]),
                               ('relu', []),
-                              ('linear', [output_size, 16])]
+                              ('dropout', [0.5]),
+                              ('layer_norm', [64]),
+                              ('linear', [32, 64]),
+                              ('relu', []),
+                              ('dropout', [0.5]),
+                              ('layer_norm', [32]),
+                              ('linear', [output_size, 32])]
         else:
             self.structure = configs
         for name, param in self.structure:
@@ -700,6 +717,10 @@ class ImageModel(nn.Module):
                 idx += 2
             elif name.lower() == 'relu':
                 x = F.relu(x)
+            elif name.lower() == 'dropout':
+                x = F.dropout(x, param[0])
+            elif name.lower() == 'layer_norm':
+                x = F.layer_norm(x, param)
             else:
                 raise NotImplementedError
 
@@ -779,9 +800,11 @@ def main_maml3():
     else:
         output_size = 1
 
+    result_plot = dict()
     results_all = {'before': [], 'after': [], 'bm': []}
 
     model = ImageModel(output_size, base_model='resnet50')
+
     model = model.to(c.device)
 
     criterion = nn.CrossEntropyLoss(reduce=False)
@@ -791,7 +814,7 @@ def main_maml3():
 
     begin_i = 2000
     for i, t in enumerate(range(begin_i, len(arr_logp) - c.test_period, c.test_period)):
-
+        # i = 0; t = begin_i
         train_tasks = np.random.choice(np.arange(t - c.lookback_period, t - c.k_days * (c.n_tasks + 2), c.k_days), c.n_tasks)
         eval_tasks = np.arange(t - c.k_days * (c.n_tasks + 2), t - c.k_days * 2, c.k_days)
         test_tasks = np.arange(t, t + c.test_period, c.k_days)
@@ -818,10 +841,22 @@ def main_maml3():
         # scheduler = lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
         scheduler = None
         model_conv, test_result = train_maml3(c, model, criterion, optimizer, scheduler, dataloaders, i)
+
         for key in ['before', 'after', 'bm']:
             results_all[key] += test_result[key]
 
+    for key in ['before', 'after', 'bm']:
+        result_plot[key] = np.cumsum(np.concatenate(results_all[key])) - np.concatenate(results_all[key])[0]
 
+    fig = plt.figure()
+    ax1 = fig.subplots()
+    ax1.plot(np.arange(len(result_plot['bm'])), result_plot['bm'], 'b')
+    ax1.plot(np.arange(len(result_plot['bm'])), result_plot['before'], 'k')
+    ax1.plot(np.arange(len(result_plot['bm'])), result_plot['after'], 'r')
+    ax1.legend(['bm', 'before', 'after'])
+
+    ax1_1 = ax1.twinx()
+    ax1_1.plot(np.arange(len(result_plot['bm'])), result_plot['after'] - result_plot['bm'])
 
 # dataset example
 # def ex_dataloader():
