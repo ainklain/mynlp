@@ -24,15 +24,15 @@ class Configs:
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.image_size = 64
 
-        self.m_days = 500           # 이걸 input_length로 정정예정
-        self.lookback_period = 250  # class balance를 위해 보는 기간, 이걸 m_days로 정정예정
+        self.m_days = 1000           # 이걸 input_length로 정정예정
+        self.lookback_period = 500  # class balance를 위해 보는 기간, 이걸 m_days로 정정예정
         self.k_days = 5
 
-        self.downsampling_size = 2
+        self.downsampling_size = 5
 
         self.k_shot = 20
-        self.n_tasks = 20
-        self.lr_inner = 0.01
+        self.n_tasks = 50
+        self.lr_inner = 0.005
         self.lr_meta = 0.0005
         self.num_epochs = 200
         self.test_period = 260  # test 적용기간
@@ -327,8 +327,8 @@ def plot_model(model, dataloader_test, criterion, ep, lr_inner=0.01):
 def plot_model2(configs, model, dataloaders, criterion, ep):
     lr_inner = configs.lr_inner
 
-    before = {'result': [], 'pred': [], 'acc': []}
-    after = {'result': [], 'pred': [], 'acc': []}
+    before = {'result': [], 'pred': [], 'acc': [], 'prob': []}
+    after = {'result': [], 'pred': [], 'acc': [], 'prob': []}
     bm = []
 
     dataloader_test = dataloaders['train'] + dataloaders['eval'] + dataloaders['test']
@@ -356,9 +356,10 @@ def plot_model2(configs, model, dataloaders, criterion, ep):
             # 0보다 크면 0, 작으면 1
             out_qry_i_before = model.forward(x_qry_i)
             _, pred_before = torch.max(out_qry_i_before.cpu(), 1)
+            before['prob'].append(F.sigmoid(out_qry_i_before).cpu().numpy()[0][0])
             before['pred'].append(pred_before.numpy()[0])
             before['acc'].append((pred_before == y_qry_i.cpu()).numpy()[0])
-            before['result'].append(int(not (before['pred'][-1])) * logy_qry_i.numpy()[0])
+            before['result'].append(int(not(before['pred'][-1])) * logy_qry_i.numpy()[0])
             # result1.append(int(not(pred1[-1])) * logy_qry_i.numpy()[0] + int(pred1[-1]) * logy_qry_i.numpy()[0])
 
         outputs_spt_i = model.forward(x_spt_i)
@@ -374,6 +375,7 @@ def plot_model2(configs, model, dataloaders, criterion, ep):
         with torch.no_grad():
             out_qry_i_after = model.forward(x_qry_i, fast_weights)
             _, pred_after = torch.max(out_qry_i_after.cpu(), 1)
+            after['prob'].append(F.sigmoid(out_qry_i_after).cpu().numpy()[0][0])
             after['pred'].append(pred_after.numpy()[0])
             after['acc'].append((pred_after == y_qry_i.cpu()).numpy()[0])
             after['result'].append(int(not(after['pred'][-1])) * logy_qry_i.numpy()[0])
@@ -391,7 +393,6 @@ def plot_model2(configs, model, dataloaders, criterion, ep):
     len2 = data_len[0] + data_len[1]
     result_plot1 = np.cumsum(before['result']) - before['result'][0]
     result_plot1[len1:] = result_plot1[len1:] - result_plot1[len1] + result_bm[len1]
-
     result_plot1[len2:] = result_plot1[len2:] - result_plot1[len2] + result_bm[len2]
     result_plot2 = np.cumsum(after['result']) - after['result'][0]
     result_plot2[len1:] = result_plot2[len1:] - result_plot2[len1] + result_bm[len1]
@@ -405,6 +406,15 @@ def plot_model2(configs, model, dataloaders, criterion, ep):
     fig.legend(['bm', 'before', 'after'])
     fig.savefig('./out/maml/{}.png'.format(ep))
     plt.close(fig)
+
+    # prob 적용
+    result_plot1 = np.cumsum(before['result']) - before['result'][0]
+    result_plot1[len1:] = result_plot1[len1:] - result_plot1[len1] + result_bm[len1]
+    result_plot1[len2:] = result_plot1[len2:] - result_plot1[len2] + result_bm[len2]
+    result_plot2 = np.cumsum(after['result']) - after['result'][0]
+    result_plot2[len1:] = result_plot2[len1:] - result_plot2[len1] + result_bm[len1]
+    result_plot2[len2:] = result_plot2[len2:] - result_plot2[len2] + result_bm[len2]
+
 
     return before, after, bm
 
