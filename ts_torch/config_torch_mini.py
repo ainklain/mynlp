@@ -68,7 +68,7 @@ class Config:
         self.embedding_size_mm = 10
 
         # meta
-        self.use_maml = True
+        self.use_maml = False
         self.n_tasks = 5
         self.inner_lr = 1e-2  # 5e-3
         self.meta_lr = 1e-3  # 1e-4

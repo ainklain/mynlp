@@ -32,7 +32,7 @@ class Configs:
 
         self.k_shot = 20
         self.n_tasks = 50
-        self.lr_inner = 0.005
+        self.lr_inner = 0.02
         self.lr_meta = 0.0005
         self.num_epochs = 200
         self.test_period = 260  # test 적용기간
@@ -324,7 +324,8 @@ def plot_model(model, dataloader_test, criterion, ep, lr_inner=0.01):
     plt.close(fig)
 
 
-def plot_model2(configs, model, dataloaders, criterion, ep):
+def plot_model2(configs, model, dataloaders, criterion, ep, use_maml=True):
+    print('plot: use_maml {}'.format(use_maml))
     lr_inner = configs.lr_inner
 
     before = {'result': [], 'pred': [], 'acc': [], 'prob': []}
@@ -346,7 +347,8 @@ def plot_model2(configs, model, dataloaders, criterion, ep):
 
         logy_spt_i = logy_spt_i.to(device)
         logy_qry_i = logy_qry_i.cpu()
-        bm.append(logy_qry_i.numpy())
+        # bm.append(logy_qry_i.numpy()) # TODO: real return
+        bm.append(np.sign(logy_qry_i.numpy()) * 0.01)
 
         # # 매개변수 경사도를 0으로 설정
         # optimizer.zero_grad()
@@ -359,26 +361,33 @@ def plot_model2(configs, model, dataloaders, criterion, ep):
             before['prob'].append(F.sigmoid(out_qry_i_before).cpu().numpy()[0][0])
             before['pred'].append(pred_before.numpy()[0])
             before['acc'].append((pred_before == y_qry_i.cpu()).numpy()[0])
-            before['result'].append(int(not(before['pred'][-1])) * logy_qry_i.numpy()[0])
+            # before['result'].append(int(not(before['pred'][-1])) * logy_qry_i.numpy()[0]) # TODO: real return
+            before['result'].append(int(not(before['pred'][-1])) * np.sign(logy_qry_i.numpy()[0]) * 0.01)
             # result1.append(int(not(pred1[-1])) * logy_qry_i.numpy()[0] + int(pred1[-1]) * logy_qry_i.numpy()[0])
 
-        outputs_spt_i = model.forward(x_spt_i)
+        if use_maml:
+            outputs_spt_i = model.forward(x_spt_i)
 
-        _, preds = torch.max(outputs_spt_i, 1)
-        train_loss = criterion(outputs_spt_i, y_spt_i) * torch.abs(torch.exp(logy_spt_i))
-        train_loss = torch.mean(train_loss)
-        # Step 6
-        grad = torch.autograd.grad(train_loss, model.parameters(), retain_graph=True, create_graph=True)
+            _, preds = torch.max(outputs_spt_i, 1)
+            train_loss = criterion(outputs_spt_i, y_spt_i) # * torch.exp(logy_spt_i) / torch.sum(torch.exp(logy_spt_i)) # TODO: real return
+            train_loss = torch.sum(train_loss) / len(train_loss)
+            # Step 6
+            grad = torch.autograd.grad(train_loss, model.parameters(), retain_graph=True, create_graph=True)
 
-        fast_weights = list(map(lambda p: p[1] - lr_inner * p[0], zip(grad, model.parameters())))
+            fast_weights = list(map(lambda p: p[1] - lr_inner * p[0], zip(grad, model.parameters())))
 
         with torch.no_grad():
-            out_qry_i_after = model.forward(x_qry_i, fast_weights)
+            if use_maml:
+                out_qry_i_after = model.forward(x_qry_i, fast_weights)
+            else:
+                out_qry_i_after = model.forward(x_qry_i)
+
             _, pred_after = torch.max(out_qry_i_after.cpu(), 1)
             after['prob'].append(F.sigmoid(out_qry_i_after).cpu().numpy()[0][0])
             after['pred'].append(pred_after.numpy()[0])
             after['acc'].append((pred_after == y_qry_i.cpu()).numpy()[0])
-            after['result'].append(int(not(after['pred'][-1])) * logy_qry_i.numpy()[0])
+            # after['result'].append(int(not(after['pred'][-1])) * logy_qry_i.numpy()[0]) # TODO: real return
+            after['result'].append(int(not(after['pred'][-1])) * np.sign(logy_qry_i.numpy()[0]) * 0.01)
             # result2.append(int(not(pred2[-1])) * logy_qry_i.numpy()[0] + int(pred2[-1]) * logy_qry_i.numpy()[0])
 
     e_t = time.time()
@@ -387,36 +396,56 @@ def plot_model2(configs, model, dataloaders, criterion, ep):
     print("acc1: {}, acc2: {}".format(np.sum(before['acc']) / len(before['acc']), np.sum(after['acc']) / len(after['acc'])))
     before['result'] = np.array(before['result'], dtype=np.float32)
     after['result'] = np.array(after['result'], dtype=np.float32)
-    bm = np.array(bm, dtype=np.float32)
-    result_bm = np.cumsum(bm.squeeze()) - bm.squeeze()[0]
+    before['prob'] = np.array(before['prob'], dtype=np.float32)
+    after['prob'] = np.array(after['prob'], dtype=np.float32)
+    bm_arr = np.array(bm, dtype=np.float32).squeeze()
+
+    result_bm = np.cumsum(bm_arr) - bm_arr[0]
     len1 = data_len[0]
     len2 = data_len[0] + data_len[1]
+    # before
     result_plot1 = np.cumsum(before['result']) - before['result'][0]
     result_plot1[len1:] = result_plot1[len1:] - result_plot1[len1] + result_bm[len1]
     result_plot1[len2:] = result_plot1[len2:] - result_plot1[len2] + result_bm[len2]
+    # after
     result_plot2 = np.cumsum(after['result']) - after['result'][0]
     result_plot2[len1:] = result_plot2[len1:] - result_plot2[len1] + result_bm[len1]
     result_plot2[len2:] = result_plot2[len2:] - result_plot2[len2] + result_bm[len2]
+    # prob after
+    before['result_prob'] = 0.5 * bm_arr + 0.3 * (before['prob'] > 0.6) * bm_arr - 0.3 * (before['prob'] < 0.4) * bm_arr
+    after['result_prob'] = 0.5 * bm_arr + 0.3 * (after['prob'] > 0.6) * bm_arr - 0.3 * (after['prob'] < 0.4) * bm_arr
+    result_plot3 = np.cumsum(after['result_prob']) - after['result_prob'][0]
+    result_plot3[len1:] = result_plot3[len1:] - result_plot3[len1] + result_bm[len1]
+    result_plot3[len2:] = result_plot3[len2:] - result_plot3[len2] + result_bm[len2]
+    # ls
+    before['result_ls'] = 0.5 * (before['prob'] > 0.5) * bm_arr - 0.5 * (before['prob'] < 0.5) * bm_arr
+    after['result_ls'] = 0.5 * (after['prob'] > 0.5) * bm_arr - 0.5 * (after['prob'] < 0.5) * bm_arr
+    result_plot3 = np.cumsum(after['result_prob']) - after['result_prob'][0]
+    result_plot3[len1:] = result_plot3[len1:] - result_plot3[len1] + result_bm[len1]
+    result_plot3[len2:] = result_plot3[len2:] - result_plot3[len2] + result_bm[len2]
+    #
+
     fig = plt.figure()
     plt.plot(np.arange(len(result_bm)), result_bm, 'b')
     plt.plot(np.arange(len(result_bm)), result_plot1, 'k')
     plt.plot(np.arange(len(result_bm)), result_plot2, 'r')
+    plt.plot(np.arange(len(result_bm)), result_plot3, 'g')
     plt.axvline(x=len1)
     plt.axvline(x=len2)
-    fig.legend(['bm', 'before', 'after'])
+    fig.legend(['bm', 'before', 'after', 'prob_after'])
     fig.savefig('./out/maml/{}.png'.format(ep))
     plt.close(fig)
 
     # prob 적용
-    result_plot1 = np.cumsum(before['result']) - before['result'][0]
+    result_plot1 = np.cumsum(before['prob']) - before['result'][0]
     result_plot1[len1:] = result_plot1[len1:] - result_plot1[len1] + result_bm[len1]
     result_plot1[len2:] = result_plot1[len2:] - result_plot1[len2] + result_bm[len2]
     result_plot2 = np.cumsum(after['result']) - after['result'][0]
     result_plot2[len1:] = result_plot2[len1:] - result_plot2[len1] + result_bm[len1]
     result_plot2[len2:] = result_plot2[len2:] - result_plot2[len2] + result_bm[len2]
 
-
     return before, after, bm
+
 
 # many tasks
 def train_maml2(model, criterion, optimizer, scheduler, dataloaders, lr_inner=0.01, num_epochs=25):
@@ -534,8 +563,8 @@ def train_maml2(model, criterion, optimizer, scheduler, dataloaders, lr_inner=0.
     return model
 
 
-def train_maml3(configs, model, criterion, optimizer, scheduler, dataloaders, base_i):
-    # num_epochs=25;phase='train';lr_inner=0.01
+def train_maml3(configs, model, criterion, optimizer, scheduler, dataloaders, base_i, use_maml=True):
+    # num_epochs=25;phase='train';lr_inner=0.01;base_i=2000; use_maml=True;ep=0
     since = time.time()
 
     c = configs
@@ -550,13 +579,13 @@ def train_maml3(configs, model, criterion, optimizer, scheduler, dataloaders, ba
     best_acc = 0.0
     min_eval_loss = 9999
     stop_count = 0
-    for epoch in range(num_epochs):
-        print('Epoch {}/{}'.format(epoch, num_epochs - 1))
+    for ep in range(num_epochs):
+        print('Epoch {}/{}'.format(ep, num_epochs - 1))
         print('-' * 10)
 
-        if epoch % c.print_step == 0:
+        if ep % c.print_step == 0:
             model.eval()
-            _ = plot_model2(configs, model, dataloaders, criterion, ep=base_i * num_epochs + epoch)
+            _ = plot_model2(configs, model, dataloaders, criterion, ep=base_i * num_epochs + ep, use_maml=use_maml)
 
         # 각 에폭(epoch)은 학습 단계와 검증 단계를 갖습니다.
         for phase in ['train', 'eval']:
@@ -591,17 +620,28 @@ def train_maml3(configs, model, criterion, optimizer, scheduler, dataloaders, ba
                 outputs_spt = model.forward(x_spt_i)
                 # outputs = F.softmax(outputs)
                 _, preds = torch.max(outputs_spt, 1)
-                train_loss = criterion(outputs_spt, y_spt_i) * torch.exp(logy_spt_i) / torch.sum(torch.exp(logy_spt_i))
-                train_loss = torch.sum(train_loss)
-                # Step 6
-                grad = torch.autograd.grad(train_loss, model.parameters(), retain_graph=True, create_graph=True)
+                train_loss = criterion(outputs_spt, y_spt_i) # * torch.exp(logy_spt_i) / torch.sum(torch.exp(logy_spt_i)) # TODO: real return
+                train_loss = torch.sum(train_loss) / len(train_loss)
 
-                fast_weights = list(map(lambda p: p[1] - lr_inner * p[0], zip(grad, model.parameters())))
+                if use_maml:
+                    # Step 6
+                    grad = torch.autograd.grad(train_loss, model.parameters(), retain_graph=True, create_graph=True)
 
-                with torch.set_grad_enabled(phase == 'train'):
-                    outputs_qry = model.forward(x_qry_i, fast_weights)  # run forward pass to initialize weights
-                    test_loss = criterion(outputs_qry, y_qry_i) * torch.exp(logy_qry_i)
+                    fast_weights = list(map(lambda p: p[1] - lr_inner * p[0], zip(grad, model.parameters())))
+
+                    with torch.set_grad_enabled(phase == 'train'):
+                        outputs_qry = model.forward(x_qry_i, fast_weights)  # run forward pass to initialize weights
+                        test_loss = criterion(outputs_qry, y_qry_i) # * torch.exp(logy_qry_i) # TODO: real return
+                        weights_per_task.append(torch.exp(logy_qry_i).cpu().numpy())
+                        if task_losses is None:
+                            task_losses = test_loss
+                        else:
+                            task_losses += test_loss
+
+                else:
+                    outputs_qry = model.forward(x_qry_i)  # run forward pass to initialize weights
                     weights_per_task.append(torch.exp(logy_qry_i).cpu().numpy())
+                    test_loss = criterion(outputs_qry, y_qry_i)
                     if task_losses is None:
                         task_losses = test_loss
                     else:
@@ -615,12 +655,12 @@ def train_maml3(configs, model, criterion, optimizer, scheduler, dataloaders, ba
 
             # 학습 단계인 경우 역전파 + 최적화
             if phase == 'train':
-                total_losses = task_losses / np.sum(weights_per_task)
+                total_losses = task_losses / len(weights_per_task) # / np.sum(weights_per_task) # TODO: real return
                 optimizer.zero_grad()
                 total_losses.backward()
                 optimizer.step()
 
-            epoch_loss = running_loss / np.sum(weights_per_task)
+            epoch_loss = running_loss / len(weights_per_task)  # / np.sum(weights_per_task) # TODO: real return
             epoch_acc = running_corrects.double() / len(dataloaders[phase])
 
 
@@ -644,7 +684,7 @@ def train_maml3(configs, model, criterion, optimizer, scheduler, dataloaders, ba
         if stop_count >= early_stopping:
             print('early stopped')
             model.load_state_dict(best_model_wts)
-            before, after, bm = plot_model2(configs, model, dataloaders, criterion, ep=base_i * num_epochs + epoch + 1)
+            before, after, bm = plot_model2(configs, model, dataloaders, criterion, ep=base_i * num_epochs + ep + 1, use_maml=use_maml)
             test_result['before'].append(before['result'][-len(dataloaders['test']):])
             test_result['after'].append(after['result'][-len(dataloaders['test']):])
             test_result['bm'].append(bm[-len(dataloaders['test']):])
@@ -660,7 +700,6 @@ def train_maml3(configs, model, criterion, optimizer, scheduler, dataloaders, ba
     model.load_state_dict(best_model_wts)
 
     return model, test_result
-
 
 
 class ImageModel(nn.Module):
@@ -728,7 +767,7 @@ class ImageModel(nn.Module):
             elif name.lower() == 'relu':
                 x = F.relu(x)
             elif name.lower() == 'dropout':
-                x = F.dropout(x, param[0])
+                x = F.dropout(x, param[0], training=self.training)
             elif name.lower() == 'layer_norm':
                 x = F.layer_norm(x, param)
             else:
@@ -850,7 +889,7 @@ def main_maml3():
         # 7 에폭마다 0.1씩 학습율 감소
         # scheduler = lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
         scheduler = None
-        model_conv, test_result = train_maml3(c, model, criterion, optimizer, scheduler, dataloaders, i)
+        model_conv, test_result = train_maml3(c, model, criterion, optimizer, scheduler, dataloaders, i, use_maml=False)
 
         for key in ['before', 'after', 'bm']:
             results_all[key] += test_result[key]

@@ -355,7 +355,7 @@ class DataScheduler:
         balancing_list = ['mktcap', 'size_rnk']     # TODO: configs로 옮겨야됨
         # for i, d in enumerate(reversed(range(start_idx + c.k_days, end_idx, c.k_days))):
         # for i, d in enumerate(range(start_idx + c.k_days, end_idx, c.k_days)):
-        if mode in ['test', 'test_insample', 'predict', 'test_monthly']:
+        if mode in ['test', 'test_insample', 'predict']:
             n_loop = np.ceil((end_idx - start_idx - c.k_days) / c.k_days)
             tasks = np.arange(start_idx + c.k_days, end_idx, c.k_days)
         else:
@@ -472,7 +472,7 @@ class DataScheduler:
             print('dataloader: mode-{} batchsize-{}'.format(mode, batch_size))
             return dataloader, features_list
 
-        elif mode in ['test', 'test_monthly', 'predict', 'test_insample']:
+        elif mode in ['test', 'predict', 'test_insample']:
             idx_y = features_list.index(c.label_feature)
             all_assets_list = list()
             features = list()
@@ -761,16 +761,16 @@ class DataScheduler:
         model.eval()
 
         if is_monthly:
-            mode = 'test_monthly'
+            # mode = 'test_monthly'
             performer_func = performer.predict_plot_monthly
-
         else:
-            if is_insample:
-                mode = 'test_insample'
-            else:
-                mode = 'test'
-            self_mode = 'single_' + mode
             performer_func = performer.predict_plot_mtl
+
+        if is_insample:
+            mode = 'test_insample'
+        else:
+            mode = 'test'
+        self_mode = 'single_' + mode
 
         if (ep == 0) or (self.dataloader.get(self_mode) is None):
             self.dataloader[self_mode] = self._dataloader(mode, is_monthly=is_monthly)
@@ -790,7 +790,7 @@ class DataScheduler:
         model.eval()
 
         if is_monthly:
-            mode = 'test_monthly'
+            # mode = 'test_monthly'
             performer_func = performer.predict_plot_monthly
             raise NotImplementedError
         else:
@@ -996,11 +996,11 @@ class PrepareDataFromDB:
             # date
             self.get_datetable()
             # return data
-            self.get_kr_close_y(90)
+            self.get_close_y(90, country='kr')
             # factor wgt & univ
             self.get_factorwgt_and_univ('CAP_300_100')  # 'CAP_100_150'
             # mktcap
-            self.get_mktcap_daily()
+            self.get_mktcap_daily(country='kr')
 
     def run_procedure(self):
         # universe
@@ -1028,7 +1028,7 @@ class PrepareDataFromDB:
         print('[proc] EquityMarketValueMonthly done')
 
     @done_decorator
-    def get_kr_close_y(self, top_npercent=90):
+    def get_close_y(self, top_npercent=90, country='kr'):
         sql_ = """
         select date_, infocode, y
             from (
@@ -1036,7 +1036,7 @@ class PrepareDataFromDB:
                     from (
                         select infocode
                             from qinv..EquityUniverse 
-                            where region = 'KR' 
+                            where region = '{}' 
                             and typecode = 'eq'
                     ) U
                     cross apply (
@@ -1053,10 +1053,10 @@ class PrepareDataFromDB:
                     where infocode = u.infocode
             ) A
             order by date_, infocode
-        """.format(top_npercent)
+        """.format(country, top_npercent)
         self.sqlm.set_db_name('qinv')
         df = self.sqlm.db_read(sql_)
-        df.to_csv('./data/kr_close_y_{}.csv'.format(top_npercent), index=False)
+        df.to_csv('./data/{}_close_y_{}.csv'.format(country, top_npercent), index=False)
 
     @done_decorator
     def get_factorwgt_and_univ(self, univ_nm='CAP_300_100'):
@@ -1100,7 +1100,7 @@ class PrepareDataFromDB:
         df.to_csv('./data/date.csv', index=False)
 
     @done_decorator
-    def get_mktcap_daily(self):
+    def get_mktcap_daily(self, country='kr'):
         sql_ = """
         select d.eval_d
             , U.infocode
@@ -1112,7 +1112,7 @@ class PrepareDataFromDB:
             cross apply (
                 select * 
                     from qinv..EquityUniverse U
-                    where region = 'KR' AND typecode = 'EQ'
+                    where region = '{}' AND typecode = 'EQ'
                     and u.StartDate <= d.eval_d and u.EndDate >= d.eval_d
             ) U
             cross apply (
@@ -1142,10 +1142,10 @@ class PrepareDataFromDB:
                     and EventDate <= d.eval_d
                     order by EventDate desc
             ) N
-        """
+        """.format(country)
         self.sqlm.set_db_name('qinv')
         df = self.sqlm.db_read(sql_)
-        df.to_csv('./data/kr_mktcap_daily.csv', index=False)
+        df.to_csv('./data/{}_mktcap_daily.csv'.format(country), index=False)
 
 
 class DataSamplerMarket:
