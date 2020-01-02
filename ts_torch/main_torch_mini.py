@@ -25,13 +25,13 @@ configs.pred_feature = pred
 configs.weight_scheme = w_scheme
 configs.balancing_method = balancing_method
 # configs.learning_rate = 1e-4
-configs.f_name = 'kr_{}_{}_{}_{}_h{}_torch_notmaml_01'.format(k_days, univ_type, balancing_method, pred, head)
+configs.f_name = 'kr_{}_{}_{}_{}_h{}_torch_20jan_07'.format(k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100
 configs.eval_steps = 100
 configs.save_steps = 100
 configs.size_encoding = True
 configs.attention_head_size = head
-configs.early_stopping_count = 50
+configs.early_stopping_count = 5
 configs.learning_rate = 5e-4
 configs.update_comment = 'single pred per task'
 config_str = configs.export()
@@ -39,7 +39,7 @@ config_str = configs.export()
 
 features_cls = FeatureNew(configs)
 ds = DataScheduler(configs, features_cls)
-ds.set_idx(6500)
+ds.set_idx(8250)
 
 os.makedirs(os.path.join(ds.data_out_path), exist_ok=True)
 with open(os.path.join(ds.data_out_path, 'config.txt'), 'w') as f:
@@ -64,6 +64,12 @@ while True:
         ds.train_maml(model, optimizer, performer, num_epochs=100, early_stopping_count=configs.early_stopping_count)
     else:
         ds.train(model, optimizer, performer, num_epochs=100, early_stopping_count=configs.early_stopping_count)
+
+    recent_month_end = '2019-12-31'
+    dataloader_t = ds.dataloader_t(recent_month_end, force_calc=True)
+    x = performer.extract_portfolio(model, dataloader_t, rate_=configs.app_rate)
+    x.to_csv('./out/{}/result_{}.csv'.format(configs.f_name, ds.base_idx))
+
     ds.next()
     if ds.done:
         break
@@ -77,8 +83,8 @@ while True:
 
 # recent value extraction
 import numpy as np
-recent_month_end = '2019-10-31'
-dataloader_t = ds.dataloader_t(recent_month_end)
+recent_month_end = '2019-12-31'
+dataloader_t = ds.dataloader_t(recent_month_end, force_calc=True)
 # dataset_t = ds._dataset_t(recent_month_end)
 #
 # enc_in, dec_in, dec_out, features_list, add_infos = dataset_t

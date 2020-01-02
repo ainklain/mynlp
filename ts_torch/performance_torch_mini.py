@@ -120,21 +120,23 @@ class Performance:
 
         return new_wgt
 
-    def extract_portfolio(self, model, dataloader_set_t, rate_=1.):
+    def extract_portfolio(self, model, dataloader_t, rate_=1.):
         c = self.configs
-        dataloader, features_list, all_assets_list, start_d, end_d = dataloader_set_t
+        dataloader, features_list, all_assets_list, start_d, end_d = dataloader_t
         features, add_info = dataloader
 
         mc = np.array(add_info['mktcap'], dtype=np.float32).squeeze()
+        size_rnk = np.array(add_info['size_rnk'], dtype=np.float32).squeeze()
         assets = np.array(add_info['asset_list'])
 
         result_t = add_info['univ'].set_index('infocode').loc[assets]
+        result_t['size_rnk'] = size_rnk
         result_t.loc[np.isnan(result_t['wgt']), 'wgt'] = 0.
-        result_t['wgt'] = result_t['wgt'] / np.sum(result_t['wgt'])
+        result_t['mf_wgt'] = result_t['wgt'] / np.sum(result_t['wgt'])
 
         # ############ For BM ############
-        result_t['bm_wgt_ew'] = 1. / len(assets)
-        result_t['bm_wgt_mw'] = mc / np.sum(mc)
+        result_t['all_ew'] = 1. / len(assets)
+        result_t['all_mw'] = mc / np.sum(mc)
 
         # ############ For Model ############
         # prediction
@@ -145,6 +147,7 @@ class Performance:
         value_ = dict()
         value_[self.adj_feature] = predictions[self.adj_feature][:, 0, 0]
         value_['main'] = predictions[self.pred_feature][:, 0, 0]
+        result_t['score'] = value_['main']
 
         # long-short score
         scale_ls = weight_scale(value_['main'], method='ls_5_20')
@@ -152,28 +155,29 @@ class Performance:
         scale_l_temp = weight_scale(value_['main'], method='l_60')
         scale_l = scale_l_temp * weight_scale(value_[self.adj_feature], method='l_60')
 
-        result_t['model_wgt_ls_ew'] = scale_ls / np.sum(scale_ls)
-        result_t['model_wgt_ls_mw'] = mc * scale_ls / np.sum(mc * scale_ls)
+        result_t['ls_score'] = scale_ls
+        result_t['model_ew'] = scale_ls / np.sum(scale_ls)
+        result_t['model_mw'] = mc * scale_ls / np.sum(mc * scale_ls)
 
-        result_t['model_wgt_l_ew'] = scale_l / np.sum(scale_l)
-        result_t['model_wgt_l_mw'] = mc * scale_l / np.sum(mc * scale_l)
+        # result_t['model_wgt_l_ew'] = scale_l / np.sum(scale_l)
+        # result_t['model_wgt_l_mw'] = mc * scale_l / np.sum(mc * scale_l)
 
         # LONG SHORT
         # Equal Weight Mix
-        wgt_ls_ew = self.scale_to_wgt(result_t['wgt'], scale_ls, rate_, mc, w_method='ew')
+        wgt_ls_ew = self.scale_to_wgt(result_t['mf_wgt'], scale_ls, rate_, mc, w_method='ew')
         # Market Weight Mix
-        wgt_ls_mw = self.scale_to_wgt(result_t['wgt'], scale_ls, rate_, mc, w_method='mw')
+        wgt_ls_mw = self.scale_to_wgt(result_t['mf_wgt'], scale_ls, rate_, mc, w_method='mw')
 
         # Equal Weight Mix
-        wgt_l_ew = self.scale_to_wgt(result_t['wgt'], scale_l, rate_, mc, w_method='ew')
+        wgt_l_ew = self.scale_to_wgt(result_t['mf_wgt'], scale_l, rate_, mc, w_method='ew')
         # Market Weight Mix
-        wgt_l_mw = self.scale_to_wgt(result_t['wgt'], scale_l, rate_, mc, w_method='mw')
+        wgt_l_mw = self.scale_to_wgt(result_t['mf_wgt'], scale_l, rate_, mc, w_method='mw')
 
-        result_t['fm_wgt_ls_ew'] = wgt_ls_ew
-        result_t['fm_wgt_ls_mw'] = wgt_ls_mw
+        result_t['mf+model_ew'] = wgt_ls_ew
+        result_t['mf+model_mw'] = wgt_ls_mw
 
-        result_t['fm_wgt_l_ew'] = wgt_l_ew
-        result_t['fm_wgt_l_mw'] = wgt_l_mw
+        # result_t['fm_wgt_l_ew'] = wgt_l_ew
+        # result_t['fm_wgt_l_mw'] = wgt_l_mw
 
         return result_t
 
@@ -222,7 +226,7 @@ class Performance:
         model_mw = mw_dict['model']
 
         for i, (features, add_info) in enumerate(zip(*dataloader)):
-            # i=0; ein_t, din_t, dout_t, add_info = ie_list[i], od_list[i], td_list[i], add_infos[i]
+            # i=0; features, add_info = next(iter(zip(*dataloader)))
             if i % t_stepsize != 0:
                 continue
             t = i // t_stepsize + 1

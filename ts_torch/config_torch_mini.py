@@ -2,7 +2,7 @@
 class Config:
     def __init__(self):
         # time series parameter
-        self.train_set_length = 1000    # previous 10 years data
+        self.train_set_length = 2500    # previous 10 years data
         self.retrain_days = 250         # re-train every year
         self.m_days = 120                # input length of encoding layer (key, value)
         self.k_days = 20                # input and output length of decoding layer (query)
@@ -11,7 +11,7 @@ class Config:
         self.delay_days = 1
 
         self.sampling_days = 20          # get data every 'sampling_days' days
-        self.trainset_rate = 0.5
+        self.trainset_rate = 0.8
         self.cost_rate = 0.003
 
         self.train_batch_size = 256
@@ -38,7 +38,7 @@ class Config:
         self.shuffle_seek = 1000
         self.d_model = 64
         self.n_heads = 4
-        self.n_layers = 2
+        self.n_layers = 3
         # self.model_hidden_size = 128
         # self.model_hidden_size = self.embedding_size    # self.set_features_info 에서 재설정
         self.d_ff = self.d_model
@@ -73,7 +73,9 @@ class Config:
         self.inner_lr = 1e-2  # 5e-3
         self.meta_lr = 1e-3  # 1e-4
 
-
+        # self.train_set_length = 1000    # previous 10 years data
+        # self.sampling_days = 20          # get data every 'sampling_days' days
+        # self.trainset_rate = 0.5
 
 
     @property

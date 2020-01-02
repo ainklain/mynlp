@@ -506,6 +506,7 @@ class ConvEmbeddingLayer(Base):
         outputs = torch.cat((inputs, outputs), axis=-1)
         return outputs
 
+
 class EncoderLayer(Base):
     def __init__(self, d_k, d_v, d_model, d_ff, n_heads, dropout=0.1):
         super(EncoderLayer, self).__init__()

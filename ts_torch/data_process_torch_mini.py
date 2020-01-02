@@ -169,14 +169,14 @@ class DataScheduler:
         next_idx = np.array([list(date_arr).index(d_) for d_ in next_d_list])
         return next_d_list, next_idx
 
-    def _dataset_t(self, base_d):
+    def _dataset_t(self, base_d, **kwargs):
         univ = self.data_generator.univ
 
         features_list = self.configs.key_list
         recent_d, recent_idx = self.nearest_d_from_m_end([base_d])
         recent_d, recent_idx = recent_d[0], recent_idx[0]
 
-        fetch_data = self._fetch_data(recent_idx)
+        fetch_data = self._fetch_data(recent_idx, **kwargs)
         if fetch_data is None:
             return False
 
@@ -188,9 +188,9 @@ class DataScheduler:
 
         return enc_in, dec_in, dec_out, features_list, add_info
 
-    def dataloader_t(self, recent_month_end):
+    def dataloader_t(self, recent_month_end, **kwargs):
         c = self.configs
-        _dataset_t = self._dataset_t(recent_month_end)
+        _dataset_t = self._dataset_t(recent_month_end, **kwargs)
 
         enc_in, dec_in, dec_out, features_list, add_infos = _dataset_t
 
@@ -757,20 +757,21 @@ class DataScheduler:
         return total_losses
 
     def test_plot(self, performer, model, ep, is_monthly, is_insample=False):
-        # self=ds; ep=0; is_monthly = False
+        # self=ds; ep=0; is_monthly = False; is_insample=False
         model.eval()
-
-        if is_monthly:
-            # mode = 'test_monthly'
-            performer_func = performer.predict_plot_monthly
-        else:
-            performer_func = performer.predict_plot_mtl
 
         if is_insample:
             mode = 'test_insample'
         else:
             mode = 'test'
         self_mode = 'single_' + mode
+
+        if is_monthly:
+            # mode = 'test_monthly'
+            self_mode = self_mode + '_monthly'
+            performer_func = performer.predict_plot_monthly
+        else:
+            performer_func = performer.predict_plot_mtl
 
         if (ep == 0) or (self.dataloader.get(self_mode) is None):
             self.dataloader[self_mode] = self._dataloader(mode, is_monthly=is_monthly)
@@ -1412,8 +1413,8 @@ class DataGeneratorDynamic:
 
                 univ_w_size = univ_w_size[univ_w_size.infocode > 0]
                 univ_w_size['mktcap'] = univ_w_size['mktcap'] / 1000.
-                self.univ = univ_w_size.loc[:, ['eval_m', 'infocode', 'gicode', 'size_port', 'mktcap', 'wgt']]
-                self.univ.columns = ['eval_m', 'infocode', 'gicode', 'size_port', 'mktcap', 'wgt']
+                self.univ = univ_w_size.loc[:, ['eval_m', 'infocode', 'gicode', 'mktcap', 'wgt']]
+                self.univ.columns = ['eval_m', 'infocode', 'gicode', 'mktcap', 'wgt']
                 self.size_data = size_data
 
             self.features_cls = features_cls
@@ -1449,7 +1450,7 @@ class DataGeneratorDynamic:
 
         # data cleansing
         select_where = ((df_pivoted.index >= start_d) & (df_pivoted.index <= end_d))
-        df_logp = cleansing_missing_value(df_pivoted.loc[select_where, :], n_allow_missing_value=5, to_log=True)
+        df_logp = cleansing_missing_value(df_pivoted.loc[select_where, :], n_allow_missing_value=20, to_log=True)
 
         if df_logp.empty or len(df_logp) <= calc_length + m_days:
             return False
