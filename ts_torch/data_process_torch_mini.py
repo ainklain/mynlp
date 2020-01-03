@@ -637,7 +637,7 @@ class DataScheduler:
 
                     # add random noise for labels
                     labels_with_noise = Noise.random_noise(labels, p=0.2)
-                    labels_with_noise = Noise.random_flip(labels_with_noise, p=0.9, flip_p=0.2)
+                    labels_with_noise = Noise.random_flip(labels_with_noise, p=0.1, flip_p=0.2)
 
                 labels_mtl = self.labels_torch(features_list, labels_with_noise, add_infos)
                 to_device(tu.device, [features_with_noise, labels_mtl])
@@ -957,7 +957,7 @@ class DataScheduler:
         print("Model Loaded. ({})".format(load_path))
         checkpoint = torch.load(load_path)
         model.optim_state_dict = checkpoint['model_state_dict']
-        model.load_state_dict(model.optim_state_dict)
+        model.load_from_optim()
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         model.eval()
 

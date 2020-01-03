@@ -38,7 +38,7 @@ class Config:
         self.shuffle_seek = 1000
         self.d_model = 64
         self.n_heads = 4
-        self.n_layers = 3
+        self.n_layers = 2
         # self.model_hidden_size = 128
         # self.model_hidden_size = self.embedding_size    # self.set_features_info 에서 재설정
         self.d_ff = self.d_model
@@ -109,27 +109,43 @@ class Config:
 
     def set_features_info(self, k_days=5):
         if k_days == 5:
-        # self.model_predictor_list = ['logy', 'pos_20', 'pos_60', 'pos_120', 'std', 'mdd', 'fft']
-        #     self.model_predictor_list = ['logy', 'cslogy_5', 'pos_5', 'pos_10', 'pos_20', 'std', 'mdd', 'fft']
-            self.model_predictor_list = ['logy', 'cslogy', 'csstd', 'std', 'stdnew', 'mdd', 'fft', 'pos_5', 'pos_20']
+            # self.model_predictor_list = ['logy', 'pos_20', 'pos_60', 'pos_120', 'std', 'mdd', 'fft']
+            # self.model_predictor_list = ['logy', 'cslogy_5', 'pos_5', 'pos_10', 'pos_20', 'std', 'mdd', 'fft']
+            # self.model_predictor_list = ['logy', 'cslogy', 'csstd', 'std', 'stdnew', 'mdd', 'fft', 'pos_5', 'pos_20']
             # self.model_predictor_list = ['cslogy', 'csstd', 'pos_5']
+
+            self.model_predictor_list = ['nmlogy', 'nmstd', 'pos_5']
 
             self.features_structure = \
                 {'regression':
-                     # {'logy': [20, 60, 120, 250],
-                     {'logy': [5, 10, 20, 60, 120],
-                      'std': [20, 60, 120],
-                      'stdnew': [5, 20],
-                      'mdd': [20, 60, 120],
-                      'fft': [3, 100],
-                      'cslogy': [5, 20],
-                      'csstd': [5, 20],
+                     {'logy': [5],
+                      'std': [5],
+                      'stdnew': [5],
+                      'mdd': [5],
+                      'fft': [100],
+                      'nmlogy': [5],
+                      'nmstd': [5],
                       },
                  'classification':
-                     # {'pos': [20, 60, 120, 250]}}
-                     {'pos': [5, 10, 20, 60]},}
-                 # 'crosssection':
-                 #     {'cslogy': [5, 20]}}
+                     {'pos': [5]}}
+
+            # self.features_structure = \
+            #         {'regression':
+            #              # {'logy': [20, 60, 120, 250],
+            #              {'logy': [5, 10, 20, 60, 120],
+            #               'std': [20, 60, 120],
+            #               'stdnew': [5, 20],
+            #               'mdd': [20, 60, 120],
+            #               'fft': [3, 100],
+            #               'cslogy': [5, 20],
+            #               'csstd': [5, 20],
+            #               },
+            #          'classification':
+            #              # {'pos': [20, 60, 120, 250]}}
+            #              {'pos': [5, 10, 20, 60]}, }
+            #          # 'crosssection':
+            #          #     {'cslogy': [5, 20]}}
+
         elif k_days == 10:
             # self.model_predictor_list = ['logy', 'pos_10', 'pos_20', 'pos_60', 'std', 'mdd', 'fft']
             self.model_predictor_list = ['logy', 'cslogy', 'csstd', 'std', 'stdnew', 'mdd', 'fft']
@@ -172,7 +188,8 @@ class Config:
 
             self.features_structure = \
                 {'regression':
-                     {'logy': [20, 60, 120, 250],
+                     {'logp': [0],
+                      'logy': [20, 60, 120, 250],
                       'std': [20, 60, 120],
                       'stdnew': [20, 60],
                       'mdd': [20, 60, 120],
@@ -207,3 +224,5 @@ class Config:
     def generate_name(self):
         return "M{}_K{}_COST{}_BS{}_LR{}_BM{}_UT{}".format(self.m_days, self.k_days, self.cost_rate,
                                                       self.train_batch_size, self.learning_rate, self.balancing_method, self.univ_type)
+
+

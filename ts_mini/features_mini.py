@@ -57,7 +57,17 @@ def arr_to_cs(arr):
 
 
 def arr_to_normal(arr):
+    # cross sectional normalize
     return_value = (arr - np.nanmean(arr, axis=1, keepdims=True)) / np.nanstd(arr, axis=1, ddof=1, keepdims=True)
+    return return_value
+
+
+def arr_to_normal_ts(arr, m_days, calc_length):
+    assert len(arr) >= (calc_length + m_days + 1)
+    arr_insample = arr[:(calc_length + m_days + 1)]
+
+    # time series normalize
+    return_value = (arr - np.nanmean(arr_insample, axis=0, keepdims=True)) / np.nanstd(arr_insample, axis=0, ddof=1, keepdims=True)
     return return_value
 
 
@@ -80,7 +90,7 @@ class FeatureNew:
         self.delay_days = configs.delay_days
         self.sampling_days = configs.sampling_days
         # 아래 함수 추가할때마다 추가해줄것...
-        self.possible_func = ['logy', 'std', 'stdnew', 'pos', 'mdd', 'fft', 'cslogy', 'csstd', 'nmlogy', 'nmstd']
+        self.possible_func = ['logp', 'logy', 'std', 'stdnew', 'pos', 'mdd', 'fft', 'cslogy', 'csstd', 'nmlogy', 'nmstd']
         # v1.0 호환
         self.features_structure = configs.features_structure
 
@@ -131,7 +141,11 @@ class FeatureNew:
             arr_debug = arr[:(calc_length + m_days + 1)]
 
         # arr default: logp
-        if func_nm == 'logy':
+        if func_nm == 'logp':
+            result = arr_to_normal_ts(arr, m_days, calc_length)[calc_length:]
+            if debug:
+                result_debug = arr_to_normal_ts(arr_debug, m_days, calc_length)[calc_length:]
+        elif func_nm == 'logy':
             result = log_y_nd(arr, n)[calc_length:]
             if debug:
                 result_debug = log_y_nd(arr_debug, n)[calc_length:]
@@ -211,7 +225,10 @@ class FeatureNew:
         features_dict = dict()
         labels_dict = dict()
         for func_nm in self.possible_func:
-            if func_nm == 'fft':
+            if func_nm == 'logp':
+                nm = '{}_{}'.format(func_nm, 0)
+                features_dict[nm], labels_dict[nm] = self.calc_func(logp_arr, nm, debug)
+            elif func_nm == 'fft':
                 for n in [3, 6, 100]:
                     nm = '{}_{}'.format(func_nm, n)
                     features_dict[nm], labels_dict[nm] = self.calc_func(logp_arr, nm, debug)
