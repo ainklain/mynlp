@@ -839,7 +839,7 @@ class DataScheduler:
         labels_mtl = dict()
         for cls in c.features_structure.keys():
             for key in c.features_structure[cls].keys():
-                if key == 'fft':
+                if key in ['logp', 'fft', 'mdd']:
                     n = c.features_structure[cls][key][0]
                 else:
                     n = c.k_days

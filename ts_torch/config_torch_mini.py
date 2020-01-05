@@ -116,35 +116,36 @@ class Config:
 
             self.model_predictor_list = ['nmlogy', 'nmstd', 'pos_5']
 
-            self.features_structure = \
-                {'regression':
-                     {'logy': [5],
-                      'std': [5],
-                      'stdnew': [5],
-                      'mdd': [5],
-                      'fft': [100],
-                      'nmlogy': [5],
-                      'nmstd': [5],
-                      },
-                 'classification':
-                     {'pos': [5]}}
-
             # self.features_structure = \
-            #         {'regression':
-            #              # {'logy': [20, 60, 120, 250],
-            #              {'logy': [5, 10, 20, 60, 120],
-            #               'std': [20, 60, 120],
-            #               'stdnew': [5, 20],
-            #               'mdd': [20, 60, 120],
-            #               'fft': [3, 100],
-            #               'cslogy': [5, 20],
-            #               'csstd': [5, 20],
-            #               },
-            #          'classification':
-            #              # {'pos': [20, 60, 120, 250]}}
-            #              {'pos': [5, 10, 20, 60]}, }
-            #          # 'crosssection':
-            #          #     {'cslogy': [5, 20]}}
+            #     {'regression':
+            #          {'logy': [5],
+            #           'std': [5],
+            #           'stdnew': [5],
+            #           'mdd': [5],
+            #           'fft': [100],
+            #           'nmlogy': [5],
+            #           'nmstd': [5],
+            #           },
+            #      'classification':
+            #          {'pos': [5]}}
+
+            self.features_structure = \
+                    {'regression':
+                         # {'logy': [20, 60, 120, 250],
+                         {'logy': [5, 10, 20, 60, 120],
+                          'logp': [0],
+                          'std': [5, 20, 60, 120],
+                          'stdnew': [5, 20],
+                          'mdd': [20, 60, 120],
+                          'fft': [100, 3],
+                          'nmlogy': [5, 20],
+                          'nmstd': [5, 20],
+                          },
+                     'classification':
+                         # {'pos': [20, 60, 120, 250]}}
+                         {'pos': [5, 10, 20, 60]}, }
+                     # 'crosssection':
+                     #     {'cslogy': [5, 20]}}
 
         elif k_days == 10:
             # self.model_predictor_list = ['logy', 'pos_10', 'pos_20', 'pos_60', 'std', 'mdd', 'fft']

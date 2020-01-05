@@ -26,7 +26,7 @@ configs.pred_feature = pred
 configs.weight_scheme = w_scheme
 configs.balancing_method = balancing_method
 # configs.learning_rate = 1e-4
-configs.f_name = 'kr_{}_{}_{}_{}_h{}_torch_20jan_12'.format(k_days, univ_type, balancing_method, pred, head)
+configs.f_name = 'kr_{}_{}_{}_{}_h{}_torch_20jan_02'.format(k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100
 configs.eval_steps = 100
 configs.save_steps = 100
@@ -41,6 +41,7 @@ config_str = configs.export()
 features_cls = FeatureNew(configs)
 ds = DataScheduler(configs, features_cls)
 ds.set_idx(6500)
+ds.test_end_idx += 500
 
 os.makedirs(os.path.join(ds.data_out_path), exist_ok=True)
 with open(os.path.join(ds.data_out_path, 'config.txt'), 'w') as f:
