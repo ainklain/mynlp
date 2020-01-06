@@ -413,6 +413,8 @@ class FeedForward(Base):
             self.out_a = nn.Sigmoid()
         elif out_activation == 'softmax':
             self.out_a = nn.Softmax()
+        elif out_activation == 'positive':
+            self.out_a = (lambda x: torch.log(1 + torch.exp(x)) + 1e-06)
         else:
             self.out_a = None
 
@@ -768,6 +770,8 @@ class TSModel(Base):
         self.weighted_model = c.weighted_model
 
         self.predictor = nn.ModuleDict()
+        if self.use_uncertainty:
+            self.predictor_std = nn.ModuleDict()
         self.predictor_helper = dict()
         n_size = 64
         for key in c.model_predictor_list:
@@ -775,12 +779,18 @@ class TSModel(Base):
             if tags[0] in c.features_structure['regression'].keys():
                 if key in ['cslogy', 'csstd']:
                     self.predictor[key] = FeedForward(c.d_model, n_size, 1, out_activation='sigmoid')
+                    if c.use_uncertainty:
+                        self.predictor_std[key] = FeedForward(c.d_model, n_size, 1, out_activation='positive')
                     # self.predictor[key] = FeedForward(c.d_model, n_size, len(c.features_structure['regression'][key]), out_activation='sigmoid')
                 else:
                     self.predictor[key] = FeedForward(c.d_model, n_size, 1, out_activation='linear')
+                    if c.use_uncertainty:
+                        self.predictor_std[key] = FeedForward(c.d_model, n_size, 1, out_activation='positive')
                     # self.predictor[key] = FeedForward(c.d_model, n_size, len(c.features_structure['regression'][key]))
             elif tags[0] in c.features_structure['classification'].keys():
                 self.predictor[key] = FeedForward(c.d_model, n_size, 2, out_activation='linear')
+                if c.use_uncertainty:
+                    self.predictor_std[key] = FeedForward(c.d_model, n_size, 2, out_activation='positive')
                 self.predictor_helper[key] = c.features_structure['regression']['logy'].index(int(tags[1]))
             # elif tags[0] in configs.features_structure['crosssection'].keys():
             #     self.predictor[key] = FeedForward(64, len(configs.features_structure['regression'][key]))
@@ -790,6 +800,7 @@ class TSModel(Base):
         self.optim_state_dict = self.state_dict()
         self.dropout_train = c.dropout
         self.inner_lr = c.inner_lr
+        self.use_uncertainty = c.use_uncertainty
 
     def trainable_params(self):
         # Avoid updating the position encoding
@@ -831,6 +842,8 @@ class TSModel(Base):
         pred_each = dict()
         for key in self.predictor.keys():
             pred_each[key] = self.predictor[key](predict)
+            if self.use_uncertainty:
+                pred_each[key+'-std'] = self.predictor_std[key](predict)
 
         return pred_each, enc_self_attns, dec_self_attns, dec_enc_attns
 
@@ -844,6 +857,7 @@ class TSModel(Base):
         encoder = c_dict['encoder']
         decoder = c_dict['decoder']
         predictor = c_dict['predictor']
+        predictor_std = c_dict['predictor_std']
 
         enc_in = conv_embedding['m'].compute_graph(features['input'], weights_list=conv_embedding['w'])
         dec_in = conv_embedding['m'].compute_graph(features['output'], weights_list=conv_embedding['w'])
@@ -857,6 +871,8 @@ class TSModel(Base):
         pred_each = dict()
         for key in predictor['m'].keys():
             pred_each[key] = predictor['m'][key].compute_graph(predict, weights_list=predictor['w'][key])
+            if self.use_uncertainty:
+                pred_each[key+'-std'] = predictor_std['m'][key].compute_graph(predict, weights_list=predictor_std['w'][key])
 
         return pred_each #, enc_self_attns, dec_self_attns, dec_enc_attns
 
@@ -889,16 +905,26 @@ class TSModel(Base):
         loss_each = dict()
         for key in self.predictor.keys():
             pred_each[key] = self.predictor[key](predict)
+            if self.use_uncertainty:
+                pred_each[key+'-std'] = self.predictor_std[key](predict)
 
             if key[:3] == 'pos':
-                criterion = torch.nn.CrossEntropyLoss(reduction='none')
+                if self.use_uncertainty:  # TODO : uncertainty for classification
+                    criterion = torch.nn.CrossEntropyLoss(reduction='none')
+                else:
+                    criterion = torch.nn.CrossEntropyLoss(reduction='none')
+
                 pred_each[key] = pred_each[key].contiguous().transpose(1, -1)
                 loss_each[key] = criterion(pred_each[key], labels_mtl[key])
                 adj_logy = torch.abs(labels_mtl['logy'][:, :, self.predictor_helper[key]])
                 assert loss_each[key].shape == adj_logy.shape
                 loss_each[key] = loss_each[key] * adj_logy
             else:
-                criterion = torch.nn.MSELoss(reduction='none')
+                if self.use_uncertainty:
+                    criterion = torch.log()
+                else:
+                    criterion = torch.nn.MSELoss(reduction='none')
+
                 loss_each[key] = criterion(pred_each[key], labels_mtl[key]).mean(axis=-1)
 
             loss_shape = loss_each[key].shape

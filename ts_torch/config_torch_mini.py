@@ -68,14 +68,16 @@ class Config:
         self.embedding_size_mm = 10
 
         # meta
-        self.use_maml = False
+        self.use_maml = True
         self.n_tasks = 5
         self.inner_lr = 1e-2  # 5e-3
         self.meta_lr = 1e-3  # 1e-4
 
-        # self.train_set_length = 1000    # previous 10 years data
-        # self.sampling_days = 20          # get data every 'sampling_days' days
-        # self.trainset_rate = 0.5
+        self.train_set_length = 1000    # previous 10 years data
+        self.sampling_days = 20          # get data every 'sampling_days' days
+        self.trainset_rate = 0.5
+
+        self.use_uncertainty = False
 
 
     @property
