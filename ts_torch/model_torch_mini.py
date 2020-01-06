@@ -772,7 +772,8 @@ class TSModel(Base):
 
         self.predictor = nn.ModuleDict()
         if self.use_uncertainty:
-            self.predictor_std = nn.ModuleDict()
+            self.suffix_var = '-var'
+            self.predictor_var = nn.ModuleDict()
         self.predictor_helper = dict()
         n_size = 64
         for key in c.model_predictor_list:
@@ -781,17 +782,17 @@ class TSModel(Base):
                 if key in ['cslogy', 'csstd']:
                     self.predictor[key] = FeedForward(c.d_model, n_size, 1, out_activation='sigmoid')
                     if c.use_uncertainty:
-                        self.predictor_std[key] = FeedForward(c.d_model, n_size, 1, out_activation='positive')
+                        self.predictor_var[key] = FeedForward(c.d_model, n_size, 1, out_activation='positive')
                     # self.predictor[key] = FeedForward(c.d_model, n_size, len(c.features_structure['regression'][key]), out_activation='sigmoid')
                 else:
                     self.predictor[key] = FeedForward(c.d_model, n_size, 1, out_activation='linear')
                     if c.use_uncertainty:
-                        self.predictor_std[key] = FeedForward(c.d_model, n_size, 1, out_activation='positive')
+                        self.predictor_var[key] = FeedForward(c.d_model, n_size, 1, out_activation='positive')
                     # self.predictor[key] = FeedForward(c.d_model, n_size, len(c.features_structure['regression'][key]))
             elif tags[0] in c.features_structure['classification'].keys():
                 self.predictor[key] = FeedForward(c.d_model, n_size, 2, out_activation='linear')
                 if c.use_uncertainty:
-                    self.predictor_std[key] = FeedForward(c.d_model, n_size, 2, out_activation='positive')
+                    self.predictor_var[key] = FeedForward(c.d_model, n_size, 2, out_activation='positive')
                 self.predictor_helper[key] = c.features_structure['regression']['logy'].index(int(tags[1]))
             # elif tags[0] in configs.features_structure['crosssection'].keys():
             #     self.predictor[key] = FeedForward(64, len(configs.features_structure['regression'][key]))
@@ -843,7 +844,7 @@ class TSModel(Base):
         for key in self.predictor.keys():
             pred_each[key] = self.predictor[key](predict)
             if self.use_uncertainty:
-                pred_each[key+'-std'] = self.predictor_std[key](predict)
+                pred_each[key+self.suffix_var] = self.predictor_var[key](predict)
 
         return pred_each, enc_self_attns, dec_self_attns, dec_enc_attns
 
@@ -858,7 +859,7 @@ class TSModel(Base):
         decoder = c_dict['decoder']
         predictor = c_dict['predictor']
         if self.use_uncertainty:
-            predictor_std = c_dict['predictor_std']
+            predictor_var = c_dict['predictor_var']
 
         enc_in = conv_embedding['m'].compute_graph(features['input'], weights_list=conv_embedding['w'])
         dec_in = conv_embedding['m'].compute_graph(features['output'], weights_list=conv_embedding['w'])
@@ -873,7 +874,7 @@ class TSModel(Base):
         for key in predictor['m'].keys():
             pred_each[key] = predictor['m'][key].compute_graph(predict, weights_list=predictor['w'][key])
             if self.use_uncertainty:
-                pred_each[key+'-std'] = predictor_std['m'][key].compute_graph(predict, weights_list=predictor_std['w'][key])
+                pred_each[key+self.suffix_var] = predictor_var['m'][key].compute_graph(predict, weights_list=predictor_var['w'][key])
 
         return pred_each #, enc_self_attns, dec_self_attns, dec_enc_attns
 
@@ -907,7 +908,7 @@ class TSModel(Base):
         for key in self.predictor.keys():
             pred_each[key] = self.predictor[key](predict)
             if self.use_uncertainty:
-                pred_each[key+'-std'] = self.predictor_std[key](predict)
+                pred_each[key+self.suffix_var] = self.predictor_var[key](predict)
 
             if key[:3] == 'pos':
                 if self.use_uncertainty:  # TODO : uncertainty for classification
@@ -922,7 +923,7 @@ class TSModel(Base):
                 loss_each[key] = loss_each[key] * adj_logy
             else:
                 if self.use_uncertainty:
-                    criterion = torch.log()
+                    criterion = 0.5 * torch.log(pred_each[key+self.suffix_var]) + torch.pow(labels_mtl[key]-pred_each[key], 2) / (2 * pred_each[key+self.suffix_var]) + 10
                 else:
                     criterion = torch.nn.MSELoss(reduction='none')
 

@@ -4,7 +4,7 @@ class Config:
         # time series parameter
         self.train_set_length = 2500    # previous 10 years data
         self.retrain_days = 250         # re-train every year
-        self.m_days = 120                # input length of encoding layer (key, value)
+        self.m_days = 480               # input length of encoding layer (key, value)
         self.k_days = 20                # input and output length of decoding layer (query)
         self.calc_length = 250
         self.calc_length_label = 120
@@ -73,7 +73,7 @@ class Config:
         self.inner_lr = 1e-2  # 5e-3
         self.meta_lr = 1e-3  # 1e-4
 
-        self.train_set_length = 1000    # previous 10 years data
+        self.train_set_length = 2500    # previous 10 years data
         self.sampling_days = 20          # get data every 'sampling_days' days
         self.trainset_rate = 0.5
 
