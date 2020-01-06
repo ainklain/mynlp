@@ -756,6 +756,7 @@ class TSModel(Base):
         super(TSModel, self).__init__()
         c = configs
 
+        self.use_uncertainty = c.use_uncertainty
         self.weight_scheme = weight_scheme
 
         self.input_seq_size = c.m_days // c.sampling_days + 1
@@ -800,7 +801,6 @@ class TSModel(Base):
         self.optim_state_dict = self.state_dict()
         self.dropout_train = c.dropout
         self.inner_lr = c.inner_lr
-        self.use_uncertainty = c.use_uncertainty
 
     def trainable_params(self):
         # Avoid updating the position encoding
@@ -857,7 +857,8 @@ class TSModel(Base):
         encoder = c_dict['encoder']
         decoder = c_dict['decoder']
         predictor = c_dict['predictor']
-        predictor_std = c_dict['predictor_std']
+        if self.use_uncertainty:
+            predictor_std = c_dict['predictor_std']
 
         enc_in = conv_embedding['m'].compute_graph(features['input'], weights_list=conv_embedding['w'])
         dec_in = conv_embedding['m'].compute_graph(features['output'], weights_list=conv_embedding['w'])
