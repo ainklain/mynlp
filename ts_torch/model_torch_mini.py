@@ -801,7 +801,8 @@ class TSModel(Base):
 
         self.optim_state_dict = self.state_dict()
         self.dropout_train = c.dropout
-        self.inner_lr = c.inner_lr
+        if c.use_maml:
+            self.inner_lr = c.inner_lr
 
     def trainable_params(self):
         # Avoid updating the position encoding

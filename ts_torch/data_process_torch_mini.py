@@ -125,11 +125,11 @@ class DataScheduler:
         dg = self.data_generator
         data_path = self.data_path
         key_list = self.configs.key_list
-        configs = self.configs
+        c = self.configs
 
         file_nm = os.path.join(self.data_path, '{}.pkl'.format(date_i))
         if force_calc or not os.path.exists(file_nm):
-            result = dg.sample_data(date_i)
+            result = dg.sample_data(date_i, use_macro=c.use_macro)
             if result is False:
                 return None
 
@@ -142,7 +142,7 @@ class DataScheduler:
 
         n_assets = len(spot_dict['asset_list'])
         n_features = len(key_list)
-        M = configs.m_days // configs.sampling_days + 1
+        M = c.m_days // c.sampling_days + 1
 
         question = np.stack([features_dict[key] for key in key_list], axis=-1).astype(np.float32)
         question = np.transpose(question, axes=(1, 0, 2))
@@ -151,9 +151,11 @@ class DataScheduler:
         answer = np.zeros([n_assets, 2, n_features], dtype=np.float32)
 
         answer[:, 0, :] = question[:, -1, :]  # temporary
-        answer[:, 1, :] = np.stack(
-            [labels_dict[key] if labels_dict[key] is not None else np.zeros(n_assets) for key in key_list],
-            axis=-1)
+        answer[:, 1, :] = np.stack([labels_dict[key] if labels_dict[key] is not None
+                                    else np.zeros(n_assets) for key in key_list], axis=-1)
+
+        if c.use_macro:
+            x = np.concatenate([features_dict['macro_dict'][key] for key in self.macro_key_list], axis=-1)
 
         return question[:], answer[:, :-1, :], answer[:, 1:, :], spot_dict
 
@@ -1077,7 +1079,7 @@ class PrepareDataFromDB:
             order by m.work_d, a.wgt desc""".format(univ_nm)
         self.sqlm.set_db_name('passive')
         df = self.sqlm.db_read(sql_)
-        df.to_csv('./data/factor_wgt.csv', index=False)
+        df.to_csv('./data/kr_factor_wgt.csv', index=False)
 
         df.ix[:, ['work_m', 'infocode']].to_csv('./data/kr_univ_monthly.csv', index=False)
 
@@ -1105,6 +1107,7 @@ class PrepareDataFromDB:
         sql_ = """
         select d.eval_d
             , U.infocode
+            , isnull(P.Volume / N.NUMSHRS / 1000, -1.) as turnover
             , N.NUMSHRS * P.CLOSE_ / 1000 AS mktcap
             , NTILE(100) OVER (PARTITION BY d.eval_d, u.REGION ORDER BY N.NUMSHRS * P.CLOSE_ DESC) AS size
             from  (
@@ -1360,66 +1363,93 @@ class DataGeneratorMarket:
 
 class DataGeneratorDynamic:
     def __init__(self, features_cls, data_type='kr_stock', univ_type='selected'):
+        self.features_cls = features_cls
+
+        univ_path = None
+        date_mapping_path = './data/date.csv'           # [eval_m / work_m / eval_y / work_y]
         if data_type == 'kr_stock':
             # 가격데이터
-            data_path = './data/kr_close_y_90.csv'
-            data_df_temp = pd.read_csv(data_path)
-            data_df_temp = data_df_temp[data_df_temp.infocode > 0]
-            # 가격데이터 날짜 오류 수정
-            date_temp = data_df_temp[['date_', 'infocode']].groupby('date_').count()
-            date_temp = date_temp[date_temp.infocode >= 10]
-            date_temp.columns = ['cnt']
-            # 수익률 계산
-            self.date_ = list(date_temp.index)
-            data_df = pd.merge(date_temp, data_df_temp, on='date_')  # 최소 10종목 이상 존재 하는 날짜만
-            data_df['y'] = data_df['y'] + 1
-            data_df['cum_y'] = data_df[['date_', 'infocode', 'y']].groupby('infocode').cumprod(axis=0)
-            #
-            self.df_pivoted_all = data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
-            self.df_pivoted_all.columns = self.df_pivoted_all.columns.droplevel(0).to_numpy(dtype=np.int32)
+            return_path = './data/kr_close_y_90.csv'    # [date_ / infocode / y]
+            market_path = './data/kr_mktcap_daily.csv'    # [eval_d / infocode / turnover / mktcap / size]
+            macro_path = './data/data_for_metarl.csv'
 
-            size_df = pd.read_csv('./data/kr_mktcap_daily.csv')
-            size_df.columns = ['date_', 'infocode', 'mktcap', 'size_port']
-            data_df = data_df.set_index(['date_', 'infocode'])
-            size_df = size_df.set_index(['date_', 'infocode'])
+            if univ_type == 'selected':
+                univ_path = './data/kr_factor_wgt.csv'  # [work_m / univ_nm / gicode / infocode / wgt] # monthly
 
-            if univ_type == 'all':
-                self.data_code = pd.read_csv('./data/kr_sizeinfo_90.csv')
-                self.data_code = self.data_code[self.data_code.infocode > 0]
-            elif univ_type == 'selected':
-                # selected universe (monthly)
-                # univ = pd.read_csv('./data/kr_univ_monthly.csv')
-                univ = pd.read_csv('./data/factor_wgt.csv')
-                univ = univ[univ.infocode > 0]
+        elif data_type == 'us_stock':
+            # 가격데이터
+            return_path = './data/us_close_y_90.csv'
+            market_path = './data/us_mktcap_daily.csv'
 
-                # month end / year end mapping table
-                date_mapping = pd.read_csv('./data/date.csv')
-                univ_mapping = pd.merge(univ, date_mapping, left_on='work_m', right_on='work_m')
+        self.set_return_and_date(return_path)
 
-                # size_data = pd.read_csv('./data/kr_sizeinfo_90.csv')
-                if os.path.exists('./data/kr_mktcap_daily.csv'):
-                    # daily basis
-                    size_data = pd.read_csv('./data/kr_mktcap_daily.csv')
-                    size_data.columns = ['eval_d', 'infocode', 'mktcap', 'size_port']
-                    univ_w_size = pd.merge(univ_mapping, size_data,
-                                           left_on=['infocode', 'work_m'],
-                                           right_on=['infocode', 'eval_d'])
-                else:
-                    # year-end basis
-                    size_data = pd.read_csv('./data/kr_sizeinfo_90.csv')
-                    univ_w_size = pd.merge(univ_mapping, size_data,
-                                           left_on=['infocode', 'eval_y'],
-                                           right_on=['infocode', 'eval_d'])
+        self.set_marketdata(market_path)
 
-                univ_w_size = univ_w_size[univ_w_size.infocode > 0]
-                univ_w_size['mktcap'] = univ_w_size['mktcap'] / 1000.
-                self.univ = univ_w_size.loc[:, ['eval_m', 'infocode', 'gicode', 'mktcap', 'wgt']]
-                self.univ.columns = ['eval_m', 'infocode', 'gicode', 'mktcap', 'wgt']
-                self.size_data = size_data
+        self.set_univ(univ_path, date_mapping_path)
 
-            self.features_cls = features_cls
+    def set_return_and_date(self, return_path, min_stocks_per_day=10):
+        df = pd.read_csv(return_path)
+        df = df[df.infocode > 0]  # 잘못된 infocode 제거
 
-    def sample_data(self, date_i, debug=True):
+        # 날짜별 종목수
+        date_ = df[['date_', 'infocode']].groupby('date_').count()
+        date_ = date_[date_.infocode >= min_stocks_per_day]
+        date_.columns = ['cnt']
+
+        # 수익률 계산
+        self.date_ = list(date_.index)
+        data_df = pd.merge(date_, df, on='date_')
+        data_df['y'] = data_df['y'] + 1
+        data_df['cum_y'] = data_df[['date_', 'infocode', 'y']].groupby('infocode').cumprod(axis=0)
+
+        self.df_pivoted_all = data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
+        self.df_pivoted_all.columns = self.df_pivoted_all.columns.droplevel(0).to_numpy(dtype=np.int32)
+
+    def set_marketdata(self, size_path):
+        self.size_df = pd.read_csv(size_path)
+        self.size_df.columns = ['eval_d', 'infocode', 'turnover', 'mktcap', 'size_port']
+
+    def set_univ(self, univ_path, date_mapping_path, min_size_port=90):
+        assert hasattr(self, 'size_df'), '[set_univ] run set_marketdata first.'
+
+        # month end / year end mapping table
+        date_mapping = pd.read_csv(date_mapping_path)
+
+        if univ_path is None:
+            univ_df = self.size_df.loc[self.size_df.size_port <= min_size_port, ['eval_d', 'infocode']]
+            left_on = 'eval_d'
+        else:
+            univ_df = pd.read_csv(univ_path)
+            univ_df = univ_df[univ_df.infocode > 0]
+            left_on = 'work_m'
+
+        univ_mapping = pd.merge(univ_df, date_mapping, left_on=left_on, right_on='work_m')
+        univ_mapping = univ_mapping.loc[:, ['work_m', 'eval_m', 'infocode']]
+        # daily basis
+        univ_w_size = pd.merge(univ_mapping, self.size_df,
+                               left_on=['infocode', 'work_m'],
+                               right_on=['infocode', 'eval_d'])
+
+        univ_w_size = univ_w_size[univ_w_size.infocode > 0]
+        univ_w_size['mktcap'] = univ_w_size['mktcap'] / 1000.
+        if 'wgt' not in univ_w_size.columns:
+            univ_w_size['wgt'] = univ_w_size.loc[:, ['work_m', 'mktcap']].groupby('work_m').apply(lambda x: x / x.sum())
+
+        if 'gicode' not in univ_w_size.columns:
+            univ_w_size['gicode'] = univ_w_size['infocode']
+
+        self.univ = univ_w_size.loc[:, ['eval_m', 'infocode', 'gicode', 'mktcap', 'wgt']]
+        self.univ.columns = ['eval_m', 'infocode', 'gicode', 'mktcap', 'wgt']
+
+    def set_macrodata(self, macro_path):
+        assert hasattr(self, 'date_'), '[set_macrodata] run set_return_and_date first'
+        df = pd.read_csv(macro_path)
+        data_df = pd.merge(df, pd.DataFrame({'eval_d': self.date_}), how='right', left_on='eval_d', right_on='eval_d')
+        data_df = data_df.set_index('eval_d').fillna(0.)
+        data_df = (data_df + 1).cumprod(axis=0)
+        self.macro_df = data_df
+
+    def sample_data(self, date_i, debug=True, use_macro=False):
         # get attributes to local variables
         date_ = self.date_
         univ = self.univ
@@ -1430,12 +1460,12 @@ class DataGeneratorDynamic:
         univ_d = univ.eval_m[univ.eval_m <= base_d].max()
         univ_code = list(univ[univ.eval_m == univ_d].infocode)
 
-        size_d = self.size_data.eval_d[self.size_data.eval_d <= base_d].max()
-        size_df = self.size_data[self.size_data.eval_d == size_d][['infocode', 'mktcap']].set_index('infocode')
+        size_d = self.size_df.eval_d[self.size_df.eval_d <= base_d].max()
+        size_code = self.size_df[self.size_df.eval_d == size_d][['infocode', 'mktcap']].set_index('infocode')
+
 
         # set local parameters
         m_days = features_cls.m_days
-        k_days = features_cls.k_days
         calc_length = features_cls.calc_length
         calc_length_label = features_cls.calc_length_label
         delay_days = features_cls.delay_days
@@ -1455,7 +1485,7 @@ class DataGeneratorDynamic:
         if df_logp.empty or len(df_logp) <= calc_length + m_days:
             return False
 
-        univ_list = sorted(list(set.intersection(set(univ_code), set(df_logp.columns), set(size_df.index))))
+        univ_list = sorted(list(set.intersection(set(univ_code), set(df_logp.columns), set(size_code.index))))
         if len(univ_list) < 10:
             return False
         print('[{}] univ size: {}'.format(base_d, len(univ_list)))
@@ -1463,8 +1493,8 @@ class DataGeneratorDynamic:
         logp_arr = df_logp.reindex(columns=univ_list).to_numpy(dtype=np.float32)
 
         # size
-        selected_where_sz = ((self.size_data.eval_d >= start_d) & (self.size_data.eval_d <= end_d))
-        df_sz = self.size_data.loc[selected_where_sz, ['eval_d', 'infocode', 'mktcap']].pivot(index='eval_d', columns='infocode')
+        select_where_sz = ((self.size_df.eval_d >= start_d) & (self.size_df.eval_d <= end_d))
+        df_sz = self.size_df.loc[select_where_sz, ['eval_d', 'infocode', 'mktcap']].pivot(index='eval_d', columns='infocode')
         df_sz.columns = df_sz.columns.droplevel(0)
         if len(df_logp) != len(df_sz):
             df_sz = pd.merge(df_logp.reindex(columns=[]), df_sz, how='left', left_index=True, right_index=True)
@@ -1482,15 +1512,32 @@ class DataGeneratorDynamic:
         spot_dict = dict()
         spot_dict['base_d'] = base_d
         spot_dict['asset_list'] = univ_list
-        spot_dict['mktcap'] = size_df.loc[univ_list]
+        spot_dict['mktcap'] = size_code.loc[univ_list]
         spot_dict['size_rnk'] = spot_dict['mktcap'].rank() / len(spot_dict['mktcap'])
+
+        # macro
+        if use_macro:
+            select_where_macro = ((self.macro_df.index >= start_d) & (self.macro_df.index <= end_d))
+            df_macro = self.macro_df.loc[select_where_macro, :]
+            # assert np.sum(select_where) == np.sum(select_where_macro), 'selected data not matched (macro vs stocks)'
+            if len(df_logp) != len(df_sz):
+                df_macro = pd.merge(df_logp.reindex(columns=[]), df_macro, how='left', left_index=True, right_index=True)
+
+            df_macro = cleansing_missing_value(df_macro, n_allow_missing_value=20, to_log=True)
+            macro_logp_arr = df_macro.to_numpy(dtype=np.float32)
+            assert logp_arr.shape == macro_logp_arr.shape
+
+            macro_features_dict, macro_labels_dict = features_cls.calc_features(macro_logp_arr, transpose=False, debug=debug)
+            features_dict['macro_dict'] = macro_features_dict
+            labels_dict['macro_dict'] = macro_labels_dict
+
+            spot_dict['macro_list'] = list(df_macro.columns)
 
         return features_dict, labels_dict, spot_dict
 
     @property
     def max_length(self):
         return len(self.date_)
-
 
 
 class Noise:
@@ -1604,8 +1651,6 @@ def data_loader_maml(spt_dataset, tgt_dataset, sampler, shuffle=False):
         dataloader = DataLoader(asset_dataset, batch_size=1, sampler=sampler, pin_memory=False)  # sampler가 있으면 shuffle은 반드시 False
 
     return dataloader
-
-
 
 
 def to_device(device, list_to_device):

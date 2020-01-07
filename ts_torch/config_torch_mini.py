@@ -11,7 +11,7 @@ class Config:
         self.delay_days = 1
 
         self.sampling_days = 20          # get data every 'sampling_days' days
-        self.trainset_rate = 0.8
+        self.trainset_rate = 0.6
         self.cost_rate = 0.003
 
         self.train_batch_size = 256
@@ -68,16 +68,24 @@ class Config:
         self.embedding_size_mm = 10
 
         # meta
-        self.use_maml = True
-        self.n_tasks = 5
-        self.inner_lr = 1e-2  # 5e-3
-        self.meta_lr = 1e-3  # 1e-4
+        self.use_maml = False
+        if self.use_maml is True:
+            self.n_tasks = 5
+            self.inner_lr = 1e-2  # 5e-3
+            self.meta_lr = 1e-3  # 1e-4
 
-        self.train_set_length = 2500    # previous 10 years data
-        self.sampling_days = 20          # get data every 'sampling_days' days
-        self.trainset_rate = 0.5
+            self.train_set_length = 2500    # previous 10 years data
+            self.sampling_days = 20          # get data every 'sampling_days' days
+            self.trainset_rate = 0.5
 
+        # uncertainty
         self.use_uncertainty = False
+
+
+        # macro
+        self.use_macro = False
+        if self.use_macro:
+            self.macro_key_list = ['logp_0', 'logy_{}'.format(self.k_days), 'std_{}'.format(self.k_days)]
 
 
     @property
