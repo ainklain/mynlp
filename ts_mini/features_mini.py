@@ -90,7 +90,7 @@ class FeatureNew:
         self.delay_days = configs.delay_days
         self.sampling_days = configs.sampling_days
         # 아래 함수 추가할때마다 추가해줄것...
-        self.possible_func = ['logp', 'logy', 'std', 'stdnew', 'pos', 'mdd', 'fft', 'cslogy', 'csstd', 'nmlogy', 'nmstd']
+        self.possible_func = configs.possible_func
         # v1.0 호환
         self.features_structure = configs.features_structure
 
@@ -140,8 +140,8 @@ class FeatureNew:
             # label 데이터 제거 후 산출
             arr_debug = arr[:(calc_length + m_days + 1)]
 
-        # arr default: logp
-        if func_nm == 'logp':
+        # arr default: logp  TODO: arr Type ISSUE
+        if func_nm in ['logp', 'tsturnover']:
             result = arr_to_normal_ts(arr, m_days, calc_length)[calc_length:]
             if debug:
                 result_debug = arr_to_normal_ts(arr_debug, m_days, calc_length)[calc_length:]
@@ -192,11 +192,20 @@ class FeatureNew:
             if debug:
                 result_debug = arr_to_normal(std_nd_new(arr_debug, n)[calc_length:])
 
+        # arr : size_arr   TODO: arr Type ISSUE
+        elif func_nm in ['nmsize', 'nmturnover']:
+            result = arr_to_normal(arr[calc_length:])
+            result[np.isnan(result)] = 0  # TODO: 임시로 nan값 0처리
+            if debug:
+                result_debug = arr_to_normal(arr_debug[calc_length:])
+                result_debug[np.isnan(result_debug)] = 0  # TODO: 임시로 nan값 0처리
+
+
         feature, label = self.split_data_label(result)
         if debug:
             n_error = np.sum(feature - result_debug)
             if n_error != 0:
-                print("[debug: {}] data not matched.".format(func_nm))
+                print("[debug: {} nd: {}] data not matched.".format(func_nm, nd))
                 raise AssertionError
 
         # 라벨에 대한 고민. 5 sampling_days에서 logy_20을 구하는 경우,
@@ -217,32 +226,28 @@ class FeatureNew:
                 label_ = label[n]
         return feature[::self.sampling_days], label_
 
-    def calc_features(self, logp_arr, transpose=False, debug=False):
-        if transpose:
-            logp_arr = np.transpose(logp_arr)
+    def calc_features(self, arr, debug=False, calc_list=None):
+        # type_ in ['logp', 'size', 'turnover']
 
         # log_p_arr shape : [n_days per each base_d, codes_list]
         features_dict = dict()
         labels_dict = dict()
-        for func_nm in self.possible_func:
-            if func_nm == 'logp':
-                nm = '{}_{}'.format(func_nm, 0)
-                features_dict[nm], labels_dict[nm] = self.calc_func(logp_arr, nm, debug)
-            elif func_nm == 'fft':
-                for n in [3, 6, 100]:
-                    nm = '{}_{}'.format(func_nm, n)
-                    features_dict[nm], labels_dict[nm] = self.calc_func(logp_arr, nm, debug)
-            else:
-                for n in [5, 10, 20, 60, 120, 250]:
-                    nm = '{}_{}'.format(func_nm, n)
-                    features_dict[nm], labels_dict[nm] = self.calc_func(logp_arr, nm, debug)
-
-        if transpose:
-            for key in features_dict.keys():
-                features_dict[key] = np.transpose(features_dict[key])
-
-            for key in labels_dict.keys():
-                labels_dict[key] = np.transpose(labels_dict[key])
+        if calc_list is None:       # logp base features 전체 계산
+            for func_nm in self.possible_func['logp_base']:
+                if func_nm in ['logp']:
+                    nm = '{}_{}'.format(func_nm, 0)
+                    features_dict[nm], labels_dict[nm] = self.calc_func(arr, nm, debug)
+                elif func_nm == 'fft':
+                    for n in [3, 6, 100]:
+                        nm = '{}_{}'.format(func_nm, n)
+                        features_dict[nm], labels_dict[nm] = self.calc_func(arr, nm, debug)
+                else:
+                    for n in [5, 10, 20, 60, 120, 250]:
+                        nm = '{}_{}'.format(func_nm, n)
+                        features_dict[nm], labels_dict[nm] = self.calc_func(arr, nm, debug)
+        else:                       # 일부 features 계산 (매크로데이터의 경우 다 계산할 필요 X)
+            for nm in calc_list:
+                features_dict[nm], labels_dict[nm] = self.calc_func(arr, nm, debug)
 
         return features_dict, labels_dict
 

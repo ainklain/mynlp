@@ -35,13 +35,14 @@ def done_decorator(f):
 
 class DataScheduler:
     def __init__(self, configs, features_cls):
-        self.data_generator = DataGeneratorDynamic(features_cls, configs.data_type, configs.univ_type)
-        self.data_market = DataGeneratorMarket(features_cls, configs.data_type_mm)
-        self.configs = configs
+        c = configs
+        self.data_generator = DataGeneratorDynamic(features_cls, c.data_type, c.univ_type, c.use_macro)
+        # self.data_market = DataGeneratorMarket(features_cls, c.data_type_mm)
+        self.configs = c
         self.features_cls = features_cls
-        self.retrain_days = configs.retrain_days
+        self.retrain_days = c.retrain_days
 
-        self._initialize(configs)
+        self._initialize(c)
 
     def _initialize(self, configs):
         self.base_idx = configs.train_set_length
@@ -129,7 +130,7 @@ class DataScheduler:
 
         file_nm = os.path.join(self.data_path, '{}.pkl'.format(date_i))
         if force_calc or not os.path.exists(file_nm):
-            result = dg.sample_data(date_i, use_macro=c.use_macro)
+            result = dg.sample_data(date_i, c)
             if result is False:
                 return None
 
@@ -155,7 +156,24 @@ class DataScheduler:
                                     else np.zeros(n_assets) for key in key_list], axis=-1)
 
         if c.use_macro:
-            x = np.concatenate([features_dict['macro_dict'][key] for key in self.macro_key_list], axis=-1)
+            features_macro = []
+            labels_macro = []
+
+            # data_generator에서 계산/저장된 전체 macro ids 중 테스트에 적용하려는 list만 선별
+            m_idx = []
+            for m_id in c.macro_id_list:
+                m_idx.append(spot_dict['macro_list'].index(m_id))
+
+            # features_dict['macro_dict'][key] shape: [M, macro_list]
+            features_macro = np.concatenate([features_dict['macro_dict'][key][:, m_idx] for key in c.macro_key_list], axis=-1)
+            features_macro = np.tile(features_macro[np.newaxis, :], (n_assets, 1, 1))
+            # labels_dict['macro_dict'][key] shape: [macro_list, ]
+            labels_macro = np.concatenate([labels_dict['macro_dict'][key] for key in c.macro_key_list], axis=-1)
+            labels_macro = np.tile(labels_macro[np.newaxis, :], (n_assets, 1, 1))
+            labels_macro = np.concatenate([features_macro[:, -1:, :], labels_macro], axis=1)
+
+            question = np.concatenate([question, features_macro], axis=-1)
+            answer = np.concatenate([answer, labels_macro], axis=-1)
 
         return question[:], answer[:, :-1, :], answer[:, 1:, :], spot_dict
 
@@ -183,6 +201,12 @@ class DataScheduler:
             return False
 
         enc_in, dec_in, dec_out, add_info = fetch_data
+
+        if 'add_features_list' in add_info.keys():
+            features_list += add_info['add_features_list']
+            assert self.configs.use_macro is True, "_fetch_data 에서 macro 추가할때 존재하는 항목"
+            assert enc_in.shape[-1] == len(features_list)
+
         add_info['factor_d'] = base_d
         add_info['model_d'] = recent_d
         add_info['univ'] = univ[univ.eval_m == base_d]
@@ -1152,6 +1176,338 @@ class PrepareDataFromDB:
         df.to_csv('./data/{}_mktcap_daily.csv'.format(country), index=False)
 
 
+class DataGeneratorDynamic:
+    def __init__(self, features_cls, data_type='kr_stock', univ_type='selected', use_macro=False):
+        self.features_cls = features_cls
+        self.use_macro = use_macro
+
+        univ_path = None
+        date_mapping_path = './data/date.csv'           # [eval_m / work_m / eval_y / work_y]
+        if data_type == 'kr_stock':
+            # 가격데이터
+            return_path = './data/kr_close_y_90.csv'    # [date_ / infocode / y]
+            market_path = './data/kr_mktcap_daily.csv'    # [eval_d / infocode / turnover / mktcap / size]
+            macro_path = './data/data_for_metarl.csv'
+
+            if univ_type == 'selected':
+                univ_path = './data/kr_factor_wgt.csv'  # [work_m / univ_nm / gicode / infocode / wgt] # monthly
+
+        elif data_type == 'us_stock':
+            # 가격데이터
+            return_path = './data/us_close_y_90.csv'
+            market_path = './data/us_mktcap_daily.csv'
+
+        self.set_return_and_date(return_path)
+
+        self.set_marketdata(market_path)
+
+        self.set_univ(univ_path, date_mapping_path)
+
+        if use_macro:
+            self.set_macrodata(macro_path)
+
+    def set_return_and_date(self, return_path, min_stocks_per_day=10):
+        df = pd.read_csv(return_path)
+        df = df[df.infocode > 0]  # 잘못된 infocode 제거
+
+        # 날짜별 종목수
+        date_ = df[['date_', 'infocode']].groupby('date_').count()
+        date_ = date_[date_.infocode >= min_stocks_per_day]
+        date_.columns = ['cnt']
+
+        # 수익률 계산
+        self.date_ = list(date_.index)
+        data_df = pd.merge(date_, df, on='date_')
+        data_df['y'] = data_df['y'] + 1
+        data_df['cum_y'] = data_df[['date_', 'infocode', 'y']].groupby('infocode').cumprod(axis=0)
+
+        self.df_pivoted_all = data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
+        self.df_pivoted_all.columns = self.df_pivoted_all.columns.droplevel(0).to_numpy(dtype=np.int32)
+
+    def set_marketdata(self, size_path):
+        self.size_df = pd.read_csv(size_path)
+        self.size_df.columns = ['eval_d', 'infocode', 'turnover', 'mktcap', 'size_port']
+
+    def set_univ(self, univ_path, date_mapping_path, min_size_port=90):
+        assert hasattr(self, 'size_df'), '[set_univ] run set_marketdata first.'
+
+        # month end / year end mapping table
+        date_mapping = pd.read_csv(date_mapping_path)
+
+        if univ_path is None:
+            univ_df = self.size_df.loc[self.size_df.size_port <= min_size_port, ['eval_d', 'infocode']]
+            left_on = 'eval_d'
+        else:
+            univ_df = pd.read_csv(univ_path)
+            univ_df = univ_df[univ_df.infocode > 0]
+            left_on = 'work_m'
+
+        univ_mapping = pd.merge(univ_df, date_mapping, left_on=left_on, right_on='work_m')
+        univ_mapping = univ_mapping.loc[:, ['work_m', 'eval_m', 'infocode']]
+        # daily basis
+        univ_w_size = pd.merge(univ_mapping, self.size_df,
+                               left_on=['infocode', 'work_m'],
+                               right_on=['infocode', 'eval_d'])
+
+        univ_w_size = univ_w_size[univ_w_size.infocode > 0]
+        univ_w_size['mktcap'] = univ_w_size['mktcap'] / 1000.
+        if 'wgt' not in univ_w_size.columns:
+            univ_w_size['wgt'] = univ_w_size.loc[:, ['work_m', 'mktcap']].groupby('work_m').apply(lambda x: x / x.sum())
+
+        if 'gicode' not in univ_w_size.columns:
+            univ_w_size['gicode'] = univ_w_size['infocode']
+
+        self.univ = univ_w_size.loc[:, ['eval_m', 'infocode', 'gicode', 'mktcap', 'wgt']]
+        self.univ.columns = ['eval_m', 'infocode', 'gicode', 'mktcap', 'wgt']
+
+    def set_macrodata(self, macro_path):
+        assert hasattr(self, 'date_'), '[set_macrodata] run set_return_and_date first'
+        df = pd.read_csv(macro_path).set_index('eval_d')
+        df = (df + 1).cumprod(axis=0)
+        data_df = pd.merge(pd.DataFrame({'eval_d': self.date_}), df, how='left', left_on='eval_d', right_on='eval_d')
+        data_df = data_df.set_index('eval_d').ffill()
+        self.macro_df = data_df
+
+    def sample_data(self, date_i, configs, debug=True):
+        # get attributes to local variables
+        date_ = self.date_
+        univ = self.univ
+        df_pivoted = self.df_pivoted_all
+        features_cls = self.features_cls
+        c = configs
+
+        base_d = date_[date_i]
+        univ_d = univ.eval_m[univ.eval_m <= base_d].max()
+        univ_code = list(univ[univ.eval_m == univ_d].infocode)
+
+        size_d = self.size_df.eval_d[self.size_df.eval_d <= base_d].max()
+        size_code = self.size_df[self.size_df.eval_d == size_d][['infocode', 'mktcap']].set_index('infocode')
+
+        # set local parameters
+        m_days = c.m_days
+        calc_length = c.calc_length
+        calc_length_label = c.calc_length_label
+        delay_days = c.delay_days
+
+        len_data = calc_length + m_days
+        len_label = calc_length_label + delay_days
+        # k_days_adj = k_days + delay_days
+        # len_label = k_days_adj
+
+        start_d = date_[max(0, date_i - len_data)]
+        end_d = date_[min(date_i + len_label, len(date_) - 1)]
+
+        # data cleansing
+        select_where = ((df_pivoted.index >= start_d) & (df_pivoted.index <= end_d))
+        df_logp = cleansing_missing_value(df_pivoted.loc[select_where, :], n_allow_missing_value=20, to_log=True)
+
+        if df_logp.empty or len(df_logp) <= calc_length + m_days:
+            return False
+
+        univ_list = sorted(list(set.intersection(set(univ_code), set(df_logp.columns), set(size_code.index))))
+        if len(univ_list) < 10:
+            return False
+        print('[{}] univ size: {}'.format(base_d, len(univ_list)))
+
+        logp_arr = df_logp.reindex(columns=univ_list).to_numpy(dtype=np.float32)
+
+        # size
+        select_where_sz = ((self.size_df.eval_d >= start_d) & (self.size_df.eval_d <= end_d))
+        df_sz = self.size_df.loc[select_where_sz, ['eval_d', 'infocode', 'mktcap']].pivot(index='eval_d', columns='infocode')
+        df_sz.columns = df_sz.columns.droplevel(0)
+        if len(df_logp) != len(df_sz):
+            df_sz = pd.merge(df_logp.reindex(columns=[]), df_sz, how='left', left_index=True, right_index=True)
+
+        df_sz = df_sz.fillna(-1.)
+        df_sz = cleansing_missing_value(df_sz, n_allow_missing_value=20, to_log=False, reset_first_value=False)
+        sz_arr = df_sz.reindex(columns=univ_list).to_numpy(dtype=np.float32)
+        assert logp_arr.shape == sz_arr.shape
+
+        # turnover
+        df_turnover = self.size_df.loc[select_where_sz, ['eval_d', 'infocode', 'turnover']].pivot(index='eval_d', columns='infocode')
+        df_turnover.columns = df_turnover.columns.droplevel(0)
+        if len(df_logp) != len(df_turnover):
+            df_turnover = pd.merge(df_logp.reindex(columns=[]), df_turnover, how='left', left_index=True, right_index=True)
+
+        df_turnover = df_turnover.fillna(-1.)
+        df_turnover = cleansing_missing_value(df_turnover, n_allow_missing_value=20, to_log=False, reset_first_value=False)
+        turnover_arr = df_turnover.reindex(columns=univ_list).to_numpy(dtype=np.float32)
+        assert logp_arr.shape == turnover_arr.shape
+
+        # calculate features
+        features_dict, labels_dict = features_cls.calc_features(logp_arr, debug=debug)
+        f_size, l_size = features_cls.calc_features(sz_arr, debug=debug, calc_list=['nmsize_0'])
+        f_turnover, l_turnover = features_cls.calc_features(turnover_arr, debug=debug, calc_list=['nmturnover_0', 'tsturnover_0'])
+        features_dict.update(f_size)
+        features_dict.update(f_turnover)
+        labels_dict.update(l_size)
+        labels_dict.update(l_turnover)
+
+        spot_dict = dict()
+        spot_dict['base_d'] = base_d
+        spot_dict['asset_list'] = univ_list
+        spot_dict['mktcap'] = size_code.loc[univ_list]
+        spot_dict['size_rnk'] = spot_dict['mktcap'].rank() / len(spot_dict['mktcap'])
+
+        # macro
+        if self.use_macro:
+            select_where_macro = ((self.macro_df.index >= start_d) & (self.macro_df.index <= end_d))
+            df_macro = self.macro_df.loc[select_where_macro, :]
+
+            if df_macro.empty:
+                return False
+
+            # assert np.sum(select_where) == np.sum(select_where_macro), 'selected data not matched (macro vs stocks)'
+            if len(df_logp) != len(df_macro):
+                df_macro = pd.merge(df_logp.reindex(columns=[]), df_macro, how='left', left_index=True, right_index=True)
+
+            df_macro = cleansing_missing_value(df_macro, n_allow_missing_value=20, to_log=True)
+            macro_logp_arr = df_macro.to_numpy(dtype=np.float32)
+            assert len(logp_arr) == len(macro_logp_arr)
+
+            macro_features_dict, macro_labels_dict = features_cls.calc_features(macro_logp_arr
+                                                                                , debug=debug
+                                                                                , calc_list=c.macro_key_list)
+            features_dict['macro_dict'] = macro_features_dict
+            labels_dict['macro_dict'] = macro_labels_dict
+
+            spot_dict['macro_list'] = list(df_macro.columns)
+
+        return features_dict, labels_dict, spot_dict
+
+    @property
+    def max_length(self):
+        return len(self.date_)
+
+
+class Noise:
+    @staticmethod
+    def random_noise(arr, p):
+        # arr shape: (batch_size , seq_size, n_features)
+        assert arr.dim() == 3
+        # add random noise
+        if np.random.random() <= p:
+            # normal with mu=0 and sig=sigma
+            sample_sigma = torch.std(arr, axis=[0, 1], keepdims=True)
+            eps = sample_sigma * torch.randn_like(arr)
+        else:
+            eps = 0
+
+        return arr + eps
+
+    @staticmethod
+    def _get_mask(arr_shape, mask_p):
+        mask = np.random.choice([False, True], size=arr_shape, p=[1 - mask_p, mask_p])
+        return mask
+
+    @classmethod
+    def random_mask(cls, arr, p, mask_p=0.2):
+        """p의 확률로 mask_p만큼의 값을 0처리"""
+        # deep copy
+        new_arr = torch.zeros_like(arr)
+        new_arr[:] = arr[:]
+
+        # randomly masked input data
+        if np.random.random() <= p:
+            mask = cls._get_mask(new_arr.shape, mask_p)
+            new_arr[[mask]] = 0
+
+        return new_arr
+
+    @classmethod
+    def random_flip(cls, arr, p, flip_p=0.2):
+        """p의 확률로 flip_p만큼의 값을 flip"""
+
+        # deep copy
+        new_arr = torch.zeros_like(arr)
+        new_arr[:] = arr[:]
+
+        if np.random.random() <= p:
+            mask = cls._get_mask(arr.shape, flip_p)
+            new_arr[[mask]] = arr[[mask]] * -1
+
+        return new_arr
+
+
+class AssetDataset(Dataset):
+    def __init__(self, enc_in, dec_in, dec_out, add_infos_dict):
+        self.enc_in = enc_in
+        self.dec_in = dec_in
+        self.dec_out = dec_out
+        self.add_infos = add_infos_dict
+
+    def __len__(self):
+        return len(self.enc_in)
+
+    def __getitem__(self, idx):
+        features = {'input': self.enc_in[idx], 'output': self.dec_in[idx]}
+        out_addinfos = dict()
+        for key in self.add_infos.keys():
+            out_addinfos[key] = self.add_infos[key][idx]
+
+        return features, self.dec_out[idx], out_addinfos
+
+
+class MetaDataset(Dataset):
+    def __init__(self, spt_dataset, tgt_dataset):
+        self.spt_dataset = spt_dataset
+        self.tgt_dataset = tgt_dataset
+
+    def __len__(self):
+        return len(self.tgt_dataset)
+
+    def __getitem__(self, idx):
+        spt_ds = self.spt_dataset[idx]
+        tgt_ds = self.tgt_dataset[idx]
+        spt_features = {'input': spt_ds[0], 'output': spt_ds[1]}
+        spt_labels = spt_ds[2]
+
+        tgt_features = {'input': tgt_ds[0], 'output': tgt_ds[1]}
+        tgt_labels = tgt_ds[2]
+
+        spt_addinfos = dict()
+        tgt_addinfos = dict()
+        for key in spt_ds[3].keys():
+            spt_addinfos[key] = spt_ds[3][key]
+
+        for key in tgt_ds[3].keys():
+            tgt_addinfos[key] = tgt_ds[3][key]
+
+        spt_data = (spt_features, spt_labels, spt_addinfos)
+        tgt_data = (tgt_features, tgt_labels, tgt_addinfos)
+        return spt_data, tgt_data
+
+
+def data_loader(enc_in, dec_in, dec_out, add_infos_dict, batch_size=1, shuffle=True):
+    asset_dataset = AssetDataset(enc_in, dec_in, dec_out, add_infos_dict)
+    return DataLoader(asset_dataset, batch_size=batch_size, shuffle=shuffle, pin_memory=True)
+
+# spt_list, tgt_list, features_list, importance_wgt, start_date, end_date = ds._dataset_maml('train')
+def data_loader_maml(spt_dataset, tgt_dataset, sampler, shuffle=False):
+    asset_dataset = MetaDataset(spt_dataset, tgt_dataset)
+    if sampler is None:
+        dataloader = DataLoader(asset_dataset, batch_size=1, shuffle=shuffle, pin_memory=False)
+    else:
+        dataloader = DataLoader(asset_dataset, batch_size=1, sampler=sampler, pin_memory=False)  # sampler가 있으면 shuffle은 반드시 False
+
+    return dataloader
+
+
+def to_device(device, list_to_device):
+    assert isinstance(list_to_device, list)
+
+    for i, value_ in enumerate(list_to_device):
+        if isinstance(value_, dict):
+            for key in value_.keys():
+                value_[key] = value_[key].to(device)
+        elif isinstance(value_, torch.Tensor):
+            list_to_device[i] = value_.to(device)
+        else:
+            raise NotImplementedError
+
+
+
+
 class DataSamplerMarket:
     def __init__(self, configs, features_cls):
         self.configs = configs
@@ -1359,310 +1715,3 @@ class DataGeneratorMarket:
     @property
     def max_length(self):
         return len(self.date_)
-
-
-class DataGeneratorDynamic:
-    def __init__(self, features_cls, data_type='kr_stock', univ_type='selected'):
-        self.features_cls = features_cls
-
-        univ_path = None
-        date_mapping_path = './data/date.csv'           # [eval_m / work_m / eval_y / work_y]
-        if data_type == 'kr_stock':
-            # 가격데이터
-            return_path = './data/kr_close_y_90.csv'    # [date_ / infocode / y]
-            market_path = './data/kr_mktcap_daily.csv'    # [eval_d / infocode / turnover / mktcap / size]
-            macro_path = './data/data_for_metarl.csv'
-
-            if univ_type == 'selected':
-                univ_path = './data/kr_factor_wgt.csv'  # [work_m / univ_nm / gicode / infocode / wgt] # monthly
-
-        elif data_type == 'us_stock':
-            # 가격데이터
-            return_path = './data/us_close_y_90.csv'
-            market_path = './data/us_mktcap_daily.csv'
-
-        self.set_return_and_date(return_path)
-
-        self.set_marketdata(market_path)
-
-        self.set_univ(univ_path, date_mapping_path)
-
-    def set_return_and_date(self, return_path, min_stocks_per_day=10):
-        df = pd.read_csv(return_path)
-        df = df[df.infocode > 0]  # 잘못된 infocode 제거
-
-        # 날짜별 종목수
-        date_ = df[['date_', 'infocode']].groupby('date_').count()
-        date_ = date_[date_.infocode >= min_stocks_per_day]
-        date_.columns = ['cnt']
-
-        # 수익률 계산
-        self.date_ = list(date_.index)
-        data_df = pd.merge(date_, df, on='date_')
-        data_df['y'] = data_df['y'] + 1
-        data_df['cum_y'] = data_df[['date_', 'infocode', 'y']].groupby('infocode').cumprod(axis=0)
-
-        self.df_pivoted_all = data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
-        self.df_pivoted_all.columns = self.df_pivoted_all.columns.droplevel(0).to_numpy(dtype=np.int32)
-
-    def set_marketdata(self, size_path):
-        self.size_df = pd.read_csv(size_path)
-        self.size_df.columns = ['eval_d', 'infocode', 'turnover', 'mktcap', 'size_port']
-
-    def set_univ(self, univ_path, date_mapping_path, min_size_port=90):
-        assert hasattr(self, 'size_df'), '[set_univ] run set_marketdata first.'
-
-        # month end / year end mapping table
-        date_mapping = pd.read_csv(date_mapping_path)
-
-        if univ_path is None:
-            univ_df = self.size_df.loc[self.size_df.size_port <= min_size_port, ['eval_d', 'infocode']]
-            left_on = 'eval_d'
-        else:
-            univ_df = pd.read_csv(univ_path)
-            univ_df = univ_df[univ_df.infocode > 0]
-            left_on = 'work_m'
-
-        univ_mapping = pd.merge(univ_df, date_mapping, left_on=left_on, right_on='work_m')
-        univ_mapping = univ_mapping.loc[:, ['work_m', 'eval_m', 'infocode']]
-        # daily basis
-        univ_w_size = pd.merge(univ_mapping, self.size_df,
-                               left_on=['infocode', 'work_m'],
-                               right_on=['infocode', 'eval_d'])
-
-        univ_w_size = univ_w_size[univ_w_size.infocode > 0]
-        univ_w_size['mktcap'] = univ_w_size['mktcap'] / 1000.
-        if 'wgt' not in univ_w_size.columns:
-            univ_w_size['wgt'] = univ_w_size.loc[:, ['work_m', 'mktcap']].groupby('work_m').apply(lambda x: x / x.sum())
-
-        if 'gicode' not in univ_w_size.columns:
-            univ_w_size['gicode'] = univ_w_size['infocode']
-
-        self.univ = univ_w_size.loc[:, ['eval_m', 'infocode', 'gicode', 'mktcap', 'wgt']]
-        self.univ.columns = ['eval_m', 'infocode', 'gicode', 'mktcap', 'wgt']
-
-    def set_macrodata(self, macro_path):
-        assert hasattr(self, 'date_'), '[set_macrodata] run set_return_and_date first'
-        df = pd.read_csv(macro_path)
-        data_df = pd.merge(df, pd.DataFrame({'eval_d': self.date_}), how='right', left_on='eval_d', right_on='eval_d')
-        data_df = data_df.set_index('eval_d').fillna(0.)
-        data_df = (data_df + 1).cumprod(axis=0)
-        self.macro_df = data_df
-
-    def sample_data(self, date_i, debug=True, use_macro=False):
-        # get attributes to local variables
-        date_ = self.date_
-        univ = self.univ
-        df_pivoted = self.df_pivoted_all
-        features_cls = self.features_cls
-
-        base_d = date_[date_i]
-        univ_d = univ.eval_m[univ.eval_m <= base_d].max()
-        univ_code = list(univ[univ.eval_m == univ_d].infocode)
-
-        size_d = self.size_df.eval_d[self.size_df.eval_d <= base_d].max()
-        size_code = self.size_df[self.size_df.eval_d == size_d][['infocode', 'mktcap']].set_index('infocode')
-
-
-        # set local parameters
-        m_days = features_cls.m_days
-        calc_length = features_cls.calc_length
-        calc_length_label = features_cls.calc_length_label
-        delay_days = features_cls.delay_days
-
-        len_data = calc_length + m_days
-        len_label = calc_length_label + delay_days
-        # k_days_adj = k_days + delay_days
-        # len_label = k_days_adj
-
-        start_d = date_[max(0, date_i - len_data)]
-        end_d = date_[min(date_i + len_label, len(date_) - 1)]
-
-        # data cleansing
-        select_where = ((df_pivoted.index >= start_d) & (df_pivoted.index <= end_d))
-        df_logp = cleansing_missing_value(df_pivoted.loc[select_where, :], n_allow_missing_value=20, to_log=True)
-
-        if df_logp.empty or len(df_logp) <= calc_length + m_days:
-            return False
-
-        univ_list = sorted(list(set.intersection(set(univ_code), set(df_logp.columns), set(size_code.index))))
-        if len(univ_list) < 10:
-            return False
-        print('[{}] univ size: {}'.format(base_d, len(univ_list)))
-
-        logp_arr = df_logp.reindex(columns=univ_list).to_numpy(dtype=np.float32)
-
-        # size
-        select_where_sz = ((self.size_df.eval_d >= start_d) & (self.size_df.eval_d <= end_d))
-        df_sz = self.size_df.loc[select_where_sz, ['eval_d', 'infocode', 'mktcap']].pivot(index='eval_d', columns='infocode')
-        df_sz.columns = df_sz.columns.droplevel(0)
-        if len(df_logp) != len(df_sz):
-            df_sz = pd.merge(df_logp.reindex(columns=[]), df_sz, how='left', left_index=True, right_index=True)
-
-        df_sz = cleansing_missing_value(df_sz, n_allow_missing_value=20, to_log=False, reset_first_value=False)
-        sz_arr = df_sz.reindex(columns=univ_list).to_numpy(dtype=np.float32)
-        assert logp_arr.shape == sz_arr.shape
-
-        # calculate features
-        features_dict, labels_dict = features_cls.calc_features(logp_arr, transpose=False, debug=debug)
-        f_size, l_size = features_cls.calc_func_size(sz_arr)
-        features_dict['nmsize'] = f_size
-        labels_dict['nmsize'] = l_size
-
-        spot_dict = dict()
-        spot_dict['base_d'] = base_d
-        spot_dict['asset_list'] = univ_list
-        spot_dict['mktcap'] = size_code.loc[univ_list]
-        spot_dict['size_rnk'] = spot_dict['mktcap'].rank() / len(spot_dict['mktcap'])
-
-        # macro
-        if use_macro:
-            select_where_macro = ((self.macro_df.index >= start_d) & (self.macro_df.index <= end_d))
-            df_macro = self.macro_df.loc[select_where_macro, :]
-            # assert np.sum(select_where) == np.sum(select_where_macro), 'selected data not matched (macro vs stocks)'
-            if len(df_logp) != len(df_sz):
-                df_macro = pd.merge(df_logp.reindex(columns=[]), df_macro, how='left', left_index=True, right_index=True)
-
-            df_macro = cleansing_missing_value(df_macro, n_allow_missing_value=20, to_log=True)
-            macro_logp_arr = df_macro.to_numpy(dtype=np.float32)
-            assert logp_arr.shape == macro_logp_arr.shape
-
-            macro_features_dict, macro_labels_dict = features_cls.calc_features(macro_logp_arr, transpose=False, debug=debug)
-            features_dict['macro_dict'] = macro_features_dict
-            labels_dict['macro_dict'] = macro_labels_dict
-
-            spot_dict['macro_list'] = list(df_macro.columns)
-
-        return features_dict, labels_dict, spot_dict
-
-    @property
-    def max_length(self):
-        return len(self.date_)
-
-
-class Noise:
-    @staticmethod
-    def random_noise(arr, p):
-        # arr shape: (batch_size , seq_size, n_features)
-        assert arr.dim() == 3
-        # add random noise
-        if np.random.random() <= p:
-            # normal with mu=0 and sig=sigma
-            sample_sigma = torch.std(arr, axis=[0, 1], keepdims=True)
-            eps = sample_sigma * torch.randn_like(arr)
-        else:
-            eps = 0
-
-        return arr + eps
-
-    @staticmethod
-    def _get_mask(arr_shape, mask_p):
-        mask = np.random.choice([False, True], size=arr_shape, p=[1 - mask_p, mask_p])
-        return mask
-
-    @classmethod
-    def random_mask(cls, arr, p, mask_p=0.2):
-        """p의 확률로 mask_p만큼의 값을 0처리"""
-        # deep copy
-        new_arr = torch.zeros_like(arr)
-        new_arr[:] = arr[:]
-
-        # randomly masked input data
-        if np.random.random() <= p:
-            mask = cls._get_mask(new_arr.shape, mask_p)
-            new_arr[[mask]] = 0
-
-        return new_arr
-
-    @classmethod
-    def random_flip(cls, arr, p, flip_p=0.2):
-        """p의 확률로 flip_p만큼의 값을 flip"""
-
-        # deep copy
-        new_arr = torch.zeros_like(arr)
-        new_arr[:] = arr[:]
-
-        if np.random.random() <= p:
-            mask = cls._get_mask(arr.shape, flip_p)
-            new_arr[[mask]] = arr[[mask]] * -1
-
-        return new_arr
-
-
-class AssetDataset(Dataset):
-    def __init__(self, enc_in, dec_in, dec_out, add_infos_dict):
-        self.enc_in = enc_in
-        self.dec_in = dec_in
-        self.dec_out = dec_out
-        self.add_infos = add_infos_dict
-
-    def __len__(self):
-        return len(self.enc_in)
-
-    def __getitem__(self, idx):
-        features = {'input': self.enc_in[idx], 'output': self.dec_in[idx]}
-        out_addinfos = dict()
-        for key in self.add_infos.keys():
-            out_addinfos[key] = self.add_infos[key][idx]
-
-        return features, self.dec_out[idx], out_addinfos
-
-
-class MetaDataset(Dataset):
-    def __init__(self, spt_dataset, tgt_dataset):
-        self.spt_dataset = spt_dataset
-        self.tgt_dataset = tgt_dataset
-
-    def __len__(self):
-        return len(self.tgt_dataset)
-
-    def __getitem__(self, idx):
-        spt_ds = self.spt_dataset[idx]
-        tgt_ds = self.tgt_dataset[idx]
-        spt_features = {'input': spt_ds[0], 'output': spt_ds[1]}
-        spt_labels = spt_ds[2]
-
-        tgt_features = {'input': tgt_ds[0], 'output': tgt_ds[1]}
-        tgt_labels = tgt_ds[2]
-
-        spt_addinfos = dict()
-        tgt_addinfos = dict()
-        for key in spt_ds[3].keys():
-            spt_addinfos[key] = spt_ds[3][key]
-
-        for key in tgt_ds[3].keys():
-            tgt_addinfos[key] = tgt_ds[3][key]
-
-        spt_data = (spt_features, spt_labels, spt_addinfos)
-        tgt_data = (tgt_features, tgt_labels, tgt_addinfos)
-        return spt_data, tgt_data
-
-
-def data_loader(enc_in, dec_in, dec_out, add_infos_dict, batch_size=1, shuffle=True):
-    asset_dataset = AssetDataset(enc_in, dec_in, dec_out, add_infos_dict)
-    return DataLoader(asset_dataset, batch_size=batch_size, shuffle=shuffle, pin_memory=True)
-
-# spt_list, tgt_list, features_list, importance_wgt, start_date, end_date = ds._dataset_maml('train')
-def data_loader_maml(spt_dataset, tgt_dataset, sampler, shuffle=False):
-    asset_dataset = MetaDataset(spt_dataset, tgt_dataset)
-    if sampler is None:
-        dataloader = DataLoader(asset_dataset, batch_size=1, shuffle=shuffle, pin_memory=False)
-    else:
-        dataloader = DataLoader(asset_dataset, batch_size=1, sampler=sampler, pin_memory=False)  # sampler가 있으면 shuffle은 반드시 False
-
-    return dataloader
-
-
-def to_device(device, list_to_device):
-    assert isinstance(list_to_device, list)
-
-    for i, value_ in enumerate(list_to_device):
-        if isinstance(value_, dict):
-            for key in value_.keys():
-                value_[key] = value_[key].to(device)
-        elif isinstance(value_, torch.Tensor):
-            list_to_device[i] = value_.to(device)
-        else:
-            raise NotImplementedError
-
-

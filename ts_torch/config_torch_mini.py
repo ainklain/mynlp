@@ -4,7 +4,7 @@ class Config:
         # time series parameter
         self.train_set_length = 2500    # previous 10 years data
         self.retrain_days = 250         # re-train every year
-        self.m_days = 480               # input length of encoding layer (key, value)
+        self.m_days = 120               # input length of encoding layer (key, value)
         self.k_days = 20                # input and output length of decoding layer (query)
         self.calc_length = 250
         self.calc_length_label = 120
@@ -81,11 +81,20 @@ class Config:
         # uncertainty
         self.use_uncertainty = False
 
+        # additional features
 
+        self.possible_func = {'logp_base': ['logp', 'logy', 'std', 'stdnew', 'pos', 'mdd', 'fft', 'cslogy', 'csstd', 'nmlogy', 'nmstd',],
+                              'size_base': ['nmsize'],
+                              'turnover_base': ['nmturnover', 'tsturnover']}
         # macro
-        self.use_macro = False
+        self.use_macro = True
         if self.use_macro:
+            self.macro_id_list = ['mkt_rf', 'smb', 'hml', 'rmw', 'wml', 'call_rate', 'kospi', 'mom', 'beme', 'gpa', 'usdkrw']
             self.macro_key_list = ['logp_0', 'logy_{}'.format(self.k_days), 'std_{}'.format(self.k_days)]
+
+            self.add_features_list = [id + '-' + key for id in self.macro_id_list for key in self.macro_key_list]
+
+        self.embedding_size = len(self._parse_features_structure()[0])
 
 
     @property
@@ -105,16 +114,19 @@ class Config:
             # label_keys = ['logy_{}'.format(n) for n in [20, 60, 120]]
             # label_keys += ['stdnew_{}'.format(n) for n in [20, 60, 120]]
             # label_keys += ['pos_{}'.format(n) for n in [20, 60]]
-        key_list = self._parse_features_structure() + ['nmsize']
+        key_list = self._parse_features_structure() #+ ['nmsize']
         return key_list
 
     def _parse_features_structure(self):
         key_list = []
         for key_cls in self.features_structure.keys():
-            for subkey in self.features_structure[key_cls].keys():
-                for nd in self.features_structure[key_cls][subkey]:
-                    key_list.append("{}_{}".format(subkey, nd))
+            for base in self.features_structure[key_cls].keys():
+                for subkey in self.features_structure[key_cls][base].keys():
+                    for nd in self.features_structure[key_cls][base][subkey]:
+                        key_list.append("{}_{}".format(subkey, nd))
 
+        if self.use_macro:
+            key_list += self.add_features_list
         return key_list
 
     def set_features_info(self, k_days=5):
@@ -199,19 +211,29 @@ class Config:
 
             self.features_structure = \
                 {'regression':
-                     {'logp': [0],
-                      'logy': [20, 60, 120, 250],
-                      'std': [20, 60, 120],
-                      'stdnew': [20, 60],
-                      'mdd': [20, 60, 120],
-                      'fft': [100, 3],
-                      'nmlogy': [20, 60],
-                      'nmstd': [20, 60],
+                     {'logp_base':
+                         {'logp': [0],
+                          'logy': [20, 60, 120, 250],
+                          'std': [20, 60, 120],
+                          'stdnew': [20, 60],
+                          'mdd': [20, 60, 120],
+                          'fft': [100, 3],
+                          'nmlogy': [20, 60],
+                          'nmstd': [20, 60],
+                          'nmsize': [0],
+                          'nmturnover': [0],
+                          'tsturnover': [0],
+                          },
+                      'size_base': {'nmsize': [0]},
+                      'turnover_base': {'nmturnover': [0],
+                                        'tsturnover': [0]},
                       },
                  'classification':
-                     {'pos': [20, 60, 120, 250]}}
+                     {'logp_base':
+                          {'pos': [20, 60, 120, 250]}
+                      }
+                 }
 
-        self.embedding_size = len(self._parse_features_structure()) + 1 # 1: nm_size
 
     def set_kdays(self, k_days, pred='pos'):
         self.k_days = k_days
