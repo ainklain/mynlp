@@ -156,9 +156,6 @@ class DataScheduler:
                                     else np.zeros(n_assets) for key in key_list], axis=-1)
 
         if c.use_macro:
-            features_macro = []
-            labels_macro = []
-
             # data_generator에서 계산/저장된 전체 macro ids 중 테스트에 적용하려는 list만 선별
             m_idx = []
             for m_id in c.macro_id_list:
@@ -168,7 +165,7 @@ class DataScheduler:
             features_macro = np.concatenate([features_dict['macro_dict'][key][:, m_idx] for key in c.macro_key_list], axis=-1)
             features_macro = np.tile(features_macro[np.newaxis, :], (n_assets, 1, 1))
             # labels_dict['macro_dict'][key] shape: [macro_list, ]
-            labels_macro = np.concatenate([labels_dict['macro_dict'][key] for key in c.macro_key_list], axis=-1)
+            labels_macro = np.concatenate([labels_dict['macro_dict'][key][m_idx] for key in c.macro_key_list], axis=-1)
             labels_macro = np.tile(labels_macro[np.newaxis, :], (n_assets, 1, 1))
             labels_macro = np.concatenate([features_macro[:, -1:, :], labels_macro], axis=1)
 
@@ -192,7 +189,8 @@ class DataScheduler:
     def _dataset_t(self, base_d, **kwargs):
         univ = self.data_generator.univ
 
-        features_list = self.configs.key_list
+        features_list = self.configs.key_list_with_macro
+
         recent_d, recent_idx = self.nearest_d_from_m_end([base_d])
         recent_d, recent_idx = recent_d[0], recent_idx[0]
 
@@ -202,10 +200,7 @@ class DataScheduler:
 
         enc_in, dec_in, dec_out, add_info = fetch_data
 
-        if 'add_features_list' in add_info.keys():
-            features_list += add_info['add_features_list']
-            assert self.configs.use_macro is True, "_fetch_data 에서 macro 추가할때 존재하는 항목"
-            assert enc_in.shape[-1] == len(features_list)
+        assert enc_in.shape[-1] == len(features_list)   # macro 있든 없든 동일해야
 
         add_info['factor_d'] = base_d
         add_info['model_d'] = recent_d
@@ -244,7 +239,7 @@ class DataScheduler:
         enc_in, dec_in, dec_out = [], [], []
         additional_infos = []  # test/predict 인경우 list, train/eval인 경우 dict
         start_idx, end_idx, data_params, decaying_factor = self.get_data_params(mode)
-        features_list = c.key_list
+        features_list = c.key_list_with_macro
 
         idx_balance = c.key_list.index(c.balancing_key)
 
@@ -268,6 +263,7 @@ class DataScheduler:
 
             i = list(nearest_idx).index(idx)
             tmp_ein, tmp_din, tmp_dout, add_info = fetch_data
+            assert tmp_ein.shape[-1] == len(features_list)  # macro 있든 없든 동일해야
 
             # next y
             assets = add_info['asset_list']
@@ -311,7 +307,7 @@ class DataScheduler:
         enc_in, dec_in, dec_out = [], [], []
         add_infos_list = []  # test/predict 인경우 list, train/eval인 경우 dict
         start_idx, end_idx, data_params, decaying_factor = self.get_data_params(mode)
-        features_list = c.key_list
+        features_list = c.key_list_with_macro
 
         idx_balance = c.key_list.index(c.balancing_key)
 
@@ -323,6 +319,8 @@ class DataScheduler:
                 continue
 
             tmp_ein, tmp_din, tmp_dout, add_info = fetch_data
+            assert tmp_ein.shape[-1] == len(features_list)  # macro 있든 없든 동일해야
+
             add_info['importance_wgt'] = np.array([decaying_factor ** (n_loop - i - 1)
                                                           for _ in range(len(tmp_ein))], dtype=np.float32)
             if data_params['balance_class'] is True and c.balancing_method == 'each':
@@ -374,7 +372,7 @@ class DataScheduler:
 
         spt_list, tgt_list, importance_wgt = [], [], []
         start_idx, end_idx, data_params, decaying_factor = self.get_data_params(mode)
-        features_list = c.key_list
+        features_list = c.key_list_with_macro
 
         idx_balance = c.key_list.index(c.balancing_key)
 
@@ -396,6 +394,10 @@ class DataScheduler:
                 continue
             spt_ein, spt_din, spt_dout, spt_add_info = support_data
             tgt_ein, tgt_din, tgt_dout, tgt_add_info = target_data
+
+            assert spt_ein.shape[-1] == len(features_list)  # macro 있든 없든 동일해야
+            assert tgt_ein.shape[-1] == len(features_list)  # macro 있든 없든 동일해야
+
             importance_wgt.append(decaying_factor ** (n_loop - i - 1))
 
             if mode in ['train','eval'] and c.pred_feature.split('_')[0] in c.features_structure['classification'].keys():
@@ -584,8 +586,8 @@ class DataScheduler:
             if stop_count >= early_stopping_count:
                 print('[Ep {}] Early Stopped'.format(ep))
                 model.load_from_optim()
-                self.test_plot(performer, model, ep, is_monthly=False)
-                self.test_plot(performer, model, ep, is_monthly=True)
+                self.test_plot(performer, model, ep + 100, is_monthly=False)
+                self.test_plot(performer, model, ep + 100, is_monthly=True)
 
                 break
 
@@ -657,13 +659,17 @@ class DataScheduler:
                 features_with_noise = {'input': features['input'], 'output': features['output']}
                 labels_with_noise = labels
                 if is_train:
-                    # add random noise for features
-                    features_with_noise['input'] = Noise.random_noise(features_with_noise['input'], p=0.5)
-                    features_with_noise['input'] = Noise.random_mask(features_with_noise['input'], p=0.9, mask_p=0.2)
+                    if self.configs.adversarial_training is True:
+                        labels_mtl_noise = self.labels_torch(features_list, labels_with_noise, add_infos)
+                        features_with_noise = Noise.adversarial_noise(features_with_noise, labels_mtl_noise, model)
+                    else:
+                        # add random noise for features
+                        features_with_noise['input'] = Noise.random_noise(features_with_noise['input'], p=0.5)
+                        features_with_noise['input'] = Noise.random_mask(features_with_noise['input'], p=0.9, mask_p=0.2)
 
-                    # add random noise for labels
-                    labels_with_noise = Noise.random_noise(labels, p=0.2)
-                    labels_with_noise = Noise.random_flip(labels_with_noise, p=0.1, flip_p=0.2)
+                        # add random noise for labels
+                        labels_with_noise = Noise.random_noise(labels, p=0.2)
+                        labels_with_noise = Noise.random_flip(labels_with_noise, p=0.1, flip_p=0.2)
 
                 labels_mtl = self.labels_torch(features_list, labels_with_noise, add_infos)
                 to_device(tu.device, [features_with_noise, labels_mtl])
@@ -728,21 +734,27 @@ class DataScheduler:
             f_with_noise_t = {'input': features_t['input'].squeeze(0), 'output': features_t['output'].squeeze(0)}
             labels_with_noise_t = labels_t.squeeze(0)
             if is_train:
-                # add random noise for features
-                f_with_noise_s['input'] = Noise.random_noise(f_with_noise_s['input'], p=0.5)
-                f_with_noise_s['input'] = Noise.random_mask(f_with_noise_s['input'], p=0.9, mask_p=0.2)
+                if self.configs.adversarial_training is True:
+                    labels_mtl_noise_s = self.labels_torch(features_list, labels_with_noise_s, add_infos_s)
+                    labels_mtl_noise_t = self.labels_torch(features_list, labels_with_noise_t, add_infos_t)
+                    f_with_noise_s = Noise.adversarial_noise(f_with_noise_s, labels_mtl_noise_s, model)
+                    f_with_noise_t = Noise.adversarial_noise(f_with_noise_t, labels_mtl_noise_t, model)
+                else:
+                    # add random noise for features
+                    f_with_noise_s['input'] = Noise.random_noise(f_with_noise_s['input'], p=0.5)
+                    f_with_noise_s['input'] = Noise.random_mask(f_with_noise_s['input'], p=0.9, mask_p=0.2)
 
-                # add random noise for labels
-                labels_with_noise_s = Noise.random_noise(labels_with_noise_s, p=0.2)
-                labels_with_noise_s = Noise.random_flip(labels_with_noise_s, p=0.9, flip_p=0.2)
+                    # add random noise for labels
+                    labels_with_noise_s = Noise.random_noise(labels_with_noise_s, p=0.2)
+                    labels_with_noise_s = Noise.random_flip(labels_with_noise_s, p=0.9, flip_p=0.2)
 
-                # add random noise for features
-                f_with_noise_t['input'] = Noise.random_noise(f_with_noise_t['input'], p=0.5)
-                f_with_noise_t['input'] = Noise.random_mask(f_with_noise_t['input'], p=0.9, mask_p=0.2)
+                    # add random noise for features
+                    f_with_noise_t['input'] = Noise.random_noise(f_with_noise_t['input'], p=0.5)
+                    f_with_noise_t['input'] = Noise.random_mask(f_with_noise_t['input'], p=0.9, mask_p=0.2)
 
-                # add random noise for labels
-                labels_with_noise_t = Noise.random_noise(labels_with_noise_t, p=0.2)
-                labels_with_noise_t = Noise.random_flip(labels_with_noise_t, p=0.9, flip_p=0.2)
+                    # add random noise for labels
+                    labels_with_noise_t = Noise.random_noise(labels_with_noise_t, p=0.2)
+                    labels_with_noise_t = Noise.random_flip(labels_with_noise_t, p=0.9, flip_p=0.2)
 
             # TODO: maml시에 importance_wgt 사용 불가 (임시로 labels_torch에서 maml 받아서 없앰)  dataloader_maml도 수정해야
             labels_mtl_s = self.labels_torch(features_list, labels_with_noise_s, add_infos_s, maml=True)
@@ -844,14 +856,15 @@ class DataScheduler:
         c = self.configs
         labels_mtl = dict()
         for cls in c.features_structure.keys():
-            for key in c.features_structure[cls].keys():
-                n_arr = c.features_structure[cls][key]
-                if cls == 'classification':    # classification
-                    for n in n_arr:
-                        f_nm = '{}_{}'.format(key, n)
-                        labels_mtl[f_nm] = (labels[:, :, f_list.index(f_nm)] > 0).long()
-                else:
-                    labels_mtl[key] = torch.stack([labels[:, :, f_list.index("{}_{}".format(key, n))] for n in n_arr], axis=-1)
+            for arr_base in c.features_structure[cls].keys():
+                for key in c.features_structure[cls][arr_base].keys():
+                    n_arr = c.features_structure[cls][arr_base][key]
+                    if cls == 'classification':    # classification
+                        for n in n_arr:
+                            f_nm = '{}_{}'.format(key, n)
+                            labels_mtl[f_nm] = (labels[:, :, f_list.index(f_nm)] > 0).long()
+                    else:
+                        labels_mtl[key] = torch.stack([labels[:, :, f_list.index("{}_{}".format(key, n))] for n in n_arr], axis=-1)
 
         labels_mtl['size_rnk'] = add_infos['size_rnk'].reshape(-1, 1, 1)
         if not maml:
@@ -864,16 +877,17 @@ class DataScheduler:
         c = self.configs
         labels_mtl = dict()
         for cls in c.features_structure.keys():
-            for key in c.features_structure[cls].keys():
-                if key in ['logp', 'fft', 'mdd']:
-                    n = c.features_structure[cls][key][0]
-                else:
-                    n = c.k_days
-                if cls == 'classification':    # classification
-                    f_nm = '{}_{}'.format(key, n)
-                    labels_mtl[f_nm] = (labels[:, :, f_list.index(f_nm)] > 0).long()
-                else:
-                    labels_mtl[key] = labels[:, :, f_list.index("{}_{}".format(key, n))].unsqueeze(-1)
+            for arr_base in c.features_structure[cls].keys():
+                for key in c.features_structure[cls][arr_base].keys():
+                    if key in ['logp', 'fft', 'mdd'] or arr_base != 'logp_base':
+                        n = c.features_structure[cls][arr_base][key][0]
+                    else:
+                        n = c.k_days
+                    if cls == 'classification':    # classification
+                        f_nm = '{}_{}'.format(key, n)
+                        labels_mtl[f_nm] = (labels[:, :, f_list.index(f_nm)] > 0).long()
+                    else:
+                        labels_mtl[key] = labels[:, :, f_list.index("{}_{}".format(key, n))].unsqueeze(-1)
 
         labels_mtl['size_rnk'] = add_infos['size_rnk'].reshape(-1, 1, 1)
         if not maml:
@@ -1307,6 +1321,22 @@ class DataGeneratorDynamic:
         univ_list = sorted(list(set.intersection(set(univ_code), set(df_logp.columns), set(size_code.index))))
         if len(univ_list) < 10:
             return False
+
+        # macro
+        if self.use_macro:
+            # 연산 속도 위해 feature_calc 실행 전에 일단 데이터 유무 체크
+            select_where_macro = ((self.macro_df.index >= start_d) & (self.macro_df.index <= end_d))
+            df_macro = self.macro_df.loc[select_where_macro, :]
+
+            # assert np.sum(select_where) == np.sum(select_where_macro), 'selected data not matched (macro vs stocks)'
+            if len(df_logp) != len(df_macro):
+                df_macro = pd.merge(df_logp.reindex(columns=[]), df_macro, how='left', left_index=True, right_index=True)
+
+            df_macro = cleansing_missing_value(df_macro, n_allow_missing_value=20, to_log=True)
+
+            if df_macro.empty:
+                return False
+
         print('[{}] univ size: {}'.format(base_d, len(univ_list)))
 
         logp_arr = df_logp.reindex(columns=univ_list).to_numpy(dtype=np.float32)
@@ -1351,17 +1381,6 @@ class DataGeneratorDynamic:
 
         # macro
         if self.use_macro:
-            select_where_macro = ((self.macro_df.index >= start_d) & (self.macro_df.index <= end_d))
-            df_macro = self.macro_df.loc[select_where_macro, :]
-
-            if df_macro.empty:
-                return False
-
-            # assert np.sum(select_where) == np.sum(select_where_macro), 'selected data not matched (macro vs stocks)'
-            if len(df_logp) != len(df_macro):
-                df_macro = pd.merge(df_logp.reindex(columns=[]), df_macro, how='left', left_index=True, right_index=True)
-
-            df_macro = cleansing_missing_value(df_macro, n_allow_missing_value=20, to_log=True)
             macro_logp_arr = df_macro.to_numpy(dtype=np.float32)
             assert len(logp_arr) == len(macro_logp_arr)
 
@@ -1394,6 +1413,34 @@ class Noise:
             eps = 0
 
         return arr + eps
+
+    @staticmethod
+    def adversarial_noise(features_dict, labels_mtl, model):
+        # arr shape: (batch_size , seq_size, n_features)
+        assert features_dict['input'].dim() == 3
+        features_dict['input'].requires_grad = True
+        features_dict['output'].requires_grad = True
+
+        out, loss_noise = model.forward_with_loss(features_dict, labels_mtl)
+        loss_total = 0
+        for key in loss_noise.keys():
+            loss_total += loss_noise[key].mean()
+
+        loss_total.backward(retain_graph=True)
+        inputs_grad = torch.sign(features_dict['input'].grad)
+        outputs_grad = torch.sign(features_dict['output'].grad)
+
+        sample_sigma = torch.std(features_dict['input'], axis=[0, 1], keepdims=True)
+        eps = 0.01
+        scaled_eps = eps * sample_sigma  # [1, 1, n_features]
+
+        inputs_perturbed = features_dict['input'] + scaled_eps * inputs_grad
+        outputs_perturbed = features_dict['output'] + scaled_eps * outputs_grad
+
+        features_dict['input'].grad.zero_()
+        features_dict['output'].grad.zero_()
+
+        return {'input': inputs_perturbed, 'output': outputs_perturbed}
 
     @staticmethod
     def _get_mask(arr_shape, mask_p):

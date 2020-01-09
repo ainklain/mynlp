@@ -778,24 +778,27 @@ class TSModel(Base):
         n_size = 64
         for key in c.model_predictor_list:
             tags = key.split('_')
-            if tags[0] in c.features_structure['regression'].keys():
-                if key in ['cslogy', 'csstd']:
-                    self.predictor[key] = FeedForward(c.d_model, n_size, 1, out_activation='sigmoid')
-                    if c.use_uncertainty:
-                        self.predictor_var[key] = FeedForward(c.d_model, n_size, 1, out_activation='positive')
-                    # self.predictor[key] = FeedForward(c.d_model, n_size, len(c.features_structure['regression'][key]), out_activation='sigmoid')
-                else:
-                    self.predictor[key] = FeedForward(c.d_model, n_size, 1, out_activation='linear')
-                    if c.use_uncertainty:
-                        self.predictor_var[key] = FeedForward(c.d_model, n_size, 1, out_activation='positive')
-                    # self.predictor[key] = FeedForward(c.d_model, n_size, len(c.features_structure['regression'][key]))
-            elif tags[0] in c.features_structure['classification'].keys():
-                self.predictor[key] = FeedForward(c.d_model, n_size, 2, out_activation='linear')
-                if c.use_uncertainty:
-                    self.predictor_var[key] = FeedForward(c.d_model, n_size, 2, out_activation='positive')
-                self.predictor_helper[key] = c.features_structure['regression']['logy'].index(int(tags[1]))
-            # elif tags[0] in configs.features_structure['crosssection'].keys():
-            #     self.predictor[key] = FeedForward(64, len(configs.features_structure['regression'][key]))
+            for cls in c.features_structure.keys():
+                for arr_base in c.features_structure[cls].keys():
+                    if tags[0] in c.features_structure[cls][arr_base].keys():
+                        if cls == 'regression':
+                            if key in ['cslogy', 'csstd']:
+                                self.predictor[key] = FeedForward(c.d_model, n_size, 1, out_activation='sigmoid')
+                                if c.use_uncertainty:
+                                    self.predictor_var[key] = FeedForward(c.d_model, n_size, 1, out_activation='positive')
+                                # self.predictor[key] = FeedForward(c.d_model, n_size, len(c.features_structure['regression'][key]), out_activation='sigmoid')
+                            else:
+                                self.predictor[key] = FeedForward(c.d_model, n_size, 1, out_activation='linear')
+                                if c.use_uncertainty:
+                                    self.predictor_var[key] = FeedForward(c.d_model, n_size, 1, out_activation='positive')
+                                # self.predictor[key] = FeedForward(c.d_model, n_size, len(c.features_structure['regression'][key]))
+                        else:
+                            self.predictor[key] = FeedForward(c.d_model, n_size, 2, out_activation='linear')
+                            if c.use_uncertainty:
+                                self.predictor_var[key] = FeedForward(c.d_model, n_size, 2, out_activation='positive')
+                            self.predictor_helper[key] = c.features_structure['regression']['logp_base']['logy'].index(int(tags[1]))
+                        # elif tags[0] in configs.features_structure['crosssection'].keys():
+                        #     self.predictor[key] = FeedForward(64, len(configs.features_structure['regression'][key]))
 
         self.features_cls = features_cls
 

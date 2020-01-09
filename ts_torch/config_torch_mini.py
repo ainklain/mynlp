@@ -36,7 +36,7 @@ class Config:
         # self.set_features_info(self.k_days)
 
         self.shuffle_seek = 1000
-        self.d_model = 64
+        self.d_model = 128
         self.n_heads = 4
         self.n_layers = 2
         # self.model_hidden_size = 128
@@ -81,20 +81,22 @@ class Config:
         # uncertainty
         self.use_uncertainty = False
 
+        self.adversarial_training = True    # input data augmentation
+
         # additional features
 
         self.possible_func = {'logp_base': ['logp', 'logy', 'std', 'stdnew', 'pos', 'mdd', 'fft', 'cslogy', 'csstd', 'nmlogy', 'nmstd',],
                               'size_base': ['nmsize'],
                               'turnover_base': ['nmturnover', 'tsturnover']}
         # macro
-        self.use_macro = True
+        self.use_macro = False
         if self.use_macro:
-            self.macro_id_list = ['mkt_rf', 'smb', 'hml', 'rmw', 'wml', 'call_rate', 'kospi', 'mom', 'beme', 'gpa', 'usdkrw']
+            self.macro_id_list = ['smb', 'hml', 'rmw', 'wml', 'call_rate', 'kospi', 'usdkrw']
             self.macro_key_list = ['logp_0', 'logy_{}'.format(self.k_days), 'std_{}'.format(self.k_days)]
 
             self.add_features_list = [id + '-' + key for id in self.macro_id_list for key in self.macro_key_list]
 
-        self.embedding_size = len(self._parse_features_structure()[0])
+        self.embedding_size = len(self.key_list_with_macro)
 
 
     @property
@@ -103,18 +105,17 @@ class Config:
 
     @property
     def key_list(self):
-        # key_list = []
-        # if self.k_days == 20:
-        #     key_list += ['logy_{}'.format(n) for n in [20, 60, 120]]
-        #     key_list += ['std_{}'.format(n) for n in [20, 60, 120]]
-        #     key_list += ['mdd_{}'.format(n) for n in [20, 60, 120]]
-        #     key_list += ['stdnew_{}'.format(n) for n in [20, 60, 120]]
-        #     key_list += ['pos_{}'.format(n) for n in [20, 60]]
+        # TODO: key_list_with_macro와 통합
+        key_list = self._parse_features_structure()
+        return key_list
 
-            # label_keys = ['logy_{}'.format(n) for n in [20, 60, 120]]
-            # label_keys += ['stdnew_{}'.format(n) for n in [20, 60, 120]]
-            # label_keys += ['pos_{}'.format(n) for n in [20, 60]]
-        key_list = self._parse_features_structure() #+ ['nmsize']
+    @property
+    def key_list_with_macro(self):
+        if self.use_macro:
+            key_list = self._parse_features_structure() + self.add_features_list
+        else:
+            key_list = self._parse_features_structure()
+
         return key_list
 
     def _parse_features_structure(self):
@@ -125,49 +126,33 @@ class Config:
                     for nd in self.features_structure[key_cls][base][subkey]:
                         key_list.append("{}_{}".format(subkey, nd))
 
-        if self.use_macro:
-            key_list += self.add_features_list
         return key_list
 
     def set_features_info(self, k_days=5):
         if k_days == 5:
-            # self.model_predictor_list = ['logy', 'pos_20', 'pos_60', 'pos_120', 'std', 'mdd', 'fft']
-            # self.model_predictor_list = ['logy', 'cslogy_5', 'pos_5', 'pos_10', 'pos_20', 'std', 'mdd', 'fft']
-            # self.model_predictor_list = ['logy', 'cslogy', 'csstd', 'std', 'stdnew', 'mdd', 'fft', 'pos_5', 'pos_20']
-            # self.model_predictor_list = ['cslogy', 'csstd', 'pos_5']
-
-            self.model_predictor_list = ['nmlogy', 'nmstd', 'pos_5']
-
-            # self.features_structure = \
-            #     {'regression':
-            #          {'logy': [5],
-            #           'std': [5],
-            #           'stdnew': [5],
-            #           'mdd': [5],
-            #           'fft': [100],
-            #           'nmlogy': [5],
-            #           'nmstd': [5],
-            #           },
-            #      'classification':
-            #          {'pos': [5]}}
+            self.model_predictor_list = ['logp', 'nmlogy', 'nmstd', 'pos_5']
 
             self.features_structure = \
-                    {'regression':
-                         # {'logy': [20, 60, 120, 250],
-                         {'logy': [5, 10, 20, 60, 120],
-                          'logp': [0],
-                          'std': [5, 20, 60, 120],
-                          'stdnew': [5, 20],
-                          'mdd': [20, 60, 120],
+                {'regression':
+                     {'logp_base':
+                         {'logp': [0],
+                          'logy': [5, 10, 20, 60],
+                          'std': [20, 60],
+                          'stdnew': [20, 60],
+                          'mdd': [20, 60],
                           'fft': [100, 3],
-                          'nmlogy': [5, 20],
-                          'nmstd': [5, 20],
+                          'nmlogy': [5, 10, 20, 60],
+                          'nmstd': [5, 10, 20, 60],
                           },
-                     'classification':
-                         # {'pos': [20, 60, 120, 250]}}
-                         {'pos': [5, 10, 20, 60]}, }
-                     # 'crosssection':
-                     #     {'cslogy': [5, 20]}}
+                      'size_base': {'nmsize': [0]},
+                      'turnover_base': {'nmturnover': [0],
+                                        'tsturnover': [0]},
+                      },
+                 'classification':
+                     {'logp_base':
+                          {'pos': [5, 10, 20, 60, 120]}
+                      }
+                 }
 
         elif k_days == 10:
             # self.model_predictor_list = ['logy', 'pos_10', 'pos_20', 'pos_60', 'std', 'mdd', 'fft']
@@ -193,7 +178,7 @@ class Config:
             # self.model_predictor_list = ['logy', 'cslogy', 'std', 'stdnew', 'mdd', 'fft', 'pos_20', 'pos_60']
 
             # self.model_predictor_list = ['std']
-            self.model_predictor_list = ['nmlogy', 'nmstd', 'pos_20']
+            self.model_predictor_list = ['logp', 'nmlogy', 'nmstd', 'pos_20']
             # self.model_predictor_list = ['nmlogy']
 
             # self.features_structure = \
@@ -220,9 +205,6 @@ class Config:
                           'fft': [100, 3],
                           'nmlogy': [20, 60],
                           'nmstd': [20, 60],
-                          'nmsize': [0],
-                          'nmturnover': [0],
-                          'tsturnover': [0],
                           },
                       'size_base': {'nmsize': [0]},
                       'turnover_base': {'nmturnover': [0],
