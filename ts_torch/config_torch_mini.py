@@ -56,19 +56,8 @@ class Config:
         self.weighted_model = False     #  torch: use weighted model
         self.set_kdays(self.k_days)
 
-        # MARKET MODEL
-        self.data_type_mm = 'kr_market'
-        self.d_model_mm = 32
-        self.model_hidden_size_mm = self.d_model_mm
-        self.ffn_hidden_size_mm = 32
-        self.attention_head_size_mm = 4
-        self.layer_size_mm = 2
-        self.learning_rate_mm = 1e-4
-        self.dropout_mm = 0.5
-        self.embedding_size_mm = 10
-
         # meta
-        self.use_maml = False
+        self.use_maml = True
         if self.use_maml is True:
             self.n_tasks = 5
             self.inner_lr = 1e-2  # 5e-3

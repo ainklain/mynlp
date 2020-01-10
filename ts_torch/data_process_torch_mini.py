@@ -757,7 +757,7 @@ class DataScheduler:
                     labels_with_noise_t = Noise.random_flip(labels_with_noise_t, p=0.9, flip_p=0.2)
 
             # TODO: maml시에 importance_wgt 사용 불가 (임시로 labels_torch에서 maml 받아서 없앰)  dataloader_maml도 수정해야
-            labels_mtl_s = self.labels_torch(features_list, labels_with_noise_s, add_infos_s, maml=True)
+            labels_mtl_s = self.labels_torch(features_list, labels_with_noise_s, add_infos_s)
             to_device(tu.device, [f_with_noise_s, labels_mtl_s])
             # pred, _, _, _ = model.forward(features_with_noise, labels_mtl)
             weights_list = model.params2vec(requires_grad_only=True)
@@ -773,7 +773,7 @@ class DataScheduler:
             fast_weights = list(map(lambda p: p[1] - c.inner_lr * p[0], zip(grad, weights_list)))
 
             with torch.set_grad_enabled(is_train):
-                labels_mtl_t = self.labels_torch(features_list, labels_with_noise_t, add_infos_t, maml=True)
+                labels_mtl_t = self.labels_torch(features_list, labels_with_noise_t, add_infos_t)
                 to_device(tu.device, [f_with_noise_t, labels_mtl_t])
                 pred_t, loss_each_t = model.compute_graph_with_loss(f_with_noise_t, labels_mtl_t, weights_list=fast_weights)
                 to_device('cpu', [f_with_noise_t, labels_mtl_t])
@@ -852,7 +852,7 @@ class DataScheduler:
         performer_func(model, dataloader_set, self.labels_torch, save_dir=test_out_path, file_nm='test_{}.png'.format(ep)
                        , ylog=False, ls_method='ls_5_20', plot_all_features=True)
 
-    def labels_torch_multi(self, f_list, labels, add_infos, maml=False):
+    def labels_torch_multi(self, f_list, labels, add_infos):
         c = self.configs
         labels_mtl = dict()
         for cls in c.features_structure.keys():
@@ -867,12 +867,12 @@ class DataScheduler:
                         labels_mtl[key] = torch.stack([labels[:, :, f_list.index("{}_{}".format(key, n))] for n in n_arr], axis=-1)
 
         labels_mtl['size_rnk'] = add_infos['size_rnk'].reshape(-1, 1, 1)
-        if not maml:
+        if not c.use_maml:
             labels_mtl['importance_wgt'] = add_infos['importance_wgt'].reshape(-1, 1, 1)
 
         return labels_mtl
 
-    def labels_torch(self, f_list, labels, add_infos, maml=False):
+    def labels_torch(self, f_list, labels, add_infos):
         # 카테고리별 대표값만
         c = self.configs
         labels_mtl = dict()
@@ -890,7 +890,7 @@ class DataScheduler:
                         labels_mtl[key] = labels[:, :, f_list.index("{}_{}".format(key, n))].unsqueeze(-1)
 
         labels_mtl['size_rnk'] = add_infos['size_rnk'].reshape(-1, 1, 1)
-        if not maml:
+        if not c.use_maml:
             labels_mtl['importance_wgt'] = add_infos['importance_wgt'].reshape(-1, 1, 1)
 
         return labels_mtl
@@ -1042,6 +1042,9 @@ class PrepareDataFromDB:
             self.get_factorwgt_and_univ('CAP_300_100')  # 'CAP_100_150'
             # mktcap
             self.get_mktcap_daily(country='kr')
+            # macro data
+            self.get_macro_daily(country='kr')
+
 
     def run_procedure(self):
         # universe
@@ -1188,6 +1191,34 @@ class PrepareDataFromDB:
         self.sqlm.set_db_name('qinv')
         df = self.sqlm.db_read(sql_)
         df.to_csv('./data/{}_mktcap_daily.csv'.format(country), index=False)
+
+    @done_decorator
+    def get_macro_daily(self, country='kr'):
+        if country != 'kr':
+            raise NotImplementedError
+
+        sql_ = """
+        select b.*, f.mkt_rf as exmkt, f.smb, f.hml, f.wml, f.rmw, f.callrate, x.usdkrw
+            from wms..MktSentiData A
+            pivot (
+                min(value_) 
+                for macro_id in ([ConfIndex], [ConfIndex52], [MomStr], [MomStr52], [PrStr], [PrStr52], [VolStr], [VolStr52], [CS3YAAm], [CS3YBBBm], [PCratioW], [VKospi])
+            ) B
+            left join (	
+                select return_date as date_, mkt_rf, smb, hml, rmw, wml, call_rate as callrate
+                    from passive..factor_timeseries_wise 
+            ) F
+            on b.Date_ = f.date_
+            left join (	
+                select cast(base_d as date) as date_, CLSPRC as 'usdkrw'
+                    from wms..indexData A
+                    where idxcd = 'usdkrw'
+            ) X
+            on b.date_ = x.date_
+            order by b.date_"""
+        self.sqlm.set_db_name('qdb')
+        df = self.sqlm.db_read(sql_)
+        df.to_csv('./data/macro_daily.csv', index=False)
 
 
 class DataGeneratorDynamic:

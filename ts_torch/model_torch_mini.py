@@ -905,7 +905,10 @@ class TSModel(Base):
         else:
             adj_weight = 1.
 
-        adj_importance = labels_mtl['importance_wgt']
+        if labels_mtl.get('importance_wgt') is not None:  # TODO: MAML에서 정의 안됨
+            adj_importance = labels_mtl['importance_wgt']
+        else:
+            adj_importance = 1.
 
         pred_each = dict()
         loss_each = dict()
@@ -934,7 +937,11 @@ class TSModel(Base):
                 loss_each[key] = criterion(pred_each[key], labels_mtl[key]).mean(axis=-1)
 
             loss_shape = loss_each[key].shape
-            loss_each[key] = loss_each[key] * adj_weight.reshape(loss_shape) * adj_importance.reshape(loss_shape)
+
+            if labels_mtl.get('importance_wgt') is not None:  # TODO: MAML에서 정의 안됨
+                loss_each[key] = loss_each[key] * adj_weight.reshape(loss_shape) * adj_importance.reshape(loss_shape)
+            else:
+                loss_each[key] = loss_each[key] * adj_weight.reshape(loss_shape)
 
         return pred_each, loss_each #, enc_self_attns, dec_self_attns, dec_enc_attns,
 

@@ -141,7 +141,7 @@ class FeatureNew:
             arr_debug = arr[:(calc_length + m_days + 1)]
 
         # arr default: logp  TODO: arr Type ISSUE
-        if func_nm in ['logp', 'tsturnover']:
+        if func_nm in ['logp', 'tsturnover', 'ts_normal']:
             result = arr_to_normal_ts(arr, m_days, calc_length)[calc_length:]
             if debug:
                 result_debug = arr_to_normal_ts(arr_debug, m_days, calc_length)[calc_length:]
@@ -193,13 +193,19 @@ class FeatureNew:
                 result_debug = arr_to_normal(std_nd_new(arr_debug, n)[calc_length:])
 
         # arr : size_arr   TODO: arr Type ISSUE
-        elif func_nm in ['nmsize', 'nmturnover']:
+        elif func_nm in ['nmsize', 'nmturnover', 'cs_normal']:
             result = arr_to_normal(arr[calc_length:])
             result[np.isnan(result)] = 0  # TODO: 임시로 nan값 0처리
             if debug:
                 result_debug = arr_to_normal(arr_debug[calc_length:])
                 result_debug[np.isnan(result_debug)] = 0  # TODO: 임시로 nan값 0처리
 
+        elif func_nm in ['value']:
+            result = arr[calc_length:]
+            result[np.isnan(result)] = 0  # TODO: 임시로 nan값 0처리
+            if debug:
+                result_debug = arr_debug[calc_length:]
+                result_debug[np.isnan(result_debug)] = 0  # TODO: 임시로 nan값 0처리
 
         feature, label = self.split_data_label(result)
         if debug:
