@@ -156,18 +156,22 @@ class DataScheduler:
                                     else np.zeros(n_assets) for key in key_list], axis=-1)
 
         if c.use_macro:
-            # data_generator에서 계산/저장된 전체 macro ids 중 테스트에 적용하려는 list만 선별
-            m_idx = []
-            for m_id in c.macro_id_list:
-                m_idx.append(spot_dict['macro_list'].index(m_id))
+            features_macro, labels_macro = [], []
+            for base_key in c.add_features:  # base_key : [returns / values]
+                calc_macro_list, calc_feature_list = c.add_features[base_key]
+                m_idx = []
+                for m in calc_macro_list:
+                    m_idx.append(spot_dict['macro_list'][base_key].index(m))
 
-            # features_dict['macro_dict'][key] shape: [M, macro_list]
-            features_macro = np.concatenate([features_dict['macro_dict'][key][:, m_idx] for key in c.macro_key_list], axis=-1)
-            features_macro = np.tile(features_macro[np.newaxis, :], (n_assets, 1, 1))
-            # labels_dict['macro_dict'][key] shape: [macro_list, ]
-            labels_macro = np.concatenate([labels_dict['macro_dict'][key][m_idx] for key in c.macro_key_list], axis=-1)
-            labels_macro = np.tile(labels_macro[np.newaxis, :], (n_assets, 1, 1))
+                # features_dict['macro_dict'][base_key][key] shape: [M, macro_list]
+                features_macro += [features_dict['macro_dict'][base_key][key][:, m_idx] for key in calc_feature_list]
+                # labels_dict['macro_dict'][base_key][key] shape: [macro_list, ]
+                labels_macro += [labels_dict['macro_dict'][base_key][key][m_idx] for key in calc_feature_list]
+
+            features_macro = np.tile(np.concatenate(features_macro, axis=-1)[np.newaxis, :], (n_assets, 1, 1))
+            labels_macro = np.tile(np.concatenate(labels_macro, axis=-1)[np.newaxis, :], (n_assets, 1, 1))
             labels_macro = np.concatenate([features_macro[:, -1:, :], labels_macro], axis=1)
+
 
             question = np.concatenate([question, features_macro], axis=-1)
             answer = np.concatenate([answer, labels_macro], axis=-1)
@@ -1232,7 +1236,7 @@ class DataGeneratorDynamic:
             # 가격데이터
             return_path = './data/kr_close_y_90.csv'    # [date_ / infocode / y]
             market_path = './data/kr_mktcap_daily.csv'    # [eval_d / infocode / turnover / mktcap / size]
-            macro_path = './data/data_for_metarl.csv'
+            macro_path = './data/macro_daily.csv'
 
             if univ_type == 'selected':
                 univ_path = './data/kr_factor_wgt.csv'  # [work_m / univ_nm / gicode / infocode / wgt] # monthly
@@ -1307,9 +1311,13 @@ class DataGeneratorDynamic:
 
     def set_macrodata(self, macro_path):
         assert hasattr(self, 'date_'), '[set_macrodata] run set_return_and_date first'
-        df = pd.read_csv(macro_path).set_index('eval_d')
-        df = (df + 1).cumprod(axis=0)
-        data_df = pd.merge(pd.DataFrame({'eval_d': self.date_}), df, how='left', left_on='eval_d', right_on='eval_d')
+        df = pd.read_csv(macro_path).set_index('date_')
+        df.columns = [col.lower() for col in df.columns]
+
+        # returns인 값들 logp로 전처리  # => sample_data로 이관
+        # value_y = ['exmkt', 'smb', 'hml', 'wml', 'rmw', 'callrate']
+        # df.loc[:, value_y] = np.log(df.loc[:, value_y] + 1).cumsum(axis=0)
+        data_df = pd.merge(pd.DataFrame({'eval_d': self.date_}), df, how='left', left_on='eval_d', right_on='date_')
         data_df = data_df.set_index('eval_d').ffill()
         self.macro_df = data_df
 
@@ -1359,13 +1367,19 @@ class DataGeneratorDynamic:
             select_where_macro = ((self.macro_df.index >= start_d) & (self.macro_df.index <= end_d))
             df_macro = self.macro_df.loc[select_where_macro, :]
 
+            # returns값들 logp로 변환
+            y_values = c.macro_dict['returns']
+            p_values = c.macro_dict['values']
+            df_macro.loc[:, y_values] = (1+df_macro.loc[:, y_values]).cumprod(axis=0)
+
             # assert np.sum(select_where) == np.sum(select_where_macro), 'selected data not matched (macro vs stocks)'
             if len(df_logp) != len(df_macro):
                 df_macro = pd.merge(df_logp.reindex(columns=[]), df_macro, how='left', left_index=True, right_index=True)
 
-            df_macro = cleansing_missing_value(df_macro, n_allow_missing_value=20, to_log=True)
+            df_macro.loc[:, p_values] = cleansing_missing_value(df_macro.loc[:, p_values], reset_first_value=False, n_allow_missing_value=20, to_log=False)
+            df_macro.loc[:, y_values] = cleansing_missing_value(df_macro.loc[:, y_values], n_allow_missing_value=20, to_log=True)
 
-            if df_macro.empty:
+            if df_macro.empty or ((df_macro.isna().sum(axis=1) > 0).sum() > 0):
                 return False
 
         print('[{}] univ size: {}'.format(base_d, len(univ_list)))
@@ -1412,16 +1426,21 @@ class DataGeneratorDynamic:
 
         # macro
         if self.use_macro:
-            macro_logp_arr = df_macro.to_numpy(dtype=np.float32)
-            assert len(logp_arr) == len(macro_logp_arr)
+            features_dict['macro_dict'] = dict()
+            labels_dict['macro_dict'] = dict()
+            spot_dict['macro_list'] = dict()
+            for key in c.macro_dict:
+                macro_arr = df_macro.loc[:, c.macro_dict[key]].to_numpy(dtype=np.float32)
+                assert len(logp_arr) == len(macro_arr)
 
-            macro_features_dict, macro_labels_dict = features_cls.calc_features(macro_logp_arr
-                                                                                , debug=debug
-                                                                                , calc_list=c.macro_key_list)
-            features_dict['macro_dict'] = macro_features_dict
-            labels_dict['macro_dict'] = macro_labels_dict
+                macro_features_dict, macro_labels_dict = features_cls.calc_features(macro_arr
+                                                                                    , debug=debug
+                                                                                    , calc_list=c.macro_features[key])
 
-            spot_dict['macro_list'] = list(df_macro.columns)
+                features_dict['macro_dict'][key] = macro_features_dict
+                labels_dict['macro_dict'][key] = macro_labels_dict
+
+                spot_dict['macro_list'][key] = c.macro_dict[key]
 
         return features_dict, labels_dict, spot_dict
 

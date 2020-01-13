@@ -1,4 +1,6 @@
 
+from collections import OrderedDict
+
 class Config:
     def __init__(self):
         # time series parameter
@@ -57,13 +59,13 @@ class Config:
         self.set_kdays(self.k_days)
 
         # meta
-        self.use_maml = True
+        self.use_maml = False
         if self.use_maml is True:
             self.n_tasks = 5
             self.inner_lr = 1e-2  # 5e-3
             self.meta_lr = 1e-3  # 1e-4
 
-            self.train_set_length = 2500    # previous 10 years data
+            self.train_set_length = 1000    # previous 10 years data
             self.sampling_days = 20          # get data every 'sampling_days' days
             self.trainset_rate = 0.5
 
@@ -74,19 +76,42 @@ class Config:
 
         # additional features
 
-        self.possible_func = {'logp_base': ['logp', 'logy', 'std', 'stdnew', 'pos', 'mdd', 'fft', 'cslogy', 'csstd', 'nmlogy', 'nmstd',],
+        self.possible_func = {'logp_base': ['logp', 'logy', 'std', 'stdnew', 'pos', 'mdd', 'fft', 'cslogy', 'csstd', 'nmlogy', 'nmstd', 'tsnormal', 'csnormal', 'value'],
                               'size_base': ['nmsize'],
                               'turnover_base': ['nmturnover', 'tsturnover']}
         # macro
-        self.use_macro = False
+        self.use_macro = True
         if self.use_macro:
-            self.macro_id_list = ['smb', 'hml', 'rmw', 'wml', 'call_rate', 'kospi', 'usdkrw']
-            self.macro_key_list = ['logp_0', 'logy_{}'.format(self.k_days), 'std_{}'.format(self.k_days)]
+            # TODO: 전체 데이터 (파일 저장용 - 변수명 및 위치 변경)
+            self.macro_dict = {
+                'returns': ['exmkt', 'smb', 'hml', 'wml', 'rmw', 'callrate'],                               # returns값을 logp로 변환
+                'values': ['confindex', 'confindex52', 'momstr', 'momstr52', 'prstr', 'prstr52',
+                           'volstr', 'volstr52', 'cs3yaam', 'cs3ybbbm', 'pcratiow', 'vkospi', 'usdkrw'],    # values 그 자체로 사용
+            }
 
-            self.add_features_list = [id + '-' + key for id in self.macro_id_list for key in self.macro_key_list]
+            self.macro_features = {
+                'returns': ['logp_0', 'logy_20', 'std_20', 'stdnew_20', 'pos_20', 'mdd_20', 'fft_100'],
+                'values': ['value_0', 'tsnormal_0']}
+
+            # TODO: 실제 사용 데이터 (전체데이터로부터 로드 - 변수명 및 위치 변경)
+            # format: (macro_list, calc_feature_list)
+            self.add_features = OrderedDict({
+                'returns': (['exmkt', 'smb', 'hml', 'wml', 'rmw', 'callrate'], ['logp_0']),
+                'values': (['confindex', 'confindex52', 'momstr', 'momstr52', 'prstr', 'prstr52', 'volstr', 'volstr52', 'cs3yaam', 'cs3ybbbm', 'pcratiow', 'vkospi', 'usdkrw'], ['tsnormal_0'])
+            })
+            # self.add_features_list = [id + '-' + key for id in self.macro_id_list for key in self.macro_key_list]
 
         self.embedding_size = len(self.key_list_with_macro)
 
+    @property
+    def add_features_list(self):
+        l = []
+        for base_key in self.add_features:
+            tmp_m_list, tmp_f_list = self.add_features[base_key]
+            for f_ in tmp_f_list:
+                l += [m_ + '/' + f_ for m_ in tmp_m_list]
+
+        return l
 
     @property
     def balancing_key(self):
