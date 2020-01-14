@@ -37,8 +37,9 @@ def done_decorator(f):
 def done_decorator_with_logger(f):
     def decorated(*args, **kwargs):     # args[0] : self
         args[0].logger.info("[%s] start...", f.__name__)
-        f(*args, **kwargs)
+        result = f(*args, **kwargs)
         args[0].logger.info("[%s] done...", f.__name__)
+        return result
     return decorated
 
 
