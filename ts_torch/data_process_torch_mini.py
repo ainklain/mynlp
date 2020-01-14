@@ -5,6 +5,7 @@ import time
 import torch
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from ts_torch import torch_util_mini as tu
+from ts_torch.logger_torch import logger
 import numpy as np
 import os
 
@@ -33,6 +34,14 @@ def done_decorator(f):
     return decorated
 
 
+def done_decorator_with_logger(f):
+    def decorated(*args, **kwargs):     # args[0] : self
+        args[0].logger.info("[%s] start...", f.__name__)
+        f(*args, **kwargs)
+        args[0].logger.info("[%s] done...", f.__name__)
+    return decorated
+
+
 class DataScheduler:
     def __init__(self, configs, features_cls):
         c = configs
@@ -53,6 +62,7 @@ class DataScheduler:
 
         self._make_dir(configs)
 
+        self.logger = logger(self.__class__.__name__, configs)
         self.dataloader = {'train': False, 'eval': False}
 
         if configs.univ_type == 'selected':
@@ -66,6 +76,7 @@ class DataScheduler:
         self.data_out_path = os.path.join(os.getcwd(), configs.data_out_path, self.configs.f_name)
         os.makedirs(self.data_out_path, exist_ok=True)
 
+    @done_decorator_with_logger
     def set_idx(self, base_idx):
         c = self.configs
 
@@ -75,6 +86,9 @@ class DataScheduler:
         self.eval_begin_idx = int(c.train_set_length * c.trainset_rate) + np.max([0, base_idx - c.train_set_length])
         self.test_begin_idx = base_idx - c.m_days
         self.test_end_idx = base_idx + c.retrain_days
+
+        self.logger.info('[set_idx] base_idx: %d / train_begin_idx: %d / eval_begin_idx: %d / test_begin_idx: %d / test_end_idx: %d'
+                         , self.base_idx, self.train_begin_idx, self.eval_begin_idx, self.test_begin_idx, self.test_end_idx)
 
     def get_data_params(self, mode='train'):
         c = self.configs
@@ -128,16 +142,20 @@ class DataScheduler:
         key_list = self.configs.key_list
         c = self.configs
 
-        file_nm = os.path.join(self.data_path, '{}.pkl'.format(date_i))
+        file_nm = os.path.join(data_path, '{}.pkl'.format(date_i))
         if force_calc or not os.path.exists(file_nm):
+            self.logger.debug('[_fetch_data]: %d', date_i)
             result = dg.sample_data(date_i, c)
             if result is False:
+                self.logger.debug('[_fetch_data]: %d False returned', date_i)
                 return None
 
-            pickle.dump(result, open(os.path.join(data_path, '{}.pkl'.format(date_i)), 'wb'))
+            pickle.dump(result, open(file_nm, 'wb'))
+            self.logger.debug('[_fetch_data]: %d saved to %s', date_i, file_nm)
 
         else:
             result = pickle.load(open(file_nm, 'rb'))
+            self.logger.debug('[_fetch_data]: %d loaded from %s', date_i, file_nm)
 
         features_dict, labels_dict, spot_dict = result
 
@@ -171,7 +189,6 @@ class DataScheduler:
             features_macro = np.tile(np.concatenate(features_macro, axis=-1)[np.newaxis, :], (n_assets, 1, 1))
             labels_macro = np.tile(np.concatenate(labels_macro, axis=-1)[np.newaxis, :], (n_assets, 1, 1))
             labels_macro = np.concatenate([features_macro[:, -1:, :], labels_macro], axis=1)
-
 
             question = np.concatenate([question, features_macro], axis=-1)
             answer = np.concatenate([answer, labels_macro], axis=-1)
@@ -232,6 +249,7 @@ class DataScheduler:
         dataloader = [features, add_infos]
         return dataloader, features_list, add_infos['asset_list'], None, None
 
+    @done_decorator_with_logger
     def _dataset_monthly(self, mode='test'):
         assert mode in ['test', 'test_insample', 'predict']
         c = self.configs
@@ -305,6 +323,7 @@ class DataScheduler:
 
         return enc_in, dec_in, dec_out, features_list, additional_infos, start_date, end_date
 
+    @done_decorator_with_logger
     def _dataset(self, mode='train'):
         c = self.configs
 
@@ -313,12 +332,18 @@ class DataScheduler:
         start_idx, end_idx, data_params, decaying_factor = self.get_data_params(mode)
         features_list = c.key_list_with_macro
 
+        self.logger.info('[_dataset]: mode:%s / start_i:%d / end_i:%d', mode, start_idx, end_idx)
         idx_balance = c.key_list.index(c.balancing_key)
 
         balancing_list = ['mktcap', 'size_rnk', 'importance_wgt']   # TODO: configs로 옮겨야됨
         n_loop = np.ceil((end_idx - start_idx) / c.sampling_days)
         for i, d in enumerate(range(start_idx, end_idx, c.sampling_days)):
-            fetch_data = self._fetch_data(d)
+            try:
+                fetch_data = self._fetch_data(d)
+            except Exception as e:
+                self.logger.error("[_dataset] self._fetch_data error (d=%d)", d)
+                self.logger.error("[_dataset] features_list: %s / idx_balance %d / decaying_factor", features_list, idx_balance, decaying_factor)
+
             if fetch_data is None:
                 continue
 
@@ -328,6 +353,8 @@ class DataScheduler:
             add_info['importance_wgt'] = np.array([decaying_factor ** (n_loop - i - 1)
                                                           for _ in range(len(tmp_ein))], dtype=np.float32)
             if data_params['balance_class'] is True and c.balancing_method == 'each':
+                self.logger.info("[_dataset] 'each' balancing_method applied.")
+
                 idx_bal = self.balanced_index(tmp_dout[:, 0, idx_balance])
                 tmp_ein, tmp_din, tmp_dout = tmp_ein[idx_bal], tmp_din[idx_bal], tmp_dout[idx_bal]
                 for nm_ in balancing_list:
@@ -348,6 +375,7 @@ class DataScheduler:
             dec_out = np.concatenate(dec_out, axis=0)
 
             if data_params['balance_class'] is True and c.balancing_method == 'once':
+                self.logger.info("[_dataset] 'once' balancing_method applied.")
                 idx_bal = self.balanced_index(dec_out[:, 0, idx_balance])
                 enc_in, dec_in, dec_out = enc_in[idx_bal], dec_in[idx_bal], dec_out[idx_bal]
 
@@ -371,6 +399,7 @@ class DataScheduler:
 
         return enc_in, dec_in, dec_out, features_list, add_infos, start_date, end_date
 
+    @done_decorator_with_logger
     def _dataset_maml(self, mode='train'):
         c = self.configs
 
@@ -470,11 +499,13 @@ class DataScheduler:
         idx_bal = np.concatenate([idx_pos, idx_neg])
         return idx_bal
 
+    @done_decorator_with_logger
     def _dataloader(self, mode, is_monthly=False):
         # self = ds; mode = 'test'; is_monthly=False
         c = self.configs
         batch_size = dict(train=c.train_batch_size, eval=c.eval_batch_size, test=1)
 
+        self.logger.info("[_dataloader] mode: %s / is_monthly: %s", mode, is_monthly)
         if is_monthly:
             assert mode in ['test', 'test_insample', 'predict']
             _dataset = self._dataset_monthly(mode)
@@ -482,7 +513,7 @@ class DataScheduler:
             _dataset = self._dataset(mode)
 
         if _dataset is False:
-            print('[train] no {} data'.format(mode))
+            self.logger.info("[_dataloader] [mode: %s] no data (_dataset is False)", mode)
             return False
 
         enc_in, dec_in, dec_out, features_list, add_infos, start_d, end_d = _dataset
@@ -501,7 +532,7 @@ class DataScheduler:
                 new_dec_in[:] += add_infos['size_rnk'].reshape(-1, 1, 1)
 
             dataloader = data_loader(enc_in, new_dec_in, dec_out, add_infos, batch_size=batch_size[mode])
-            print('dataloader: mode-{} batchsize-{}'.format(mode, batch_size))
+            self.logger.info("[_dataloader] mode: %s / batchsize: %d", mode, batch_size)
             return dataloader, features_list
 
         elif mode in ['test', 'predict', 'test_insample']:
@@ -535,12 +566,13 @@ class DataScheduler:
         else:
             raise NotImplementedError
 
+    @done_decorator_with_logger
     def _dataloader_maml(self, mode):
         # self = ds; mode = 'train'
         _dataset = self._dataset_maml(mode)
 
         if _dataset is False:
-            print('[train] no {} data'.format(mode))
+            self.logger.info("[_dataloader_maml] [mode: %s] no data (_dataset is False)", mode)
             return False
 
         spt_list, tgt_list, features_list, importance_wgt, start_date, end_date = _dataset
@@ -564,17 +596,17 @@ class DataScheduler:
 
         return dataloader, features_list, all_assets_list, start_date, end_date
 
+    @done_decorator_with_logger
     def train(self, model, optimizer, performer, num_epochs, early_stopping_count=2):
         min_eval_loss = 99999
         stop_count = 0
-        print('train start...')
         for ep in range(num_epochs):
             if ep % 2 == 0:
-                print('[Ep {}] plot'.format(ep))
+                self.logger.info("[train] [Ep %d] plot", ep)
                 self.test_plot(performer, model, ep, is_monthly=False)
                 self.test_plot(performer, model, ep, is_monthly=True)
 
-            print('[Ep {}] model evaluation ...'.format(ep))
+            self.logger.info("[train] [Ep %d] model evaluation ...", ep)
             eval_loss = self.step_epoch(ep, model, optimizer, is_train=False)
             if eval_loss is False:
                 return False
@@ -586,33 +618,32 @@ class DataScheduler:
                 min_eval_loss = eval_loss
                 stop_count = 0
 
-            print('[Ep {}] count: {}/{}'.format(ep, stop_count, early_stopping_count))
+            self.logger.info("[train] [Ep %d] count: {}/{}", ep, stop_count, early_stopping_count)
             if stop_count >= early_stopping_count:
-                print('[Ep {}] Early Stopped'.format(ep))
+                self.logger.info("[train] [Ep %d] Early Stopped", ep)
                 model.load_from_optim()
                 self.test_plot(performer, model, ep + 100, is_monthly=False)
                 self.test_plot(performer, model, ep + 100, is_monthly=True)
 
                 break
 
-            print('[Ep {}] model train ...'.format(ep))
             train_loss = self.step_epoch(ep, model, optimizer, is_train=True)
             if train_loss is False:
                 return False
 
+    @done_decorator_with_logger
     def train_maml(self, model, optimizer, performer, num_epochs, early_stopping_count=2):
         min_eval_loss = 99999
         stop_count = 0
-        print('train start...')
         for ep in range(num_epochs):
             if ep % 5 == 0:
-                print('[Ep {}] plot'.format(ep))
+                self.logger.info("[train_maml] [Ep %d] plot", ep)
                 self.test_plot_maml(performer, model, ep, is_monthly=False)
                 # self.test_plot_maml(performer, model, ep, is_monthly=False, is_insample=True)
                 self.test_plot(performer, model, ep, is_monthly=False)
                 # self.test_plot(performer, model, ep, is_monthly=False, is_insample=True)
 
-            print('[Ep {}] model evaluation ...'.format(ep))
+            self.logger.info("[train_maml] [Ep %d] model evaluation ...", ep)
             eval_loss = self.step_epoch_maml(ep, model, optimizer, is_train=False)
             if eval_loss is False:
                 return False
@@ -625,15 +656,15 @@ class DataScheduler:
                 min_eval_loss = eval_loss
                 stop_count = 0
 
-            print('[Ep {}] count: {}/{}'.format(ep, stop_count, early_stopping_count))
+            self.logger.info("[train_maml] [Ep %d] count: {}/{}", ep, stop_count, early_stopping_count)
             if stop_count >= early_stopping_count:
-                print('[Ep {}] Early Stopped'.format(ep))
+                self.logger.info("[train] [Ep %d] Early Stopped", ep)
                 model.load_from_optim()
                 self.test_plot_maml(performer, model, ep, is_monthly=False)
 
                 break
 
-            print('[Ep {}] model train ...'.format(ep))
+            # print('[Ep {}] model train ...'.format(ep))
             train_loss = self.step_epoch_maml(ep, model, optimizer, is_train=True)
             if train_loss is False:
                 return False
@@ -653,7 +684,7 @@ class DataScheduler:
 
         dataloader, features_list = self.dataloader[mode]
         if ep == 0:
-            print('f_list: {}'.format(features_list))
+            self.logger.info("[step_epoch][Ep %d][%s] f_list: %s", ep, mode, features_list)
 
         total_loss = 0
         i = 0
@@ -694,16 +725,17 @@ class DataScheduler:
 
         total_loss = tu.np_ify(total_loss) / i
         if is_train:
-            print_str = "[Ep {}][{}] ".format(ep, mode)
-            size_str = "[Ep {}][{}][size] ".format(ep, mode)
+            print_str = "".format(ep, mode)
+            size_str = "".format(ep, mode)
             for key in loss_each.keys():
                 print_str += "{}- {:.4f} / ".format(key, tu.np_ify(loss_each[key].mean()))
                 size_str += "{} - {} / ".format(key, loss_each[key].shape)
-            print(print_str)
-            print(size_str)
+            self.logger.info("[step_epoch][Ep %d][%s] %s", ep, mode, print_str)
+            self.logger.info("[step_epoch][Ep %d][%s][size] %s", ep, mode, size_str)
+
             return total_loss
         else:
-            print('[Ep {}][{}] total - {:.4f}'.format(ep, mode, total_loss))
+            self.logger.info("[step_epoch][Ep %d][%s] total loss: %.6f", ep, mode, total_loss)
             return total_loss
 
     def step_epoch_maml(self, ep, model, optimizer, is_train=True):
@@ -724,7 +756,7 @@ class DataScheduler:
 
         taskloader, features_list, _, _, _ = self.dataloader[mode]
         if ep == 0:
-            print('f_list: {}'.format(features_list))
+            self.logger.info("[step_epoch_maml][Ep %d][%s] f_list: %s", ep, mode, features_list)
 
         total_losses = 0
         n_task = 0
@@ -795,9 +827,11 @@ class DataScheduler:
             total_losses.backward()
             optimizer.step()
 
-        print('[Ep {}][{}] total - {:.4f} (n tasks: {})'.format(ep, mode, total_losses, n_task))
+        self.logger.info("[step_epoch_maml][Ep %d][%s] total loss: %.6f (n tasks: {})", ep, mode, total_losses, n_task)
+        # print('[Ep {}][{}] total - {:.4f} (n tasks: {})'.format(ep, mode, total_losses, n_task))
         return total_losses
 
+    @done_decorator_with_logger
     def test_plot(self, performer, model, ep, is_monthly, is_insample=False):
         # self=ds; ep=0; is_monthly = False; is_insample=False
         model.eval()
@@ -815,6 +849,7 @@ class DataScheduler:
         else:
             performer_func = performer.predict_plot_mtl
 
+        self.logger.info("[step_epoch_maml][Ep %d][%s]", ep, self_mode)
         if (ep == 0) or (self.dataloader.get(self_mode) is None):
             self.dataloader[self_mode] = self._dataloader(mode, is_monthly=is_monthly)
 
@@ -828,6 +863,7 @@ class DataScheduler:
         performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}.png'.format(ep)
                        , ylog=False, ls_method='ls_5_20', plot_all_features=True)
 
+    @done_decorator_with_logger
     def test_plot_maml(self, performer, model, ep, is_monthly, is_insample=False):
         # self=ds; ep=0; is_monthly = False
         model.eval()
@@ -843,6 +879,7 @@ class DataScheduler:
                 mode = 'test'
             performer_func = performer.predict_plot_maml
 
+        self.logger.info("[step_epoch_maml][Ep %d][%s]", ep, mode)
         if (ep == 0) or (self.dataloader.get(mode) is None):
             self.dataloader[mode] = self._dataloader_maml(mode)
 
@@ -993,24 +1030,33 @@ class DataScheduler:
             'optimizer_state_dict': optimizer.state_dict(),
         }, save_path)
 
+        self.logger.info("[load] Model Saved. %s", save_path)
+
     def load(self, model, optimizer):
         load_path = os.path.join(self.data_out_path, "saved_model.pt")
         if not os.path.exists(load_path):
             return False
 
-        print("Model Loaded. ({})".format(load_path))
         checkpoint = torch.load(load_path)
         model.optim_state_dict = checkpoint['model_state_dict']
         model.load_from_optim()
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         model.eval()
 
+        self.logger.info("[load] Model Loaded. %s", load_path)
+
     def next(self):
+        self.logger.debug('[next][before] base_idx: %d / train_begin_idx: %d / eval_begin_idx: %d / test_begin_idx: %d / test_end_idx: %d'
+                         , self.base_idx, self.train_begin_idx, self.eval_begin_idx, self.test_begin_idx, self.test_end_idx)
+
         self.base_idx += self.retrain_days
         self.train_begin_idx += self.retrain_days
         self.eval_begin_idx += self.retrain_days
         self.test_begin_idx += self.retrain_days
         self.test_end_idx = min(self.test_end_idx + self.retrain_days, self.data_generator.max_length - self.configs.k_days - 1)
+
+        self.logger.debug('[next][after] base_idx: %d / train_begin_idx: %d / eval_begin_idx: %d / test_begin_idx: %d / test_end_idx: %d'
+                         , self.base_idx, self.train_begin_idx, self.eval_begin_idx, self.test_begin_idx, self.test_end_idx)
 
         self.dataloader = {'train': False, 'eval': False}
 

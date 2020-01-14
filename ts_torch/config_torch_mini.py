@@ -1,5 +1,6 @@
 
 from collections import OrderedDict
+import os
 
 class Config:
     def __init__(self):
@@ -102,6 +103,16 @@ class Config:
             # self.add_features_list = [id + '-' + key for id in self.macro_id_list for key in self.macro_key_list]
 
         self.embedding_size = len(self.key_list_with_macro)
+
+        # logger
+        self.log_level = 'debug'
+        self.log_maxbytes = 10 * 1024 * 1024
+        self.log_backupcount = 10
+        self.log_format = "%(asctime)s[%(levelname)s|%(name)s,%(lineno)s] %(message)s"
+
+    @property
+    def log_filename(self):
+        return os.path.join(os.getcwd(), self.data_out_path, self.f_name, 'log.log')
 
     @property
     def add_features_list(self):
