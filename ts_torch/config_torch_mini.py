@@ -81,38 +81,40 @@ class Config:
                               'size_base': ['nmsize'],
                               'turnover_base': ['nmturnover', 'tsturnover']}
         # macro
+        # TODO: 전체 데이터 (파일 저장용 - 변수명 및 위치 변경)
+        self.macro_dict = {
+            'returns': ['exmkt', 'smb', 'hml', 'wml', 'rmw', 'callrate'],  # returns값을 logp로 변환
+            'values': ['confindex', 'confindex52', 'momstr', 'momstr52', 'prstr', 'prstr52',
+                       'volstr', 'volstr52', 'cs3yaam', 'cs3ybbbm', 'pcratiow', 'vkospi', 'usdkrw'],  # values 그 자체로 사용
+        }
+
+        self.macro_features = {
+            'returns': ['logp_0', 'logy_20', 'std_20', 'stdnew_20', 'pos_20', 'mdd_20', 'fft_100'],
+            'values': ['value_0', 'tsnormal_0']}
+
         self.use_macro = True
         if self.use_macro:
-            # TODO: 전체 데이터 (파일 저장용 - 변수명 및 위치 변경)
-            self.macro_dict = {
-                'returns': ['exmkt', 'smb', 'hml', 'wml', 'rmw', 'callrate'],                               # returns값을 logp로 변환
-                'values': ['confindex', 'confindex52', 'momstr', 'momstr52', 'prstr', 'prstr52',
-                           'volstr', 'volstr52', 'cs3yaam', 'cs3ybbbm', 'pcratiow', 'vkospi', 'usdkrw'],    # values 그 자체로 사용
-            }
-
-            self.macro_features = {
-                'returns': ['logp_0', 'logy_20', 'std_20', 'stdnew_20', 'pos_20', 'mdd_20', 'fft_100'],
-                'values': ['value_0', 'tsnormal_0']}
 
             # TODO: 실제 사용 데이터 (전체데이터로부터 로드 - 변수명 및 위치 변경)
             # format: (macro_list, calc_feature_list)
             self.add_features = OrderedDict({
-                'returns': (['exmkt', 'smb', 'hml', 'wml', 'rmw', 'callrate'], ['logp_0']),
-                'values': (['confindex', 'confindex52', 'momstr', 'momstr52', 'prstr', 'prstr52', 'volstr', 'volstr52', 'cs3yaam', 'cs3ybbbm', 'pcratiow', 'vkospi', 'usdkrw'], ['tsnormal_0'])
+                'returns': (['exmkt'], ['logp_0']),
+                'values': (['confindex', 'momstr', 'prstr', 'volstr', 'cs3yaam', 'pcratiow', 'usdkrw'], ['tsnormal_0'])
+                # 'returns': (['exmkt', 'smb', 'hml', 'wml', 'rmw', 'callrate'], ['logp_0']),
+                # 'values': (['confindex', 'confindex52', 'momstr', 'momstr52', 'prstr', 'prstr52', 'volstr', 'volstr52', 'cs3yaam', 'cs3ybbbm', 'pcratiow', 'vkospi', 'usdkrw'], ['tsnormal_0'])
             })
             # self.add_features_list = [id + '-' + key for id in self.macro_id_list for key in self.macro_key_list]
 
         self.embedding_size = len(self.key_list_with_macro)
 
         # logger
-        self.log_level = 'debug'
+        self.log_level = 'info'
         self.log_maxbytes = 10 * 1024 * 1024
         self.log_backupcount = 10
         self.log_format = "%(asctime)s[%(levelname)s|%(name)s,%(lineno)s] %(message)s"
 
-    @property
-    def log_filename(self):
-        return os.path.join(os.getcwd(), self.data_out_path, self.f_name, 'log.log')
+    def log_filename(self, name_='log'):
+        return os.path.join(os.getcwd(), self.data_out_path, self.f_name, f'{name_}.log')
 
     @property
     def add_features_list(self):

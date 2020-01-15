@@ -1,5 +1,6 @@
-import logging.handlers
 
+import logging.handlers
+from colorlog import ColoredFormatter
 
 def get_level(level_str):
     level_dict = {'debug': logging.DEBUG,
@@ -10,23 +11,29 @@ def get_level(level_str):
     return level_dict[level_str.lower()]
 
 
-def logger(name, configs):
+def logger(name, configs, filename='log', use_stream_handler=False):
     # 로거 & 포매터 & 핸들러 생성
     logger = logging.getLogger(name)
+    if use_stream_handler:
+        formatter_color = ColoredFormatter(configs.log_format,
+                                           log_colors={
+                                               'DEBUG': 'cyan',
+                                               'INFO': 'white,bold',
+                                               'WARNING': 'yellow',
+                                               'ERROR': 'red,bold',
+                                               'CRITICAL': 'red, bg_white',
+                                           })
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(formatter_color)
+        logger.addHandler(stream_handler)
+
     formatter = logging.Formatter(configs.log_format)
-    streamHandler = logging.StreamHandler()
-    fileHandler = logging.handlers.RotatingFileHandler(
-        filename=configs.log_filename,
+    file_handler = logging.handlers.RotatingFileHandler(
+        filename=configs.log_filename(filename),
         maxBytes=configs.log_maxbytes,
         backupCount=configs.log_backupcount)
-
-    # 핸들러 & 포매터 결합
-    streamHandler.setFormatter(formatter)
-    fileHandler.setFormatter(formatter)
-
-    # 로거 & 핸들러 결합
-    logger.addHandler(streamHandler)
-    logger.addHandler(fileHandler)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
 
     # 로거 레벨 설정
     logger.setLevel(get_level(configs.log_level))

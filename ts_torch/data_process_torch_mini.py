@@ -29,8 +29,9 @@ def cleansing_missing_value(df_selected, n_allow_missing_value=5, to_log=True, r
 def done_decorator(f):
     def decorated(*args, **kwargs):
         print("{} ...ing".format(f.__name__))
-        f(*args, **kwargs)
+        result = f(*args, **kwargs)
         print("{} ...done".format(f.__name__))
+        return result
     return decorated
 
 
@@ -64,6 +65,11 @@ class DataScheduler:
         self._make_dir(configs)
 
         self.logger = logger(self.__class__.__name__, configs)
+        self.logger_train = logger(self.__class__.__name__ + '_train',
+                                   configs,
+                                   filename='train_log',
+                                   use_stream_handler=True)
+
         self.dataloader = {'train': False, 'eval': False}
 
         if configs.univ_type == 'selected':
@@ -86,8 +92,8 @@ class DataScheduler:
         # self.train_begin_idx = 4500
         self.eval_begin_idx = int(c.train_set_length * c.trainset_rate) + np.max([0, base_idx - c.train_set_length])
         self.test_begin_idx = base_idx - c.m_days
-        self.test_end_idx = base_idx + c.retrain_days
-
+        # self.test_end_idx = base_idx + c.retrain_days
+        self.test_end_idx = min(base_idx + c.retrain_days, self.data_generator.max_length - c.k_days - 1)
         self.logger.info('[set_idx] base_idx: %d / train_begin_idx: %d / eval_begin_idx: %d / test_begin_idx: %d / test_end_idx: %d'
                          , self.base_idx, self.train_begin_idx, self.eval_begin_idx, self.test_begin_idx, self.test_end_idx)
 
@@ -176,7 +182,7 @@ class DataScheduler:
 
         if c.use_macro:
             features_macro, labels_macro = [], []
-            for base_key in c.add_features:  # base_key : [returns / values]
+            for base_key in c.add_features.keys():  # base_key : [returns / values]
                 calc_macro_list, calc_feature_list = c.add_features[base_key]
                 m_idx = []
                 for m in calc_macro_list:
@@ -185,7 +191,8 @@ class DataScheduler:
                 # features_dict['macro_dict'][base_key][key] shape: [M, macro_list]
                 features_macro += [features_dict['macro_dict'][base_key][key][:, m_idx] for key in calc_feature_list]
                 # labels_dict['macro_dict'][base_key][key] shape: [macro_list, ]
-                labels_macro += [labels_dict['macro_dict'][base_key][key][m_idx] for key in calc_feature_list]
+                labels_macro += [labels_dict['macro_dict'][base_key][key][m_idx] if labels_dict['macro_dict'][base_key][key] is not None
+                                 else np.zeros([len(m_idx),]) for key in calc_feature_list]
 
             features_macro = np.tile(np.concatenate(features_macro, axis=-1)[np.newaxis, :], (n_assets, 1, 1))
             labels_macro = np.tile(np.concatenate(labels_macro, axis=-1)[np.newaxis, :], (n_assets, 1, 1))
@@ -339,11 +346,11 @@ class DataScheduler:
         balancing_list = ['mktcap', 'size_rnk', 'importance_wgt']   # TODO: configs로 옮겨야됨
         n_loop = np.ceil((end_idx - start_idx) / c.sampling_days)
         for i, d in enumerate(range(start_idx, end_idx, c.sampling_days)):
-            try:
-                fetch_data = self._fetch_data(d)
-            except Exception as e:
-                self.logger.error("[_dataset] self._fetch_data error (d=%d)", d)
-                self.logger.error("[_dataset] features_list: %s / idx_balance %d / decaying_factor", features_list, idx_balance, decaying_factor)
+            # try:
+            fetch_data = self._fetch_data(d)
+            # except Exception as e:
+            #     self.logger.error("[_dataset] self._fetch_data error (d=%d)", d)
+            #     self.logger.error("[_dataset] features_list: %s / idx_balance %d / decaying_factor %d", features_list, idx_balance, decaying_factor)
 
             if fetch_data is None:
                 continue
@@ -533,7 +540,7 @@ class DataScheduler:
                 new_dec_in[:] += add_infos['size_rnk'].reshape(-1, 1, 1)
 
             dataloader = data_loader(enc_in, new_dec_in, dec_out, add_infos, batch_size=batch_size[mode])
-            self.logger.info("[_dataloader] mode: %s / batchsize: %d", mode, batch_size)
+            self.logger.info("[_dataloader] mode: %s / batchsize: %s", mode, batch_size)
             return dataloader, features_list
 
         elif mode in ['test', 'predict', 'test_insample']:
@@ -619,9 +626,11 @@ class DataScheduler:
                 min_eval_loss = eval_loss
                 stop_count = 0
 
-            self.logger.info("[train] [Ep %d] count: {}/{}", ep, stop_count, early_stopping_count)
+            self.logger.info("[train] [Ep %d] count: %d/%d", ep, stop_count, early_stopping_count)
+            self.logger_train.info("[train] [Ep %d] count: %d/%d", ep, stop_count, early_stopping_count)
             if stop_count >= early_stopping_count:
                 self.logger.info("[train] [Ep %d] Early Stopped", ep)
+                self.logger_train.info("[train] [Ep %d] Early Stopped", ep)
                 model.load_from_optim()
                 self.test_plot(performer, model, ep + 100, is_monthly=False)
                 self.test_plot(performer, model, ep + 100, is_monthly=True)
@@ -639,6 +648,7 @@ class DataScheduler:
         for ep in range(num_epochs):
             if ep % 5 == 0:
                 self.logger.info("[train_maml] [Ep %d] plot", ep)
+                self.logger_train.info("[train_maml] [Ep %d] plot", ep)
                 self.test_plot_maml(performer, model, ep, is_monthly=False)
                 # self.test_plot_maml(performer, model, ep, is_monthly=False, is_insample=True)
                 self.test_plot(performer, model, ep, is_monthly=False)
@@ -733,10 +743,12 @@ class DataScheduler:
                 size_str += "{} - {} / ".format(key, loss_each[key].shape)
             self.logger.info("[step_epoch][Ep %d][%s] %s", ep, mode, print_str)
             self.logger.info("[step_epoch][Ep %d][%s][size] %s", ep, mode, size_str)
+            self.logger_train.info("[step_epoch][Ep %d][%s] %s", ep, mode, print_str)
 
             return total_loss
         else:
             self.logger.info("[step_epoch][Ep %d][%s] total loss: %.6f", ep, mode, total_loss)
+            self.logger_train.info("[step_epoch][Ep %d][%s] total loss: %.6f", ep, mode, total_loss)
             return total_loss
 
     def step_epoch_maml(self, ep, model, optimizer, is_train=True):
@@ -828,7 +840,8 @@ class DataScheduler:
             total_losses.backward()
             optimizer.step()
 
-        self.logger.info("[step_epoch_maml][Ep %d][%s] total loss: %.6f (n tasks: {})", ep, mode, total_losses, n_task)
+        self.logger.info("[step_epoch_maml][Ep %d][%s] total loss: %.6f (n tasks: %d)", ep, mode, total_losses, n_task)
+        self.logger_train.info("[step_epoch_maml][Ep %d][%s] total loss: %.6f (n tasks: %d)", ep, mode, total_losses, n_task)
         # print('[Ep {}][{}] total - {:.4f} (n tasks: {})'.format(ep, mode, total_losses, n_task))
         return total_losses
 
@@ -850,7 +863,8 @@ class DataScheduler:
         else:
             performer_func = performer.predict_plot_mtl
 
-        self.logger.info("[step_epoch_maml][Ep %d][%s]", ep, self_mode)
+        self.logger.info("[test_plot][Ep %d][%s]", ep, self_mode)
+        self.logger_train.info("[test_plot][Ep %d][%s]", ep, self_mode)
         if (ep == 0) or (self.dataloader.get(self_mode) is None):
             self.dataloader[self_mode] = self._dataloader(mode, is_monthly=is_monthly)
 
@@ -880,7 +894,8 @@ class DataScheduler:
                 mode = 'test'
             performer_func = performer.predict_plot_maml
 
-        self.logger.info("[step_epoch_maml][Ep %d][%s]", ep, mode)
+        self.logger.info("[test_plot_maml][Ep %d][%s]", ep, mode)
+        self.logger_train.info("[test_plot_maml][Ep %d][%s]", ep, mode)
         if (ep == 0) or (self.dataloader.get(mode) is None):
             self.dataloader[mode] = self._dataloader_maml(mode)
 

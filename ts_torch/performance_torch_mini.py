@@ -271,7 +271,7 @@ class Performance:
                     model_ew[f_for_y + '_each'][t, :] = np.matmul(label_y, scale_n) / np.sum(scale_n, axis=0)
                     model_mw[f_for_y + '_each'][t, :] = np.matmul(label_y * mc, scale_n) / np.matmul(mc, scale_n)
                     # or np.sum((label_y * mc).reshape([-1, 1]) * scale, axis=0) / np.sum(mc.reshape(-1, 1) * scale, axis=0)
-
+                    # (label_y * mc)[:, np.newaxis] * scale_n # TODO 포트폴리오별 성과 기여 계속
                     # pf 수익률
                     scale = weight_scale(value_[f_], method=ls_method)
                 elif m_args[0] == 'l':
