@@ -31,7 +31,7 @@ class Config:
         self.use_beta = False
         self.univ_type = 'selected'     # all / selected
         self.balancing_method = 'each'  # each / once / nothing
-        self.data_type = 'kr_stock'
+        self.data_type = 'us_stock'
         self.weight_scheme = 'mw'       # mw / ew
         self.size_encoding = False          # decoder input에 size_value add할지 여부
         self.app_rate = 1.     # 적용 비율
@@ -58,6 +58,12 @@ class Config:
 
         self.weighted_model = False     #  torch: use weighted model
         self.set_kdays(self.k_days)
+
+        # US  일단 덮어쓰기
+        if self.data_type == 'us_stock':
+            self.train_batch_size = 512
+            self.eval_batch_size = 512
+
 
         # meta
         self.use_maml = False
@@ -92,7 +98,7 @@ class Config:
             'returns': ['logp_0', 'logy_20', 'std_20', 'stdnew_20', 'pos_20', 'mdd_20', 'fft_100'],
             'values': ['value_0', 'tsnormal_0']}
 
-        self.use_macro = True
+        self.use_macro = False
         if self.use_macro:
 
             # TODO: 실제 사용 데이터 (전체데이터로부터 로드 - 변수명 및 위치 변경)

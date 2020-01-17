@@ -77,7 +77,7 @@ class DataScheduler:
 
     def _make_dir(self, configs):
         # data path for fetching data
-        self.data_path = os.path.join(os.getcwd(), 'data', '{}_{}_{}'.format(configs.univ_type, configs.sampling_days, configs.m_days))
+        self.data_path = os.path.join(os.getcwd(), 'data', '{}_{}_{}_{}'.format(configs.univ_type, configs.sampling_days, configs.m_days, configs.data_type))
         os.makedirs(self.data_path, exist_ok=True)
         # make a directory for outputs
         self.data_out_path = os.path.join(os.getcwd(), configs.data_out_path, self.configs.f_name)
@@ -1057,6 +1057,11 @@ class DataScheduler:
         model.optim_state_dict = checkpoint['model_state_dict']
         model.load_from_optim()
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+        for state in optimizer.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(tu.device)
         model.eval()
 
         self.logger.info("[load] Model Loaded. %s", load_path)
@@ -1110,7 +1115,13 @@ class PrepareDataFromDB:
             self.get_mktcap_daily(country='kr')
             # macro data
             self.get_macro_daily(country='kr')
-
+        elif self.data_type == 'us_stock':
+            # date
+            self.get_datetable()
+            # return data
+            self.get_close_y(90, country='us')
+            # mktcap
+            self.get_mktcap_daily(country='us')
 
     def run_procedure(self):
         # universe
@@ -1284,7 +1295,7 @@ class PrepareDataFromDB:
             order by b.date_"""
         self.sqlm.set_db_name('qdb')
         df = self.sqlm.db_read(sql_)
-        df.to_csv('./data/macro_daily.csv', index=False)
+        df.to_csv('./data/{}_macro_daily.csv'.format(country), index=False)
 
 
 class DataGeneratorDynamic:
@@ -1298,7 +1309,7 @@ class DataGeneratorDynamic:
             # 가격데이터
             return_path = './data/kr_close_y_90.csv'    # [date_ / infocode / y]
             market_path = './data/kr_mktcap_daily.csv'    # [eval_d / infocode / turnover / mktcap / size]
-            macro_path = './data/macro_daily.csv'
+            macro_path = './data/kr_macro_daily.csv'
 
             if univ_type == 'selected':
                 univ_path = './data/kr_factor_wgt.csv'  # [work_m / univ_nm / gicode / infocode / wgt] # monthly
@@ -1335,9 +1346,10 @@ class DataGeneratorDynamic:
         self.df_pivoted_all = data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
         self.df_pivoted_all.columns = self.df_pivoted_all.columns.droplevel(0).to_numpy(dtype=np.int32)
 
-    def set_marketdata(self, size_path):
-        self.size_df = pd.read_csv(size_path)
+    def set_marketdata(self, market_path):
+        self.size_df = pd.read_csv(market_path)
         self.size_df.columns = ['eval_d', 'infocode', 'turnover', 'mktcap', 'size_port']
+        self.size_df = self.size_df.loc[self.size_df.eval_d >= min(self.date_), :]  # TODO: 임시 (date_보다 이른 데이터 제거)
 
     def set_univ(self, univ_path, date_mapping_path, min_size_port=90):
         assert hasattr(self, 'size_df'), '[set_univ] run set_marketdata first.'

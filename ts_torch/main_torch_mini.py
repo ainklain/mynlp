@@ -20,13 +20,15 @@ from ts_torch import torch_util_mini as tu
 configs = Config()
 
 k_days = 20; w_scheme = 'mw'; univ_type='selected'; pred='nmlogy'; balancing_method='nothing'; head=8
+country = 'us';
+configs.data_type = country + '_stock'
 configs.sampling_days = k_days
 configs.set_kdays(k_days)
 configs.pred_feature = pred
 configs.weight_scheme = w_scheme
 configs.balancing_method = balancing_method
 # configs.learning_rate = 1e-4
-configs.f_name = 'kr_{}_{}_{}_{}_h{}_torch_macro_05'.format(k_days, univ_type, balancing_method, pred, head)
+configs.f_name = '{}_{}_{}_{}_{}_h{}_torch_01'.format(country, k_days, univ_type, balancing_method, pred, head)
 configs.train_steps = 100
 configs.eval_steps = 100
 configs.save_steps = 100
@@ -40,8 +42,8 @@ config_str = configs.export()
 
 features_cls = FeatureNew(configs)
 ds = DataScheduler(configs, features_cls)
+ds.set_idx(4000)
 ds.test_end_idx += 500
-ds.set_idx(8000)
 
 os.makedirs(os.path.join(ds.data_out_path), exist_ok=True)
 with open(os.path.join(ds.data_out_path, 'config.txt'), 'w') as f:
