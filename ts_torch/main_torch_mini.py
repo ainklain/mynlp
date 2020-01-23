@@ -18,46 +18,48 @@ from ts_torch import torch_util_mini as tu
 
 
 def run():
-    #
-    run_weekend(1, False,
-                ['logp', 'nmlogy', 'nmstd', 'pos_20'],
-                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},},
-                 'classification': {'logp_base':{'pos': [20]}}})
+    for use_macro in [False, True]:
+        #
+        run_weekend(1, use_macro,
+                    ['logp', 'nmlogy', 'nmstd', 'pos_20'],
+                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},},
+                     'classification': {'logp_base':{'pos': [20]}}})
 
-    #
-    run_weekend(2, False,
-                ['nmlogy', 'nmstd', 'pos_20'],
-                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},},
-                 'classification': {'logp_base':{'pos': [20]}}})
-    #
-    run_weekend(3, False,
-                ['logp', 'nmlogy', 'nmstd', 'pos_20'],
-                {'regression': {'logp_base': {'nmlogy': [20], 'nmstd': [20],},},
-                 'classification': {'logp_base':{'pos': [20]}}})
-    #
-    run_weekend(4, False,
-                ['logp', 'nmlogy', 'nmstd', 'pos_20'],
-                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
-                                'size_base': {'nmsize': [0]},
-                                },
-                 'classification': {'logp_base':{'pos': [20]}}})
-    #
-    run_weekend(5, False,
-                ['logp', 'nmlogy', 'nmstd', 'pos_20'],
-                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
-                                'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
-                                },
-                 'classification': {'logp_base':{'pos': [20]}}})
+        #
+        run_weekend(2, use_macro,
+                    ['nmlogy', 'nmstd', 'pos_20'],
+                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},},
+                     'classification': {'logp_base':{'pos': [20]}}})
+        #
+        run_weekend(3, use_macro,
+                    ['logp', 'nmlogy', 'nmstd', 'pos_20'],
+                    {'regression': {'logp_base': {'nmlogy': [20], 'nmstd': [20],},},
+                     'classification': {'logp_base':{'pos': [20]}}})
+        #
+        run_weekend(4, use_macro,
+                    ['logp', 'nmlogy', 'nmstd', 'pos_20'],
+                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
+                                    'size_base': {'nmsize': [0]},
+                                    },
+                     'classification': {'logp_base':{'pos': [20]}}})
+        #
+        run_weekend(5, use_macro,
+                    ['logp', 'nmlogy', 'nmstd', 'pos_20'],
+                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
+                                    'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                    },
+                     'classification': {'logp_base':{'pos': [20]}}})
 
-    run_weekend(6, False,
-                ['logp', 'nmlogy', 'nmstd', 'pos_20'],
-                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
-                                'size_base': {'nmsize': [0]},
-                                'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
-                                },
-                 'classification': {'logp_base':{'pos': [20]}}})
+        run_weekend(6, use_macro,
+                    ['logp', 'nmlogy', 'nmstd', 'pos_20'],
+                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
+                                    'size_base': {'nmsize': [0]},
+                                    'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                    },
+                     'classification': {'logp_base':{'pos': [20]}}})
 
-use_macro = True
+
+# use_macro = True
 def run_weekend(i, use_macro, model_predictor_list, features_structure):
 
     configs = Config(use_macro=use_macro)
@@ -90,7 +92,6 @@ def run_weekend(i, use_macro, model_predictor_list, features_structure):
     os.makedirs(os.path.join(ds.data_out_path), exist_ok=True)
     with open(os.path.join(ds.data_out_path, 'config.txt'), 'w') as f:
         f.write(config_str)
-
 
     model = TSModel(configs, features_cls, weight_scheme=configs.weight_scheme)
 
