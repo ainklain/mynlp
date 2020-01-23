@@ -47,7 +47,7 @@ def done_decorator_with_logger(f):
 class DataScheduler:
     def __init__(self, configs, features_cls):
         c = configs
-        self.data_generator = DataGeneratorDynamic(features_cls, c.data_type, c.univ_type, c.use_macro)
+        self.data_generator = DataGeneratorDynamic(features_cls, c.data_type, c.univ_type, c.use_macro, c.min_size_port)
         # self.data_market = DataGeneratorMarket(features_cls, c.data_type_mm)
         self.configs = c
         self.features_cls = features_cls
@@ -123,8 +123,13 @@ class DataScheduler:
             decaying_factor = 1.   # 기간별 샘플 중요도
         elif mode == 'test_insample':
             start_idx = self.train_begin_idx + c.m_days
-            # start_idx = self.test_begin_idx
             end_idx = self.test_begin_idx - c.k_days
+            data_params['balance_class'] = False
+            data_params['label_type'] = 'test_label'        # test: 예측하고자 하는 것만 반영 (k_days)
+            decaying_factor = 1.   # 기간별 샘플 중요도
+        elif mode == 'test_insample2':      # train/eval/test 모두 포함
+            start_idx = self.eval_begin_idx - c.retrain_days
+            end_idx = self.test_end_idx
             data_params['balance_class'] = False
             data_params['label_type'] = 'test_label'        # test: 예측하고자 하는 것만 반영 (k_days)
             decaying_factor = 1.   # 기간별 샘플 중요도
@@ -259,7 +264,7 @@ class DataScheduler:
 
     @done_decorator_with_logger
     def _dataset_monthly(self, mode='test'):
-        assert mode in ['test', 'test_insample', 'predict']
+        assert mode in ['test', 'test_insample', 'test_insample2', 'predict']
         c = self.configs
         dg = self.data_generator
         prc_df = dg.df_pivoted_all
@@ -420,7 +425,7 @@ class DataScheduler:
         balancing_list = ['mktcap', 'size_rnk']     # TODO: configs로 옮겨야됨
         # for i, d in enumerate(reversed(range(start_idx + c.k_days, end_idx, c.k_days))):
         # for i, d in enumerate(range(start_idx + c.k_days, end_idx, c.k_days)):
-        if mode in ['test', 'test_insample', 'predict']:
+        if mode in ['test', 'test_insample', 'test_insample2', 'predict']:
             n_loop = np.ceil((end_idx - start_idx - c.k_days) / c.k_days)
             tasks = np.arange(start_idx + c.k_days, end_idx, c.k_days)
         else:
@@ -515,7 +520,7 @@ class DataScheduler:
 
         self.logger.info("[_dataloader] mode: %s / is_monthly: %s", mode, is_monthly)
         if is_monthly:
-            assert mode in ['test', 'test_insample', 'predict']
+            assert mode in ['test', 'test_insample', 'test_insample2', 'predict']
             _dataset = self._dataset_monthly(mode)
         else:
             _dataset = self._dataset(mode)
@@ -543,7 +548,7 @@ class DataScheduler:
             self.logger.info("[_dataloader] mode: %s / batchsize: %s", mode, batch_size)
             return dataloader, features_list
 
-        elif mode in ['test', 'predict', 'test_insample']:
+        elif mode in ['test', 'predict', 'test_insample', 'test_insample2']:
             idx_y = features_list.index(c.label_feature)
             all_assets_list = list()
             features = list()
@@ -593,7 +598,7 @@ class DataScheduler:
                 dataloader = data_loader_maml(spt_list, tgt_list, sampler=sampler)
             all_assets_list = []
 
-        elif mode in ['test', 'predict', 'test_insample']:
+        elif mode in ['test', 'predict', 'test_insample', 'test_insample2']:
             all_assets_list = []
             for spt_, tgt_ in zip(spt_list, tgt_list):
                 # spt_, tgt_ = spt_list[0], tgt_list[0]
@@ -633,7 +638,7 @@ class DataScheduler:
                 self.logger_train.info("[train] [Ep %d] Early Stopped", ep)
                 model.load_from_optim()
                 self.test_plot(performer, model, ep + 100, is_monthly=False)
-                self.test_plot(performer, model, ep + 100, is_monthly=True)
+                self.test_plot(performer, model, ep + 100, is_monthly=True, is_insample=True)
 
                 break
 
@@ -851,7 +856,7 @@ class DataScheduler:
         model.eval()
 
         if is_insample:
-            mode = 'test_insample'
+            mode = 'test_insample2'
         else:
             mode = 'test'
         self_mode = 'single_' + mode
@@ -889,7 +894,7 @@ class DataScheduler:
             raise NotImplementedError
         else:
             if is_insample:
-                mode = 'test_insample'
+                mode = 'test_insample2'
             else:
                 mode = 'test'
             performer_func = performer.predict_plot_maml
@@ -1113,6 +1118,7 @@ class PrepareDataFromDB:
             self.get_factorwgt_and_univ('CAP_300_100')  # 'CAP_100_150'
             # mktcap
             self.get_mktcap_daily(country='kr')
+            self.get_ivol()
             # macro data
             self.get_macro_daily(country='kr')
         elif self.data_type == 'us_stock':
@@ -1215,10 +1221,30 @@ class PrepareDataFromDB:
                     from qdb..T_CALENDAR_EVAL_D
                     where is_y_end = 'y'
             ) Y
-            on datediff(month, eval_y, eval_m) <= 12 and eval_m > eval_y"""
+            on datediff(month, eval_y, eval_m) <= 12 and eval_m > eval_y
+            order by eval_m"""
         self.sqlm.set_db_name('qdb')
         df = self.sqlm.db_read(sql_)
         df.to_csv('./data/date.csv', index=False)
+
+    @done_decorator
+    def get_ivol(self):
+        sql_ = """
+        select cast(a.base_d as date) as eval_d, u.infocode, a.ivol
+            from (
+                SELECT infocode, case when len(dslocalcode) = 7 then 'A' else 'A0' end + substring(dslocalcode,2, 6)  as gicode
+                    FROM qinv..EquityUniverse 
+                    where region = 'KR'
+            ) u
+            JOIN (
+                select * 
+                    from WMS..IVOLData 
+            ) A
+            on u.gicode = a.gicode
+            order by eval_d, infocode"""
+        self.sqlm.set_db_name('qdb')
+        df = self.sqlm.db_read(sql_)
+        df.to_csv('./data/kr_ivol.csv', index=False)
 
     @done_decorator
     def get_mktcap_daily(self, country='kr'):
@@ -1263,7 +1289,8 @@ class PrepareDataFromDB:
                     where n.infocode = u.infocode
                     and EventDate <= d.eval_d
                     order by EventDate desc
-            ) N
+            ) N            
+            order by eval_d, infocode
         """.format(country)
         self.sqlm.set_db_name('qinv')
         df = self.sqlm.db_read(sql_)
@@ -1299,10 +1326,11 @@ class PrepareDataFromDB:
 
 
 class DataGeneratorDynamic:
-    def __init__(self, features_cls, data_type='kr_stock', univ_type='selected', use_macro=False):
+    def __init__(self, features_cls, data_type='kr_stock', univ_type='selected', use_macro=False, min_size_port=90):
         self.features_cls = features_cls
         self.use_macro = use_macro
-
+        self.mkt_features = ['mktcap', 'turnover']  # sample_data에서 계산할때 사용
+        add_path = dict()
         univ_path = None
         date_mapping_path = './data/date.csv'           # [eval_m / work_m / eval_y / work_y]
         if data_type == 'kr_stock':
@@ -1310,6 +1338,10 @@ class DataGeneratorDynamic:
             return_path = './data/kr_close_y_90.csv'    # [date_ / infocode / y]
             market_path = './data/kr_mktcap_daily.csv'    # [eval_d / infocode / turnover / mktcap / size]
             macro_path = './data/kr_macro_daily.csv'
+            ivol_path = './data/kr_ivol.csv'
+
+            # if os.path.exists(ivol_path):
+            #     add_path['ivol'] = ivol_path
 
             if univ_type == 'selected':
                 univ_path = './data/kr_factor_wgt.csv'  # [work_m / univ_nm / gicode / infocode / wgt] # monthly
@@ -1321,9 +1353,9 @@ class DataGeneratorDynamic:
 
         self.set_return_and_date(return_path)
 
-        self.set_marketdata(market_path)
+        self.set_marketdata(market_path, **add_path)
 
-        self.set_univ(univ_path, date_mapping_path)
+        self.set_univ(univ_path, date_mapping_path, min_size_port)
 
         if use_macro:
             self.set_macrodata(macro_path)
@@ -1346,10 +1378,23 @@ class DataGeneratorDynamic:
         self.df_pivoted_all = data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
         self.df_pivoted_all.columns = self.df_pivoted_all.columns.droplevel(0).to_numpy(dtype=np.int32)
 
-    def set_marketdata(self, market_path):
+    def set_marketdata(self, market_path, **add_path):
         self.size_df = pd.read_csv(market_path)
         self.size_df.columns = ['eval_d', 'infocode', 'turnover', 'mktcap', 'size_port']
+
+        add_data = self._additional_data(**add_path)
+        for key in add_path.keys():
+            self.mkt_features.append(key)
+            self.size_df = pd.merge(self.size_df, add_data[key], on=['eval_d', 'infocode'])
+
         self.size_df = self.size_df.loc[self.size_df.eval_d >= min(self.date_), :]  # TODO: 임시 (date_보다 이른 데이터 제거)
+
+    def _additional_data(self, **add_path):
+        add_data = dict()
+        for key in add_path.keys():
+            add_data[key] = pd.read_csv(add_path[key])
+
+        return add_data
 
     def set_univ(self, univ_path, date_mapping_path, min_size_port=90):
         assert hasattr(self, 'size_df'), '[set_univ] run set_marketdata first.'
@@ -1460,37 +1505,35 @@ class DataGeneratorDynamic:
 
         logp_arr = df_logp.reindex(columns=univ_list).to_numpy(dtype=np.float32)
 
-        # size
-        select_where_sz = ((self.size_df.eval_d >= start_d) & (self.size_df.eval_d <= end_d))
-        df_sz = self.size_df.loc[select_where_sz, ['eval_d', 'infocode', 'mktcap']].pivot(index='eval_d', columns='infocode')
-        df_sz.columns = df_sz.columns.droplevel(0)
-        if len(df_logp) != len(df_sz):
-            df_sz = pd.merge(df_logp.reindex(columns=[]), df_sz, how='left', left_index=True, right_index=True)
+        mkt_arr_dict = dict()
+        select_where_mkt = ((self.size_df.eval_d >= start_d) & (self.size_df.eval_d <= end_d))
+        for mkt_f in self.mkt_features:
+            df_mkt = self.size_df.loc[select_where_mkt, ['eval_d', 'infocode', mkt_f]].pivot(index='eval_d', columns='infocode')
+            df_mkt.columns = df_mkt.columns.droplevel(0)
+            if len(df_logp) != len(df_mkt):
+                df_mkt = pd.merge(df_logp.reindex(columns=[]), df_mkt, how='left', left_index=True, right_index=True)
 
-        df_sz = df_sz.fillna(-1.)
-        df_sz = cleansing_missing_value(df_sz, n_allow_missing_value=20, to_log=False, reset_first_value=False)
-        sz_arr = df_sz.reindex(columns=univ_list).to_numpy(dtype=np.float32)
-        assert logp_arr.shape == sz_arr.shape
+            df_mkt = df_mkt.fillna(-1.)
+            df_mkt = cleansing_missing_value(df_mkt, n_allow_missing_value=20, to_log=False, reset_first_value=False)
+            mkt_arr = df_mkt.reindex(columns=univ_list).to_numpy(dtype=np.float32)
+            assert logp_arr.shape == mkt_arr.shape
+            mkt_arr_dict[mkt_f] = mkt_arr
 
-        # turnover
-        df_turnover = self.size_df.loc[select_where_sz, ['eval_d', 'infocode', 'turnover']].pivot(index='eval_d', columns='infocode')
-        df_turnover.columns = df_turnover.columns.droplevel(0)
-        if len(df_logp) != len(df_turnover):
-            df_turnover = pd.merge(df_logp.reindex(columns=[]), df_turnover, how='left', left_index=True, right_index=True)
-
-        df_turnover = df_turnover.fillna(-1.)
-        df_turnover = cleansing_missing_value(df_turnover, n_allow_missing_value=20, to_log=False, reset_first_value=False)
-        turnover_arr = df_turnover.reindex(columns=univ_list).to_numpy(dtype=np.float32)
-        assert logp_arr.shape == turnover_arr.shape
 
         # calculate features
         features_dict, labels_dict = features_cls.calc_features(logp_arr, debug=debug)
-        f_size, l_size = features_cls.calc_features(sz_arr, debug=debug, calc_list=['nmsize_0'])
-        f_turnover, l_turnover = features_cls.calc_features(turnover_arr, debug=debug, calc_list=['nmturnover_0', 'tsturnover_0'])
-        features_dict.update(f_size)
-        features_dict.update(f_turnover)
-        labels_dict.update(l_size)
-        labels_dict.update(l_turnover)
+
+        for key in mkt_arr_dict:
+            if key == 'mktcap':
+                calc_list = ['nmsize_0']
+            elif key == 'turnover':
+                calc_list = ['nmturnover_0', 'tsturnover_0']
+            elif key == 'ivol':
+                calc_list = ['nmivol_0']
+
+            f_, l_ = features_cls.calc_features(mkt_arr_dict[key], debug=debug, calc_list=calc_list)
+            features_dict.update(f_)
+            labels_dict.update(l_)
 
         spot_dict = dict()
         spot_dict['base_d'] = base_d
@@ -1677,212 +1720,3 @@ def to_device(device, list_to_device):
             raise NotImplementedError
 
 
-
-
-class DataSamplerMarket:
-    def __init__(self, configs, features_cls):
-        self.configs = configs
-        self.data_type = 'kr_market'
-        self.data_generator_mm = DataGeneratorMarket(features_cls, data_type='kr_market')
-
-        self._initialize(configs)
-
-    def _initialize(self, configs):
-        self.base_idx = 1250
-        self.train_begin_idx = 250
-        self.eval_begin_idx = 250 + int(1000 * configs.trainset_rate)
-        self.test_begin_idx = self.base_idx - configs.m_days
-        self.test_end_idx = self.base_idx + configs.retrain_days
-
-        self._make_path(configs)
-
-    def _make_path(self, configs):
-        # make a directory for outputs
-        self.data_out_path = os.path.join(os.getcwd(), configs.data_out_path)
-        os.makedirs(self.data_out_path, exist_ok=True)
-
-    def get_data_params(self, mode='train'):
-        c = self.configs
-        data_params = dict()
-
-        if mode == 'train':
-            start_idx = self.train_begin_idx + c.m_days
-            end_idx = self.eval_begin_idx - c.k_days
-            data_params['balance_class'] = True
-            data_params['label_type'] = 'trainable_label'   # trainable: calc_length 반영
-            decaying_factor = 0.99   # 기간별 샘플 중요도
-        elif mode == 'eval':
-            start_idx = self.eval_begin_idx + c.m_days
-            end_idx = self.test_begin_idx - c.k_days
-            data_params['balance_class'] = True
-            data_params['label_type'] = 'trainable_label'   # trainable: calc_length 반영
-            decaying_factor = 1.   # 기간별 샘플 중요도
-        elif mode == 'test':
-            start_idx = self.test_begin_idx + c.m_days
-            # start_idx = self.test_begin_idx
-            end_idx = self.test_end_idx
-            data_params['balance_class'] = False
-            data_params['label_type'] = 'test_label'        # test: 예측하고자 하는 것만 반영 (k_days)
-            decaying_factor = 1.   # 기간별 샘플 중요도
-        elif mode == 'test_insample':
-            start_idx = self.train_begin_idx + c.m_days
-            # start_idx = self.test_begin_idx
-            end_idx = self.test_begin_idx - c.k_days
-            data_params['balance_class'] = False
-            data_params['label_type'] = 'test_label'        # test: 예측하고자 하는 것만 반영 (k_days)
-            decaying_factor = 1.   # 기간별 샘플 중요도
-        elif mode == 'predict':
-            start_idx = self.test_begin_idx + c.m_days
-            # start_idx = self.test_begin_idx
-            end_idx = self.test_end_idx
-            data_params['balance_class'] = False
-            data_params['label_type'] = None            # label 없이 과거데이터만으로 스코어 산출
-            decaying_factor = 1.   # 기간별 샘플 중요도
-        else:
-            raise NotImplementedError
-
-        print("start idx:{} ({}) / end idx: {} ({})".format(start_idx, self.date_[start_idx], end_idx, self.date_[end_idx]))
-
-        return start_idx, end_idx, data_params, decaying_factor
-
-    def _fetch_data(self, base_d):
-        # q, a가 주식과는 transpose관계. 여기- [T, ts, features] // 주식- [assets, T, features]
-        c = self.configs
-        dgmm = self.data_generator_mm
-        key_list = c.key_list
-
-        date_i = self.date_.index(base_d)
-
-        result = dgmm.sample_data(base_d)
-        if result is False:
-            return None
-
-        features_dict, labels_dict = result
-
-        n_features = len(key_list)
-        M = c.m_days // c.sampling_days + 1
-        ts_list = list(dgmm.data_df.columns)
-        question = np.stack([features_dict[key] for key in key_list], axis=-1).astype(np.float32)
-        assert question.shape == (M, len(ts_list), n_features)
-
-        answer = np.zeros([1, len(ts_list), n_features], dtype=np.float32)
-
-        answer[0, :, :] = question[-1, :, :]
-        if labels_dict[c.label_feature] is not None:
-            label_ = labels_dict[c.label_feature][ts_list.index('kospi')]
-        else:
-            label_ = 0
-
-        return question[:], answer[:], label_
-
-    def _dataset(self, mode='train'):
-        c = self.configs
-
-        input_enc, output_dec, target_dec, additional_info = [], [], [], []
-        start_idx, end_idx, data_params, decaying_factor = self.get_data_params(mode)
-        features_list = c.key_list
-
-        idx_balance = c.key_list.index(c.balancing_key)
-
-        n_loop = np.ceil((end_idx - start_idx) / c.sampling_days)
-        for i, d in enumerate(range(start_idx, end_idx, c.sampling_days)):
-            base_d = self.date_[d]
-            fetch_data = self._fetch_data(base_d)
-            if fetch_data is None:
-                continue
-
-            tmp_ie, tmp_od, tmp_td = fetch_data
-            addi_info = decaying_factor ** (n_loop - i - 1)
-
-            if data_params['balance_class'] is True and c.balancing_method == 'each':
-                idx_bal = self.balanced_index(tmp_td[:, 0, idx_balance])
-                tmp_ie, tmp_od, tmp_td = tmp_ie[idx_bal], tmp_od[idx_bal], tmp_td[idx_bal]
-
-            input_enc.append(tmp_ie)
-            output_dec.append(tmp_od)
-            target_dec.append(tmp_td)
-            additional_info.append(addi_info)
-
-        if len(input_enc) == 0:
-            return False
-
-        if mode in ['train', 'eval']:
-            additional_infos = dict()
-            input_enc = np.concatenate(input_enc, axis=0)
-            output_dec = np.concatenate(output_dec, axis=0)
-            target_dec = np.concatenate(target_dec, axis=0)
-
-            importance_wgt = np.concatenate([additional_info['importance_wgt'] for additional_info in additional_infos_list], axis=0)
-
-            if data_params['balance_class'] is True and c.balancing_method == 'once':
-                idx_bal = self.balanced_index(target_dec[:, 0, idx_balance])
-                input_enc, output_dec, target_dec = input_enc[idx_bal], output_dec[idx_bal], target_dec[idx_bal]
-                additional_infos['importance_wgt'] = importance_wgt[idx_bal]
-            else:
-                additional_infos['importance_wgt'] = importance_wgt[:]
-        else:
-            additional_infos = additional_infos_list
-
-        start_date = self.date_[start_idx]
-        end_date = self.date_[end_idx]
-
-        return input_enc, output_dec, target_dec, features_list, additional_infos, start_date, end_date
-
-    def get_date(self):
-        return self.date_[self.base_d]
-
-    @property
-    def date_(self):
-        return self.data_generator_mm.date_
-
-
-class DataGeneratorMarket:
-    def __init__(self, features_cls, data_type='kr_market'):
-        self.features_cls = features_cls
-        if data_type == 'kr_market':
-            data_path = './data/data_for_metarl.csv'
-            data_df_temp = pd.read_csv(data_path).set_index('eval_d')
-
-            self.date_ = list(data_df_temp.index)
-            features_mm = ['mkt_rf', 'smb', 'hml', 'rmw', 'wml', 'call_rate', 'kospi', 'usdkrw']
-            self.data_df = pd.DataFrame(data_df_temp.loc[:, features_mm], dtype=np.float32)
-
-    def sample_data(self, base_d, debug=True):
-        # get attributes to local variables
-        date_ = self.date_
-        data_df = self.data_df
-        features_cls = self.features_cls
-
-        date_i = date_.index(base_d)
-
-        # set local parameters
-        m_days = features_cls.m_days
-        k_days = features_cls.k_days
-        calc_length = features_cls.calc_length
-        calc_length_label = features_cls.calc_length_label
-        delay_days = features_cls.delay_days
-
-        len_data = calc_length + m_days
-        len_label = calc_length_label + delay_days
-        # k_days_adj = k_days + delay_days
-        # len_label = k_days_adj
-
-        start_d = date_[max(0, date_i - len_data)]
-        end_d = date_[min(date_i + len_label, len(date_) - 1)]
-
-        # data cleansing
-        select_where = ((data_df.index >= start_d) & (data_df.index <= end_d))
-        selected_df = (1 + data_df.ix[select_where, :]).cumprod()
-        df_logp = np.log(selected_df / selected_df.iloc[0])
-
-        if df_logp.empty or len(df_logp) <= calc_length + m_days:
-            return False
-
-        # calculate features
-        features_dict, labels_dict = features_cls.calc_features(df_logp.to_numpy(dtype=np.float32), transpose=False, debug=debug)
-
-        return features_dict, labels_dict
-
-    @property
-    def max_length(self):
-        return len(self.date_)

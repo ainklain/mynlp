@@ -1004,6 +1004,7 @@ class Performance:
 
             # ############ For Model ############
             # prediction
+            features['output'] = features['output'].float() # TODO: 임시!! 매크로
             predictions = model.predict_mtl(features)
             for key in predictions.keys():
                 predictions[key] = tu.np_ify(predictions[key])

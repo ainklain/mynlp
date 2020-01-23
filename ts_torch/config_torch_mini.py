@@ -3,7 +3,7 @@ from collections import OrderedDict
 import os
 
 class Config:
-    def __init__(self):
+    def __init__(self, use_maml=False, use_macro=False):
         # time series parameter
         self.train_set_length = 2500    # previous 10 years data
         self.retrain_days = 250         # re-train every year
@@ -14,24 +14,25 @@ class Config:
         self.delay_days = 1
 
         self.sampling_days = 20          # get data every 'sampling_days' days
-        self.trainset_rate = 0.6
+        self.trainset_rate = 0.8
         self.cost_rate = 0.003
 
         self.train_batch_size = 256
         self.eval_batch_size = 256
-        self.train_steps = 200000
-        self.eval_steps = 50
-        self.save_steps = 50
+        self.train_steps = 100
+        self.eval_steps = 100
+        self.save_steps = 100
         self.early_stopping_count = 5
         self.dropout = 0.5
         self.learning_rate = 1e-4
 
         self.train_decaying_factor = 0.99
 
+        self.set_datatype('us_stock')
+
         self.use_beta = False
         self.univ_type = 'selected'     # all / selected
-        self.balancing_method = 'each'  # each / once / nothing
-        self.data_type = 'us_stock'
+        self.balancing_method = 'nothing'  # each / once / nothing
         self.weight_scheme = 'mw'       # mw / ew
         self.size_encoding = False          # decoder input에 size_value add할지 여부
         self.app_rate = 1.     # 적용 비율
@@ -40,7 +41,7 @@ class Config:
 
         self.shuffle_seek = 1000
         self.d_model = 128
-        self.n_heads = 4
+        self.n_heads = 8
         self.n_layers = 2
         # self.model_hidden_size = 128
         # self.model_hidden_size = self.embedding_size    # self.set_features_info 에서 재설정
@@ -59,14 +60,8 @@ class Config:
         self.weighted_model = False     #  torch: use weighted model
         self.set_kdays(self.k_days)
 
-        # US  일단 덮어쓰기
-        if self.data_type == 'us_stock':
-            self.train_batch_size = 512
-            self.eval_batch_size = 512
-
-
         # meta
-        self.use_maml = False
+        self.use_maml = use_maml
         if self.use_maml is True:
             self.n_tasks = 5
             self.inner_lr = 1e-2  # 5e-3
@@ -85,7 +80,8 @@ class Config:
 
         self.possible_func = {'logp_base': ['logp', 'logy', 'std', 'stdnew', 'pos', 'mdd', 'fft', 'cslogy', 'csstd', 'nmlogy', 'nmstd', 'tsnormal', 'csnormal', 'value'],
                               'size_base': ['nmsize'],
-                              'turnover_base': ['nmturnover', 'tsturnover']}
+                              'turnover_base': ['nmturnover', 'tsturnover'],
+                              'ivol_base': ['nmivol']}
         # macro
         # TODO: 전체 데이터 (파일 저장용 - 변수명 및 위치 변경)
         self.macro_dict = {
@@ -98,7 +94,7 @@ class Config:
             'returns': ['logp_0', 'logy_20', 'std_20', 'stdnew_20', 'pos_20', 'mdd_20', 'fft_100'],
             'values': ['value_0', 'tsnormal_0']}
 
-        self.use_macro = False
+        self.use_macro = use_macro
         if self.use_macro:
 
             # TODO: 실제 사용 데이터 (전체데이터로부터 로드 - 변수명 및 위치 변경)
@@ -118,6 +114,19 @@ class Config:
         self.log_maxbytes = 10 * 1024 * 1024
         self.log_backupcount = 10
         self.log_format = "%(asctime)s[%(levelname)s|%(name)s,%(lineno)s] %(message)s"
+
+    def set_datatype(self, data_type):
+        self.data_type = data_type
+        # US  일단 덮어쓰기
+        if self.data_type == 'us_stock':
+            self.train_batch_size = 512
+            self.eval_batch_size = 512
+            self.min_size_port = 30
+        elif self.data_type == 'kr_stock':
+            self.train_batch_size = 256
+            self.eval_batch_size = 256
+            self.min_size_port = 100
+
 
     def log_filename(self, name_='log'):
         return os.path.join(os.getcwd(), self.data_out_path, self.f_name, f'{name_}.log')
@@ -180,6 +189,7 @@ class Config:
                       'size_base': {'nmsize': [0]},
                       'turnover_base': {'nmturnover': [0],
                                         'tsturnover': [0]},
+                      'ivol_base': {'nmivol': [0]},
                       },
                  'classification':
                      {'logp_base':
@@ -212,42 +222,46 @@ class Config:
 
             # self.model_predictor_list = ['std']
             self.model_predictor_list = ['logp', 'nmlogy', 'nmstd', 'pos_20']
+            # self.model_predictor_list = ['nmlogy', 'nmstd', 'pos_20']
             # self.model_predictor_list = ['nmlogy']
-
-            # self.features_structure = \
-            #     {'regression':
-            #          {'logy': [20],
-            #           'std': [20],
-            #           'stdnew': [20],
-            #           'mdd': [20],
-            #           'fft': [100],
-            #           'nmlogy': [20],
-            #           'nmstd': [20],
-            #           },
-            #      'classification':
-            #          {'pos': [20]}}
 
             self.features_structure = \
                 {'regression':
                      {'logp_base':
                          {'logp': [0],
-                          'logy': [20, 60, 120, 250],
-                          'std': [20, 60, 120],
-                          'stdnew': [20, 60],
-                          'mdd': [20, 60, 120],
-                          'fft': [100, 3],
-                          'nmlogy': [20, 60],
-                          'nmstd': [20, 60],
+                          'logy': [20],
+                          'nmlogy': [20],
+                          'nmstd': [20],
                           },
-                      'size_base': {'nmsize': [0]},
-                      'turnover_base': {'nmturnover': [0],
-                                        'tsturnover': [0]},
                       },
                  'classification':
                      {'logp_base':
-                          {'pos': [20, 60, 120, 250]}
+                        {'pos': [20]}
                       }
                  }
+
+            # self.features_structure = \
+            #     {'regression':
+            #          {'logp_base':
+            #              {'logp': [0],
+            #               'logy': [20, 60, 120, 250],
+            #               'std': [20, 60, 120],
+            #               'stdnew': [20, 60],
+            #               'mdd': [20, 60, 120],
+            #               'fft': [100, 3],
+            #               'nmlogy': [20, 60],
+            #               'nmstd': [20, 60],
+            #               },
+            #           'size_base': {'nmsize': [0]},
+            #           'turnover_base': {'nmturnover': [0],
+            #                             'tsturnover': [0]},
+            #           # 'ivol_base': {'nmivol': [0]},
+            #           },
+            #      'classification':
+            #          {'logp_base':
+            #               {'pos': [20, 60, 120, 250]}
+            #           }
+            #      }
 
 
     def set_kdays(self, k_days, pred='pos'):

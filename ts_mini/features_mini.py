@@ -58,7 +58,7 @@ def arr_to_cs(arr):
 
 def arr_to_normal(arr):
     # cross sectional normalize
-    return_value = (arr - np.nanmean(arr, axis=1, keepdims=True)) / np.nanstd(arr, axis=1, ddof=1, keepdims=True)
+    return_value = (arr - np.nanmean(arr, axis=1, keepdims=True)) / (np.nanstd(arr, axis=1, ddof=1, keepdims=True) + 1e-6)
     return return_value
 
 
@@ -67,7 +67,7 @@ def arr_to_normal_ts(arr, m_days, calc_length):
     arr_insample = arr[:(calc_length + m_days + 1)]
 
     # time series normalize
-    return_value = (arr - np.nanmean(arr_insample, axis=0, keepdims=True)) / np.nanstd(arr_insample, axis=0, ddof=1, keepdims=True)
+    return_value = (arr - np.nanmean(arr_insample, axis=0, keepdims=True)) / (np.nanstd(arr_insample, axis=0, ddof=1, keepdims=True) + 1e-6)
     return return_value
 
 
@@ -192,7 +192,7 @@ class FeatureNew:
                 result_debug = arr_to_normal(std_nd_new(arr_debug, n)[calc_length:])
 
         # arr : size_arr   TODO: arr Type ISSUE
-        elif func_nm in ['nmsize', 'nmturnover', 'csnormal']:
+        elif func_nm in ['nmsize', 'nmturnover', 'nmivol', 'csnormal']:
             result = arr_to_normal(arr[calc_length:])
             result[np.isnan(result)] = 0  # TODO: 임시로 nan값 0처리
             if debug:

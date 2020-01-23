@@ -17,70 +17,112 @@ from ts_torch.performance_torch_mini import Performance
 from ts_torch import torch_util_mini as tu
 
 
-configs = Config()
+def run():
+    #
+    run_weekend(1, False,
+                ['logp', 'nmlogy', 'nmstd', 'pos_20'],
+                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},},
+                 'classification': {'logp_base':{'pos': [20]}}})
 
-k_days = 20; w_scheme = 'mw'; univ_type='selected'; pred='nmlogy'; balancing_method='nothing'; head=8
-country = 'us';
-configs.data_type = country + '_stock'
-configs.sampling_days = k_days
-configs.set_kdays(k_days)
-configs.pred_feature = pred
-configs.weight_scheme = w_scheme
-configs.balancing_method = balancing_method
-# configs.learning_rate = 1e-4
-configs.f_name = '{}_{}_{}_{}_{}_h{}_torch_01'.format(country, k_days, univ_type, balancing_method, pred, head)
-configs.train_steps = 100
-configs.eval_steps = 100
-configs.save_steps = 100
-configs.size_encoding = True
-configs.attention_head_size = head
-configs.early_stopping_count = 5
-configs.learning_rate = 5e-4
-configs.update_comment = 'single pred per task'
-config_str = configs.export()
+    #
+    run_weekend(2, False,
+                ['nmlogy', 'nmstd', 'pos_20'],
+                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},},
+                 'classification': {'logp_base':{'pos': [20]}}})
+    #
+    run_weekend(3, False,
+                ['logp', 'nmlogy', 'nmstd', 'pos_20'],
+                {'regression': {'logp_base': {'nmlogy': [20], 'nmstd': [20],},},
+                 'classification': {'logp_base':{'pos': [20]}}})
+    #
+    run_weekend(4, False,
+                ['logp', 'nmlogy', 'nmstd', 'pos_20'],
+                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
+                                'size_base': {'nmsize': [0]},
+                                },
+                 'classification': {'logp_base':{'pos': [20]}}})
+    #
+    run_weekend(5, False,
+                ['logp', 'nmlogy', 'nmstd', 'pos_20'],
+                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
+                                'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                },
+                 'classification': {'logp_base':{'pos': [20]}}})
 
+    run_weekend(6, False,
+                ['logp', 'nmlogy', 'nmstd', 'pos_20'],
+                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
+                                'size_base': {'nmsize': [0]},
+                                'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                },
+                 'classification': {'logp_base':{'pos': [20]}}})
 
-features_cls = FeatureNew(configs)
-ds = DataScheduler(configs, features_cls)
-ds.set_idx(4000)
-ds.test_end_idx += 500
+use_macro = True
+def run_weekend(i, use_macro, model_predictor_list, features_structure):
 
-os.makedirs(os.path.join(ds.data_out_path), exist_ok=True)
-with open(os.path.join(ds.data_out_path, 'config.txt'), 'w') as f:
-    f.write(config_str)
+    configs = Config(use_macro=use_macro)
+    configs.model_predictor_list = model_predictor_list
+    configs.features_structure = features_structure
 
-
-model = TSModel(configs, features_cls, weight_scheme=configs.weight_scheme)
-
-performer = Performance(configs)
-if configs.use_maml:
-    optimizer = optim.Adam(model.parameters(), lr=configs.meta_lr)
-else:
-    optimizer = optim.Adam(model.parameters(), lr=configs.learning_rate)
-
-ds.load(model, optimizer)
-
-# ds.train_maml(model, optimizer, performer, num_epochs=50, early_stopping_count=configs.early_stopping_count)
-
-while True:
-    ds.save(0, model, optimizer)
-    if configs.use_maml:
-        ds.train_maml(model, optimizer, performer, num_epochs=100, early_stopping_count=configs.early_stopping_count)
+    k_days = 20; pred='nmlogy';
+    country = 'kr';
+    configs.set_datatype(country + '_stock')
+    configs.sampling_days = k_days
+    configs.set_kdays(k_days)
+    configs.pred_feature = pred
+    # configs.learning_rate = 1e-4
+    configs.n_heads = 8
+    if use_macro:
+        configs.f_name = '{}_{}_{}_macro_0{}'.format(country, k_days, pred, i)
     else:
-        ds.train(model, optimizer, performer, num_epochs=100, early_stopping_count=configs.early_stopping_count)
+        configs.f_name = '{}_{}_{}_nmacro_0{}'.format(country, k_days, pred, i)
+    configs.early_stopping_count = 5
+    configs.learning_rate = 5e-4
+    configs.update_comment = 'single pred per task'
+    config_str = configs.export()
 
-    # recent_month_end = '2019-12-31'
-    # dataloader_t = ds.dataloader_t(recent_month_end, force_calc=True)
-    # x = performer.extract_portfolio(model, dataloader_t, rate_=configs.app_rate)
-    # x.to_csv('./out/{}/result_{}.csv'.format(configs.f_name, ds.base_idx))
 
-    ds.next()
-    if ds.done:
-        break
+    features_cls = FeatureNew(configs)
+    ds = DataScheduler(configs, features_cls)
+    ds.set_idx(6500)
+    ds.test_end_idx += 500
 
-    if ds.base_idx >= 10000:
-        print('something wrong')
-        break
+    os.makedirs(os.path.join(ds.data_out_path), exist_ok=True)
+    with open(os.path.join(ds.data_out_path, 'config.txt'), 'w') as f:
+        f.write(config_str)
+
+
+    model = TSModel(configs, features_cls, weight_scheme=configs.weight_scheme)
+
+    performer = Performance(configs)
+    if configs.use_maml:
+        optimizer = optim.Adam(model.parameters(), lr=configs.meta_lr)
+    else:
+        optimizer = optim.Adam(model.parameters(), lr=configs.learning_rate)
+
+    ds.load(model, optimizer)
+
+    # ds.train_maml(model, optimizer, performer, num_epochs=50, early_stopping_count=configs.early_stopping_count)
+
+    while True:
+        ds.save(0, model, optimizer)
+        if configs.use_maml:
+            ds.train_maml(model, optimizer, performer, num_epochs=100, early_stopping_count=configs.early_stopping_count)
+        else:
+            ds.train(model, optimizer, performer, num_epochs=100, early_stopping_count=configs.early_stopping_count)
+
+        # recent_month_end = '2019-12-31'
+        # dataloader_t = ds.dataloader_t(recent_month_end, force_calc=True)
+        # x = performer.extract_portfolio(model, dataloader_t, rate_=configs.app_rate)
+        # x.to_csv('./out/{}/result_{}.csv'.format(configs.f_name, ds.base_idx))
+
+        ds.next()
+        if ds.done:
+            break
+
+        if ds.base_idx >= 10000:
+            print('something wrong')
+            break
 
 
 # recent value extraction
