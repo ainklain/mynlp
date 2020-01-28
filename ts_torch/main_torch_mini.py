@@ -100,7 +100,7 @@ def run():
                                     },
                      'classification': {'logp_base':{'pos': [20]}}})
 
-# use_macro = True
+# use_macro = False
 def run_weekend(i, use_macro, model_predictor_list, features_structure):
 
     configs = Config(use_macro=use_macro)

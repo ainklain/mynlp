@@ -15,6 +15,7 @@ from torch.autograd import Variable
 # from tensorflow.keras import Model
 # from tensorflow.keras.layers import Dense, Dropout, Embedding
 
+
 # ####################### Module ##########################
 class Constant:
     def __init__(self):

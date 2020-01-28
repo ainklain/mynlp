@@ -204,7 +204,7 @@ class Performance:
                          , ls_method='ls_5_20'
                          , plot_all_features=True):
         # self=ds; ep=0; is_monthly = False; is_insample=False;  dataloader_set=self._dataloader('test', is_monthly=False);test_out_path = os.path.join(self.data_out_path, '{}/{}'.format(self.base_idx, 'single_test'))
-        # self = performer;save_dir = test_out_path; file_nm = 'test_{}.png'.format(0); ylog = False; ls_method = 'ls_5_20'; plot_all_features = True
+        # self = performer;save_dir = test_out_path; file_nm = 'test_{}.png'.format(0); ylog = False; ls_method = 'ls-mc_5_20'; plot_all_features = True
 
         c = self.configs
 
@@ -252,6 +252,7 @@ class Performance:
 
             mc = np.array(add_info['mktcap'], dtype=np.float32).squeeze()
             label_y = np.array(add_info['next_y'])
+            label_main = np.array(add_info['next_label'])
 
             assets = np.array(add_info['asset_list'], dtype=np.float32)
 
@@ -290,7 +291,9 @@ class Performance:
                     model_ew[f_for_y + '_each'][t, :] = np.matmul(label_y, scale_n) / np.sum(scale_n, axis=0)
                     model_mw[f_for_y + '_each'][t, :] = np.matmul(label_y * mc, scale_n) / np.matmul(mc, scale_n)
                     # or np.sum((label_y * mc).reshape([-1, 1]) * scale, axis=0) / np.sum(mc.reshape(-1, 1) * scale, axis=0)
-                    # (label_y * mc)[:, np.newaxis] * scale_n # TODO 포트폴리오별 성과 기여 계속
+                    # 제일 성과 안좋은애가 0 np.argsort((label_y * mc)[:, np.newaxis] * scale_n, axis=0) # TODO 포트폴리오별 성과 기여 계속
+                    # 제일 성과 좋은애가 0 ((np.argsort(-(label_y * mc)[:, np.newaxis] * scale_n, axis=0) < 5) * assets[:, np.newaxis])[:, 0] # TODO 포트폴리오별 성과 기여 계속
+                    # value_['main'][:, np.newaxis] * scale_n; label_main # TODO 포트폴리오별 성과 기여 계속
                     # pf 수익률
                     scale = weight_scale(value_[f_], method=ls_method, mc=mc)
                 elif m_args[0] == 'l':
@@ -298,6 +301,14 @@ class Performance:
                     scale = scale1 * weight_scale(value_[self.adj_feature], method=ls_method, mc=mc)
                 elif m_args[0] == 'limit-LS':
                     pass
+                heatmap_test = False
+                if heatmap_test is True:
+                    import seaborn as sns
+                    fig = plt.figure()
+                    ax1 = fig.add_subplot(121)
+                    ax2 = fig.add_subplot(122)
+                    sns.heatmap(label_main[:, np.newaxis], ax=ax1)
+                    sns.heatmap(value_['main'][:, np.newaxis], ax=ax2)
 
                 model_ew[f_for_y][t] = np.sum(label_y * scale) / np.sum(scale)
                 model_mw[f_for_y][t] = np.sum(label_y * mc * scale) / np.sum(mc * scale)
@@ -565,7 +576,7 @@ class Performance:
                                             , ylog=False
                                             , ls_method='ls_5_20'
                                             , plot_all_features=True):
-        # save_dir = test_out_path; file_nm = 'test_{}.png'.format(0); ylog = False; ls_method = 'ls_5_20'; plot_all_features = True
+        # save_dir = test_out_path; file_nm = 'test_{}.png'.format(0); ylog = False; ls_method = 'ls-mc_5_20'; plot_all_features = True
 
         c = self.configs
 

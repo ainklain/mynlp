@@ -10,6 +10,162 @@ import numpy as np
 import os
 
 
+
+# SWA start
+
+
+def adjust_learning_rate(optimizer, lr):
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+    return lr
+
+
+def save_checkpoint(dir, epoch, **kwargs):
+    state = {
+        'epoch': epoch,
+    }
+    state.update(kwargs)
+    filepath = os.path.join(dir, 'checkpoint-%d.pt' % epoch)
+    torch.save(state, filepath)
+
+
+def moving_average(net1, net2, alpha=1):
+    for param1, param2 in zip(net1.parameters(), net2.parameters()):
+        param1.data *= (1.0 - alpha)
+        param1.data += param2.data * alpha
+
+
+def _check_bn(module, flag):
+    if issubclass(module.__class__, torch.nn.modules.batchnorm._BatchNorm):
+        flag[0] = True
+
+
+def check_bn(model):
+    flag = [False]
+    model.apply(lambda module: _check_bn(module, flag))
+    return flag[0]
+
+
+def reset_bn(module):
+    if issubclass(module.__class__, torch.nn.modules.batchnorm._BatchNorm):
+        module.running_mean = torch.zeros_like(module.running_mean)
+        module.running_var = torch.ones_like(module.running_var)
+
+
+def _get_momenta(module, momenta):
+    if issubclass(module.__class__, torch.nn.modules.batchnorm._BatchNorm):
+        momenta[module] = module.momentum
+
+
+def _set_momenta(module, momenta):
+    if issubclass(module.__class__, torch.nn.modules.batchnorm._BatchNorm):
+        module.momentum = momenta[module]
+
+
+def bn_update(loader, model):
+    """
+        BatchNorm buffers update (if any).
+        Performs 1 epochs to estimate buffers average using train dataset.
+        :param loader: train dataset loader for buffers average estimation.
+        :param model: model being update
+        :return: None
+    """
+    if not check_bn(model):
+        return
+    model.train()
+    momenta = {}
+    model.apply(reset_bn)
+    model.apply(lambda module: _get_momenta(module, momenta))
+    n = 0
+    for input, _ in loader:
+        input = input.cuda(async=True)
+        input_var = torch.autograd.Variable(input)
+        b = input_var.data.size(0)
+
+        momentum = b / (n + b)
+        for module in momenta.keys():
+            module.momentum = momentum
+
+        model(input_var)
+        n += b
+
+    model.apply(lambda module: _set_momenta(module, momenta))
+
+
+
+def schedule(epoch, args):
+    t = (epoch) / (args.swa_start if args.swa else args.epochs)
+    lr_ratio = args.swa_lr / args.lr_init if args.swa else 0.01
+    if t <= 0.5:
+        factor = 1.0
+    elif t <= 0.9:
+        factor = 1.0 - (1.0 - lr_ratio) * (t - 0.5) / 0.4
+    else:
+        factor = lr_ratio
+    return args.lr_init * factor
+
+def test_swa():
+    lr_init = 0.1
+    momentum = 0.9 # SGD momentum
+    wd = 1e-4  # weight decay
+    swa_lr = 0.05
+    swa_start = 161
+    swa_c_epoch = 1
+
+
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        lr=args.lr_init,
+        momentum=args.momentum,
+        weight_decay=args.wd
+    )
+
+
+    for epoch in range(start_epoch, args.epochs):
+        time_ep = time.time()
+
+        lr = schedule(epoch)
+        utils.adjust_learning_rate(optimizer, lr)
+        train_res = utils.train_epoch(loaders['train'], model, criterion, optimizer)
+        if epoch == 0 or epoch % args.eval_freq == args.eval_freq - 1 or epoch == args.epochs - 1:
+            test_res = utils.eval(loaders['test'], model, criterion)
+        else:
+            test_res = {'loss': None, 'accuracy': None}
+
+        if args.swa and (epoch + 1) >= args.swa_start and (epoch + 1 - args.swa_start) % args.swa_c_epochs == 0:
+            utils.moving_average(swa_model, model, 1.0 / (swa_n + 1))
+            swa_n += 1
+            if epoch == 0 or epoch % args.eval_freq == args.eval_freq - 1 or epoch == args.epochs - 1:
+                utils.bn_update(loaders['train'], swa_model)
+                swa_res = utils.eval(loaders['test'], swa_model, criterion)
+            else:
+                swa_res = {'loss': None, 'accuracy': None}
+
+        if (epoch + 1) % args.save_freq == 0:
+            utils.save_checkpoint(
+                args.dir,
+                epoch + 1,
+                state_dict=model.state_dict(),
+                swa_state_dict=swa_model.state_dict() if args.swa else None,
+                swa_n=swa_n if args.swa else None,
+                optimizer=optimizer.state_dict()
+            )
+
+        time_ep = time.time() - time_ep
+        values = [epoch + 1, lr, train_res['loss'], train_res['accuracy'], test_res['loss'], test_res['accuracy'], time_ep]
+        if args.swa:
+            values = values[:-1] + [swa_res['loss'], swa_res['accuracy']] + values[-1:]
+        table = tabulate.tabulate([values], columns, tablefmt='simple', floatfmt='8.4f')
+        if epoch % 40 == 0:
+            table = table.split('\n')
+            table = '\n'.join([table[1]] + table)
+        else:
+            table = table.split('\n')[2]
+        print(table)
+
+# SWA end
+
+
 def normalize(x):
     return (x - np.mean(x)) / np.std(x, ddof=1)
 
@@ -550,6 +706,7 @@ class DataScheduler:
 
         elif mode in ['test', 'predict', 'test_insample', 'test_insample2']:
             idx_y = features_list.index(c.label_feature)
+            idx_pred = features_list.index("{}_{}".format(c.pred_feature, c.k_days))
             all_assets_list = list()
             features = list()
             for ein_t, din_t, dout_t, add_info in zip(enc_in, dec_in, dec_out, add_infos):
@@ -567,6 +724,7 @@ class DataScheduler:
 
                 # label 값 (t+1수익률)
                 add_info['next_y'] = dout_t[:, 0, idx_y]
+                add_info['next_label'] = dout_t[:, 0, idx_pred]
 
                 if c.size_encoding:
                     new_din_t[:] += np.array(add_info['size_rnk']).reshape(-1, 1, 1)
