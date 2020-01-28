@@ -7,7 +7,7 @@ from matplotlib import pyplot as plt, cm
 
 from ts_torch import torch_util_mini as tu
 
-def weight_scale(score, method='L_60'):
+def weight_scale(score, method='L_60', mc=None):
     method = method.lower()
     m_args = method.split('_')
 
@@ -42,6 +42,23 @@ def weight_scale(score, method='L_60'):
                 lower_bound = int(len(rank_) * (i / ntile))
                 upper_bound = int(len(rank_) * ((i + 1.) / ntile))
                 scale[rank_[lower_bound:upper_bound], i] = 1.
+        elif m_args[0] == 'ls-mc':
+            # 롱숏 ntile분위, 각분위 당 wgt_diff 씩 조정 배분
+            # ex) 'ls_5_20', 'LS_4_10', ...
+            assert len(m_args[1:]) == 2
+            ntile = int(m_args[1])
+            wgt_diff = int(m_args[2]) / 100
+            mc_cum = np.cumsum(mc[rank_]) / np.sum(mc)  # score 높은 값에서 낮은 순으로 mc 누적 (%)
+            for i in range(ntile):
+                selected_port = (mc_cum >= (i / ntile)) & (mc_cum < ((i + 1.) / ntile))
+                scale[rank_[selected_port]] = (1 + wgt_diff * (ntile - 1) / 2) - wgt_diff * i
+        elif m_args[0] == 'each-mc':
+            ntile = int(m_args[1])
+            scale = np.zeros([len(score), ntile])
+            mc_cum = np.cumsum(mc[rank_]) / np.sum(mc)  # score 높은 값에서 낮은 순으로 mc 누적 (%)
+            for i in range(ntile):
+                selected_port = (mc_cum >= (i / ntile)) & (mc_cum < ((i + 1.) / ntile))
+                scale[rank_[selected_port], i] = 1.
 
     return scale
 
@@ -150,10 +167,10 @@ class Performance:
         result_t['score'] = value_['main']
 
         # long-short score
-        scale_ls = weight_scale(value_['main'], method='ls_5_20')
+        scale_ls = weight_scale(value_['main'], method='ls_5_20', mc=mc)
         # long-only score
-        scale_l_temp = weight_scale(value_['main'], method='l_60')
-        scale_l = scale_l_temp * weight_scale(value_[self.adj_feature], method='l_60')
+        scale_l_temp = weight_scale(value_['main'], method='l_60', mc=mc)
+        scale_l = scale_l_temp * weight_scale(value_[self.adj_feature], method='l_60', mc=mc)
 
         result_t['ls_score'] = scale_ls
         result_t['model_ew'] = scale_ls / np.sum(scale_ls)
@@ -186,15 +203,17 @@ class Performance:
                          , ylog=False
                          , ls_method='ls_5_20'
                          , plot_all_features=True):
-        # save_dir = test_out_path; file_nm = 'test_{}.png'.format(0); ylog = False; ls_method = 'ls_5_20'; plot_all_features = True
+        # self=ds; ep=0; is_monthly = False; is_insample=False;  dataloader_set=self._dataloader('test', is_monthly=False);test_out_path = os.path.join(self.data_out_path, '{}/{}'.format(self.base_idx, 'single_test'))
+        # self = performer;save_dir = test_out_path; file_nm = 'test_{}.png'.format(0); ylog = False; ls_method = 'ls_5_20'; plot_all_features = True
 
         c = self.configs
 
         m_args = ls_method.split('_')
-        if m_args[0] == 'ls':
+        if m_args[0] in ['ls', 'ls-mc']:
             n_tile = int(m_args[1])
             def_variables = self.define_variables_ntile
             kw = {'n_tile': n_tile}
+            each_method = m_args[0].replace('ls', 'each') + '_{}'.format(str(n_tile))
         else:
             n_tile = -1
             def_variables = self.define_variables
@@ -265,18 +284,18 @@ class Performance:
                 else:
                     value_[f_] = predictions[f_][:, 0, 0]
 
-                if m_args[0] == 'ls':
+                if m_args[0] in ['ls', 'ls-mc']:
                     # ntile 별 수익률
-                    scale_n = weight_scale(value_[f_], method='each_{}'.format(n_tile))
+                    scale_n = weight_scale(value_[f_], method=each_method, mc=mc)
                     model_ew[f_for_y + '_each'][t, :] = np.matmul(label_y, scale_n) / np.sum(scale_n, axis=0)
                     model_mw[f_for_y + '_each'][t, :] = np.matmul(label_y * mc, scale_n) / np.matmul(mc, scale_n)
                     # or np.sum((label_y * mc).reshape([-1, 1]) * scale, axis=0) / np.sum(mc.reshape(-1, 1) * scale, axis=0)
                     # (label_y * mc)[:, np.newaxis] * scale_n # TODO 포트폴리오별 성과 기여 계속
                     # pf 수익률
-                    scale = weight_scale(value_[f_], method=ls_method)
+                    scale = weight_scale(value_[f_], method=ls_method, mc=mc)
                 elif m_args[0] == 'l':
-                    scale1 = weight_scale(value_[f_], method=ls_method)
-                    scale = scale1 * weight_scale(value_[self.adj_feature], method=ls_method)
+                    scale1 = weight_scale(value_[f_], method=ls_method, mc=mc)
+                    scale = scale1 * weight_scale(value_[self.adj_feature], method=ls_method, mc=mc)
                 elif m_args[0] == 'limit-LS':
                     pass
 
@@ -295,7 +314,7 @@ class Performance:
 
         for f_ in features_for_plot:
             f_for_y = ('y' if f_ == 'main' else f_)
-            if m_args[0] == 'ls':
+            if m_args[0] in ['ls', 'ls-mc']:
                 y_arr = np.concatenate([bm_ew['y'], bm_mw['y']
                                         , model_ew[f_for_y]
                                         , model_mw[f_for_y]
@@ -331,7 +350,7 @@ class Performance:
                 data['diff_w_cost_mw'] = np.cumprod(1. + model_mw['y_w_cost'] - bm_mw['y_w_cost'], axis=0)
 
             # ################################ figure 1
-            if m_args[0] == 'ls':
+            if m_args[0] in ['ls', 'ls-mc']:
                 # equal fig
                 fig = plt.figure()
                 fig.suptitle('{} ~ {}'.format(start_d, end_d))
@@ -551,10 +570,11 @@ class Performance:
         c = self.configs
 
         m_args = ls_method.split('_')
-        if m_args[0] == 'ls':
+        if m_args[0] in ['ls', 'ls-mc']:
             n_tile = int(m_args[1])
             def_variables = self.define_variables_ntile
             kw = {'n_tile': n_tile}
+            each_method = m_args[0].replace('ls', 'each') + '_{}'.format(str(n_tile))
         else:
             n_tile = -1
             def_variables = self.define_variables
@@ -637,18 +657,18 @@ class Performance:
                 else:
                     value_[f_] = predictions[f_][:, 0, 0]
 
-                if m_args[0] == 'ls':
+                if m_args[0] in ['ls', 'ls-mc']:
                     # ntile 별 수익률
-                    scale_n = weight_scale(value_[f_], method='each_{}'.format(n_tile))
+                    scale_n = weight_scale(value_[f_], method=each_method, mc=mc)
                     model_ew[f_for_y + '_each'][t, :] = np.matmul(label_y, scale_n) / np.sum(scale_n, axis=0)
                     model_mw[f_for_y + '_each'][t, :] = np.matmul(label_y * mc, scale_n) / np.matmul(mc, scale_n)
                     # or np.sum((label_y * mc).reshape([-1, 1]) * scale, axis=0) / np.sum(mc.reshape(-1, 1) * scale, axis=0)
 
                     # pf 수익률
-                    scale = weight_scale(value_[f_], method=ls_method)
+                    scale = weight_scale(value_[f_], method=ls_method, mc=mc)
                 elif m_args[0] == 'l':
-                    scale1 = weight_scale(value_[f_], method=ls_method)
-                    scale = scale1 * weight_scale(value_[self.adj_feature], method=ls_method)
+                    scale1 = weight_scale(value_[f_], method=ls_method, mc=mc)
+                    scale = scale1 * weight_scale(value_[self.adj_feature], method=ls_method, mc=mc)
                 elif m_args[0] == 'limit-LS':
                     pass
 
@@ -667,7 +687,7 @@ class Performance:
 
         for f_ in features_for_plot:
             f_for_y = ('y' if f_ == 'main' else f_)
-            if m_args[0] == 'ls':
+            if m_args[0] in ['ls', 'ls-mc']:
                 y_arr = np.concatenate([bm_ew['y'], bm_mw['y']
                                         , model_ew[f_for_y]
                                         , model_mw[f_for_y]
@@ -703,7 +723,7 @@ class Performance:
                 data['diff_w_cost_mw'] = np.cumprod(1. + model_mw['y_w_cost'] - bm_mw['y_w_cost'], axis=0)
 
             # ################################ figure 1
-            if m_args[0] == 'ls':
+            if m_args[0] in ['ls', 'ls-mc']:
                 # equal fig
                 fig = plt.figure()
                 fig.suptitle('{} ~ {}'.format(start_d, end_d))
@@ -924,10 +944,11 @@ class Performance:
         rate_ = c.app_rate
         # file_nm = 'test.png'; ylog = False; t_stepsize = 4; ls_method = 'ls_5_20'; plot_all_features = True
         m_args = ls_method.split('_')
-        if m_args[0] == 'ls':
+        if m_args[0] in ['ls', 'ls-mc']:
             n_tile = int(m_args[1])
             def_variables = self.define_variables_ntile
             kw = {'n_tile': n_tile}
+            each_method = m_args[0].replace('ls', 'each') + '_{}'.format(str(n_tile))
         else:
             n_tile = -1
             def_variables = self.define_variables
@@ -1019,18 +1040,18 @@ class Performance:
                 else:
                     value_[f_] = predictions[f_][:, 0, 0]
 
-                if m_args[0] == 'ls':
+                if m_args[0] in ['ls', 'ls-mc']:
                     # ntile 별 수익률
-                    scale_n = weight_scale(value_[f_], method='each_{}'.format(n_tile))
+                    scale_n = weight_scale(value_[f_], method=each_method, mc=mc)
                     model_ew[f_for_y + '_each'][t, :] = np.matmul(label_y, scale_n) / np.sum(scale_n, axis=0)
                     model_mw[f_for_y + '_each'][t, :] = np.matmul(label_y * mc, scale_n) / np.matmul(mc, scale_n)
                     # or np.sum((label_y * mc).reshape([-1, 1]) * scale, axis=0) / np.sum(mc.reshape(-1, 1) * scale, axis=0)
 
                     # pf 수익률
-                    scale = weight_scale(value_[f_], method=ls_method)
+                    scale = weight_scale(value_[f_], method=ls_method, mc=mc)
                 elif m_args[0] == 'l':
-                    scale1 = weight_scale(value_[f_], method=ls_method)
-                    scale = scale1 * weight_scale(value_[self.adj_feature], method=ls_method)
+                    scale1 = weight_scale(value_[f_], method=ls_method, mc=mc)
+                    scale = scale1 * weight_scale(value_[self.adj_feature], method=ls_method, mc=mc)
                 elif m_args[0] == 'limit-LS':
                     pass
 
@@ -1070,7 +1091,7 @@ class Performance:
 
         for f_ in features_for_plot:
             f_for_y = ('y' if f_ == 'main' else f_)
-            if m_args[0] == 'ls':
+            if m_args[0] in ['ls', 'ls-mc']:
                 y_arr = np.concatenate([bm_ew['y'], bm_mw['y']
                                         , model_ew[f_for_y]
                                         , model_mw[f_for_y]
@@ -1184,7 +1205,7 @@ class Performance:
 
             # ############################# figure main (compare) end
 
-            if m_args[0] == 'ls':
+            if m_args[0] in ['ls', 'ls-mc']:
                 # equal fig
                 fig = plt.figure()
                 fig.suptitle('{} ~ {}'.format(start_d, end_d))

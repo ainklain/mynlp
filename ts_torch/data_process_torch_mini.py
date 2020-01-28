@@ -614,10 +614,12 @@ class DataScheduler:
         min_eval_loss = 99999
         stop_count = 0
         for ep in range(num_epochs):
+
             if ep % 2 == 0:
                 self.logger.info("[train] [Ep %d] plot", ep)
                 self.test_plot(performer, model, ep, is_monthly=False)
                 self.test_plot(performer, model, ep, is_monthly=True)
+                # self.test_plot(performer, model, ep, is_monthly=True, is_insample=True)
 
             self.logger.info("[train] [Ep %d] model evaluation ...", ep)
             eval_loss = self.step_epoch(ep, model, optimizer, is_train=False)
@@ -882,6 +884,8 @@ class DataScheduler:
 
         performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}.png'.format(ep)
                        , ylog=False, ls_method='ls_5_20', plot_all_features=True)
+        performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}-mc.png'.format(ep)
+                       , ylog=False, ls_method='ls-mc_5_20', plot_all_features=True)
 
     @done_decorator_with_logger
     def test_plot_maml(self, performer, model, ep, is_monthly, is_insample=False):
