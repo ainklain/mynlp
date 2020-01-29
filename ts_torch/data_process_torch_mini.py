@@ -32,7 +32,7 @@ def save_checkpoint(dir, epoch, **kwargs):
 def moving_average(net1, net2, alpha=1):
     for param1, param2 in zip(net1.parameters(), net2.parameters()):
         param1.data *= (1.0 - alpha)
-        param1.data += param2.data * alpha
+        param1.data += param2.to(param1.device).data * alpha
 
 
 def _check_bn(module, flag):
@@ -92,76 +92,16 @@ def bn_update(loader, model):
     model.apply(lambda module: _set_momenta(module, momenta))
 
 
-
-def schedule(epoch, args):
-    t = (epoch) / (args.swa_start if args.swa else args.epochs)
-    lr_ratio = args.swa_lr / args.lr_init if args.swa else 0.01
+def schedule(epoch, configs):
+    t = (epoch) / (configs.swa_start if configs.use_swa else configs.epochs)
+    lr_ratio = configs.swa_lr / configs.lr_init if configs.use_swa else 0.01
     if t <= 0.5:
         factor = 1.0
     elif t <= 0.9:
         factor = 1.0 - (1.0 - lr_ratio) * (t - 0.5) / 0.4
     else:
         factor = lr_ratio
-    return args.lr_init * factor
-
-def test_swa():
-    lr_init = 0.1
-    momentum = 0.9 # SGD momentum
-    wd = 1e-4  # weight decay
-    swa_lr = 0.05
-    swa_start = 161
-    swa_c_epoch = 1
-
-
-    optimizer = torch.optim.SGD(
-        model.parameters(),
-        lr=args.lr_init,
-        momentum=args.momentum,
-        weight_decay=args.wd
-    )
-
-
-    for epoch in range(start_epoch, args.epochs):
-        time_ep = time.time()
-
-        lr = schedule(epoch)
-        utils.adjust_learning_rate(optimizer, lr)
-        train_res = utils.train_epoch(loaders['train'], model, criterion, optimizer)
-        if epoch == 0 or epoch % args.eval_freq == args.eval_freq - 1 or epoch == args.epochs - 1:
-            test_res = utils.eval(loaders['test'], model, criterion)
-        else:
-            test_res = {'loss': None, 'accuracy': None}
-
-        if args.swa and (epoch + 1) >= args.swa_start and (epoch + 1 - args.swa_start) % args.swa_c_epochs == 0:
-            utils.moving_average(swa_model, model, 1.0 / (swa_n + 1))
-            swa_n += 1
-            if epoch == 0 or epoch % args.eval_freq == args.eval_freq - 1 or epoch == args.epochs - 1:
-                utils.bn_update(loaders['train'], swa_model)
-                swa_res = utils.eval(loaders['test'], swa_model, criterion)
-            else:
-                swa_res = {'loss': None, 'accuracy': None}
-
-        if (epoch + 1) % args.save_freq == 0:
-            utils.save_checkpoint(
-                args.dir,
-                epoch + 1,
-                state_dict=model.state_dict(),
-                swa_state_dict=swa_model.state_dict() if args.swa else None,
-                swa_n=swa_n if args.swa else None,
-                optimizer=optimizer.state_dict()
-            )
-
-        time_ep = time.time() - time_ep
-        values = [epoch + 1, lr, train_res['loss'], train_res['accuracy'], test_res['loss'], test_res['accuracy'], time_ep]
-        if args.swa:
-            values = values[:-1] + [swa_res['loss'], swa_res['accuracy']] + values[-1:]
-        table = tabulate.tabulate([values], columns, tablefmt='simple', floatfmt='8.4f')
-        if epoch % 40 == 0:
-            table = table.split('\n')
-            table = '\n'.join([table[1]] + table)
-        else:
-            table = table.split('\n')[2]
-        print(table)
+    return configs.lr_init * factor
 
 # SWA end
 
@@ -202,14 +142,14 @@ def done_decorator_with_logger(f):
 
 class DataScheduler:
     def __init__(self, configs, features_cls):
-        c = configs
-        self.data_generator = DataGeneratorDynamic(features_cls, c.data_type, c.univ_type, c.use_macro, c.min_size_port)
+        self.data_generator = DataGeneratorDynamic(features_cls)
+        self.data_generator._initialize(configs) # TODO: 임시
         # self.data_market = DataGeneratorMarket(features_cls, c.data_type_mm)
-        self.configs = c
+        self.configs = configs
         self.features_cls = features_cls
-        self.retrain_days = c.retrain_days
+        self.retrain_days = configs.retrain_days
 
-        self._initialize(c)
+        self._initialize(configs)
 
     def _initialize(self, configs):
         self.base_idx = configs.train_set_length
@@ -706,7 +646,7 @@ class DataScheduler:
 
         elif mode in ['test', 'predict', 'test_insample', 'test_insample2']:
             idx_y = features_list.index(c.label_feature)
-            idx_pred = features_list.index("{}_{}".format(c.pred_feature, c.k_days))
+            idx_pred = features_list.index(c.get_main_feature(c.pred_feature))
             all_assets_list = list()
             features = list()
             for ein_t, din_t, dout_t, add_info in zip(enc_in, dec_in, dec_out, add_infos):
@@ -768,7 +708,9 @@ class DataScheduler:
         return dataloader, features_list, all_assets_list, start_date, end_date
 
     @done_decorator_with_logger
-    def train(self, model, optimizer, performer, num_epochs, early_stopping_count=2):
+    def train(self, model, optimizer, performer, num_epochs):
+        early_stopping_count = self.configs.early_stopping_count
+
         min_eval_loss = 99999
         stop_count = 0
         for ep in range(num_epochs):
@@ -783,6 +725,67 @@ class DataScheduler:
             eval_loss = self.step_epoch(ep, model, optimizer, is_train=False)
             if eval_loss is False:
                 return False
+
+            if eval_loss > min_eval_loss:
+                stop_count += 1
+            else:
+                model.save_to_optim()
+                min_eval_loss = eval_loss
+                stop_count = 0
+
+            self.logger.info("[train] [Ep %d] count: %d/%d", ep, stop_count, early_stopping_count)
+            self.logger_train.info("[train] [Ep %d] count: %d/%d", ep, stop_count, early_stopping_count)
+            if stop_count >= early_stopping_count:
+                self.logger.info("[train] [Ep %d] Early Stopped", ep)
+                self.logger_train.info("[train] [Ep %d] Early Stopped", ep)
+                model.load_from_optim()
+                self.test_plot(performer, model, ep + 100, is_monthly=False)
+                self.test_plot(performer, model, ep + 100, is_monthly=True, is_insample=True)
+
+                break
+
+            train_loss = self.step_epoch(ep, model, optimizer, is_train=True)
+            if train_loss is False:
+                return False
+
+    @done_decorator_with_logger
+    def train_swa(self, model, model_swa, optimizer, performer, num_epochs):
+        c = self.configs
+
+        swa_start = c.swa_start
+        eval_freq = c.eval_freq
+        swa_c_epochs = c.swa_c_epochs
+        early_stopping_count = c.early_stopping_count
+
+        min_eval_loss = 99999
+        stop_count = 0
+        swa_n = 0
+        for ep in range(num_epochs):
+            lr = schedule(epoch=ep, configs=c)
+            adjust_learning_rate(optimizer, lr)
+
+            if ep == 0 or ep % eval_freq == 0:
+                self.logger.info("[train] [Ep %d] plot", ep)
+                # self.test_plot(performer, model, ep, is_monthly=False)
+                self.test_plot(performer, model, ep, is_monthly=True)
+                self.test_plot(performer, model_swa, ep, is_monthly=True, nickname='_swa')
+                # self.test_plot(performer, model, ep, is_monthly=True, is_insample=True)
+
+            self.logger.info("[train] [Ep %d] model evaluation ...", ep)
+            if ep % eval_freq == 0 or ep == num_epochs - 1:
+                eval_loss = self.step_epoch(ep, model, optimizer, is_train=False)
+                if eval_loss is False:
+                    return False
+
+            if (ep + 1) >= swa_start and (ep + 1 - swa_start) % swa_c_epochs == 0:
+                moving_average(model_swa, model, 1.0 / (swa_n + 1))
+                swa_n += 1
+                if ep % eval_freq == 0 or ep == num_epochs - 1:
+                    swa_eval_loss = self.step_epoch(ep, model_swa, optimizer, is_train=False, use_swa=True)
+                else:
+                    swa_eval_loss = None
+
+                print('eval: {} swa: {}'.format(eval_loss, swa_eval_loss))
 
             if eval_loss > min_eval_loss:
                 stop_count += 1
@@ -845,7 +848,7 @@ class DataScheduler:
             if train_loss is False:
                 return False
 
-    def step_epoch(self, ep, model, optimizer, is_train=True):
+    def step_epoch(self, ep, model, optimizer, is_train=True, use_swa=False):
         if is_train:
             mode = 'train'
             model.train()
@@ -862,6 +865,8 @@ class DataScheduler:
         if ep == 0:
             self.logger.info("[step_epoch][Ep %d][%s] f_list: %s", ep, mode, features_list)
 
+        if use_swa:
+            bn_update(dataloader, model)
         total_loss = 0
         i = 0
         for features, labels, add_infos in dataloader:
@@ -897,6 +902,8 @@ class DataScheduler:
                     optimizer.step()
 
                 total_loss += losses
+                if i % 10 == 0:
+                    self.logger.debug("i:%d loss:%f total_loss:%f", i, float(tu.np_ify(losses)), float(tu.np_ify(total_loss)))
                 i += 1
 
         total_loss = tu.np_ify(total_loss) / i
@@ -1011,7 +1018,7 @@ class DataScheduler:
         return total_losses
 
     @done_decorator_with_logger
-    def test_plot(self, performer, model, ep, is_monthly, is_insample=False):
+    def test_plot(self, performer, model, ep, is_monthly, is_insample=False, nickname=""):
         # self=ds; ep=0; is_monthly = False; is_insample=False
         model.eval()
 
@@ -1040,9 +1047,9 @@ class DataScheduler:
         test_out_path = os.path.join(self.data_out_path, '{}/{}'.format(self.base_idx, self_mode))
         os.makedirs(test_out_path, exist_ok=True)
 
-        performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}.png'.format(ep)
+        performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}{}.png'.format(ep, nickname)
                        , ylog=False, ls_method='ls_5_20', plot_all_features=True)
-        performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}-mc.png'.format(ep)
+        performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}-mc{}.png'.format(ep, nickname)
                        , ylog=False, ls_method='ls-mc_5_20', plot_all_features=True)
 
     @done_decorator_with_logger
@@ -1251,6 +1258,13 @@ class DataScheduler:
     def get_date(self):
         return self.date_[self.base_d]
 
+    def __del__(self):
+        for h in self.logger.handlers:
+            self.logger.removeHandler(h)
+
+        for h in self.logger_train.handlers:
+            self.logger_train.removeHandler(h)
+
     @property
     def date_(self):
         return self.data_generator.date_
@@ -1315,6 +1329,16 @@ class PrepareDataFromDB:
         self.sqlm.set_db_name('qinv')
         self.sqlm.db_execute('EXEC qinv..SP_EquityMarketValueMonthly')
         print('[proc] EquityMarketValueMonthly done')
+
+    def get_equityuniverse(self):
+        sql_ = """
+        select infocode, region, dslocalcode, DsQtName as name_ 
+	        from qinv..EquityUniverse
+	        order by infocode
+        """
+        self.sqlm.set_db_name('qinv')
+        df = self.sqlm.db_read(sql_)
+        df.to_csv('./data/equityuniverse.csv', index=False)
 
     @done_decorator
     def get_close_y(self, top_npercent=90, country='kr'):
@@ -1488,13 +1512,23 @@ class PrepareDataFromDB:
 
 
 class DataGeneratorDynamic:
-    def __init__(self, features_cls, data_type='kr_stock', univ_type='selected', use_macro=False, min_size_port=90):
+    def __init__(self, features_cls):
         self.features_cls = features_cls
-        self.use_macro = use_macro
         self.mkt_features = ['mktcap', 'turnover']  # sample_data에서 계산할때 사용
+        self.initialize = False  # 속도 및 메모리를 위해 계산 필요하지 않은 경우 데이터로딩 생략
+
+    def _initialize(self, configs):
+        self.initialize = True
+
+        data_type = configs.data_type
+        univ_type = configs.univ_type
+        use_macro = configs.use_macro
+        min_size_port = configs.min_size_port
+
         add_path = dict()
         univ_path = None
         date_mapping_path = './data/date.csv'           # [eval_m / work_m / eval_y / work_y]
+        equityuniverse_path = './data/equityuniverse.csv'
         if data_type == 'kr_stock':
             # 가격데이터
             return_path = './data/kr_close_y_90.csv'    # [date_ / infocode / y]
@@ -1514,11 +1548,8 @@ class DataGeneratorDynamic:
             market_path = './data/us_mktcap_daily.csv'
 
         self.set_return_and_date(return_path)
-
         self.set_marketdata(market_path, **add_path)
-
         self.set_univ(univ_path, date_mapping_path, min_size_port)
-
         if use_macro:
             self.set_macrodata(macro_path)
 
@@ -1603,6 +1634,9 @@ class DataGeneratorDynamic:
         self.macro_df = data_df
 
     def sample_data(self, date_i, configs, debug=True):
+        if self.initialize is False:
+            self._initialize(configs)
+
         # get attributes to local variables
         date_ = self.date_
         univ = self.univ
@@ -1680,7 +1714,6 @@ class DataGeneratorDynamic:
             mkt_arr = df_mkt.reindex(columns=univ_list).to_numpy(dtype=np.float32)
             assert logp_arr.shape == mkt_arr.shape
             mkt_arr_dict[mkt_f] = mkt_arr
-
 
         # calculate features
         features_dict, labels_dict = features_cls.calc_features(logp_arr, debug=debug)

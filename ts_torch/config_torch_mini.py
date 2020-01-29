@@ -3,7 +3,7 @@ from collections import OrderedDict
 import os
 
 class Config:
-    def __init__(self, use_maml=False, use_macro=False):
+    def __init__(self, use_maml=False, use_macro=False, use_swa=False):
         # time series parameter
         self.train_set_length = 2500    # previous 10 years data
         self.retrain_days = 250         # re-train every year
@@ -58,7 +58,6 @@ class Config:
         self.max_output_seq_len = 12
 
         self.weighted_model = False     #  torch: use weighted model
-        self.set_kdays(self.k_days)
 
         # meta
         self.use_maml = use_maml
@@ -91,8 +90,8 @@ class Config:
         }
 
         self.macro_features = {
-            'returns': ['logp_0', 'logy_20', 'std_20', 'stdnew_20', 'pos_20', 'mdd_20', 'fft_100'],
-            'values': ['value_0', 'tsnormal_0']}
+            'returns': [self.get_main_feature(key) for key in ['logp', 'logy', 'std', 'stdnew', 'pos', 'mdd', 'fft']],
+            'values': [self.get_main_feature(key) for key in ['value', 'tsnormal']]}
 
         self.use_macro = use_macro
         if self.use_macro:
@@ -107,13 +106,24 @@ class Config:
             })
             # self.add_features_list = [id + '-' + key for id in self.macro_id_list for key in self.macro_key_list]
 
-        self.embedding_size = len(self.key_list_with_macro)
 
         # logger
         self.log_level = 'info'
         self.log_maxbytes = 10 * 1024 * 1024
         self.log_backupcount = 10
         self.log_format = "%(asctime)s[%(levelname)s|%(name)s,%(lineno)s] %(message)s"
+
+        # swa
+        self.use_swa = use_swa
+        if self.use_swa is True:
+            self.lr_init = 0.01
+            self.momentum = 0.9  # SGD momentum
+            self.wd = 1e-4  # weight decay
+            self.swa_lr = 0.05
+            self.swa_start = 6
+            self.swa_c_epochs = 1
+            self.eval_freq = 5
+
 
     def set_datatype(self, data_type):
         self.data_type = data_type
@@ -143,7 +153,7 @@ class Config:
 
     @property
     def balancing_key(self):
-        return 'pos_{}'.format(self.k_days)
+        return self.get_main_feature('pos')
 
     @property
     def key_list(self):
@@ -170,111 +180,119 @@ class Config:
 
         return key_list
 
-    def set_features_info(self, k_days=5):
-        if k_days == 5:
-            self.model_predictor_list = ['logp', 'nmlogy', 'nmstd', 'pos_5']
+    def set_features_info(self, k_days=5, model_predictor_list=None, features_structure=None):
+        if model_predictor_list is not None and features_structure is not None:
+            self.model_predictor_list = model_predictor_list
+            self.features_structure = features_structure
 
-            self.features_structure = \
-                {'regression':
-                     {'logp_base':
-                         {'logp': [0],
-                          'logy': [5, 10, 20, 60],
-                          'std': [20, 60],
-                          'stdnew': [20, 60],
-                          'mdd': [20, 60],
-                          'fft': [100, 3],
-                          'nmlogy': [5, 10, 20, 60],
-                          'nmstd': [5, 10, 20, 60],
+        else:
+            if k_days == 5:
+                self.model_predictor_list = ['logp', 'nmlogy', 'nmstd', 'pos_5']
+
+                self.features_structure = \
+                    {'regression':
+                         {'logp_base':
+                             {'logp': [0],
+                              'logy': [5, 10, 20, 60],
+                              'std': [20, 60],
+                              'stdnew': [20, 60],
+                              'mdd': [20, 60],
+                              'fft': [100, 3],
+                              'nmlogy': [5, 10, 20, 60],
+                              'nmstd': [5, 10, 20, 60],
+                              },
+                          'size_base': {'nmsize': [0]},
+                          'turnover_base': {'nmturnover': [0],
+                                            'tsturnover': [0]},
+                          'ivol_base': {'nmivol': [0]},
                           },
-                      'size_base': {'nmsize': [0]},
-                      'turnover_base': {'nmturnover': [0],
-                                        'tsturnover': [0]},
-                      'ivol_base': {'nmivol': [0]},
-                      },
-                 'classification':
-                     {'logp_base':
-                          {'pos': [5, 10, 20, 60, 120]}
-                      }
-                 }
+                     'classification':
+                         {'logp_base':
+                              {'pos': [5, 10, 20, 60, 120]}
+                          }
+                     }
 
-        elif k_days == 10:
-            # self.model_predictor_list = ['logy', 'pos_10', 'pos_20', 'pos_60', 'std', 'mdd', 'fft']
-            self.model_predictor_list = ['logy', 'cslogy', 'csstd', 'std', 'stdnew', 'mdd', 'fft']
+            elif k_days == 10:
+                # self.model_predictor_list = ['logy', 'pos_10', 'pos_20', 'pos_60', 'std', 'mdd', 'fft']
+                self.model_predictor_list = ['logy', 'cslogy', 'csstd', 'std', 'stdnew', 'mdd', 'fft']
 
-            self.features_structure = \
-                {'regression':
-                     {'logy': [10, 20, 60, 120],
-                      'std': [10, 20, 60],
-                      'stdnew': [10, 20],
-                      'mdd': [20, 60, 120],
-                      'fft': [3, 100],
-                      'cslogy': [10, 20],
-                      'csstd': [10, 20],
-                      },
-                 'classification':
-                     {'pos': [10, 20, 60, 120]}}
-
-        elif k_days == 20:
-            # self.model_predictor_list = ['logy', 'pos_20', 'pos_60', 'pos_120', 'std', 'mdd', 'fft']
-            # self.model_predictor_list = ['logy', 'cslogy', 'csstd', 'std', 'stdnew', 'mdd', 'fft', 'pos_20', 'pos_60']
-
-            # self.model_predictor_list = ['logy', 'cslogy', 'std', 'stdnew', 'mdd', 'fft', 'pos_20', 'pos_60']
-
-            # self.model_predictor_list = ['std']
-            self.model_predictor_list = ['logp', 'nmlogy', 'nmstd', 'pos_20']
-            # self.model_predictor_list = ['nmlogy', 'nmstd', 'pos_20']
-            # self.model_predictor_list = ['nmlogy']
-
-            self.features_structure = \
-                {'regression':
-                     {'logp_base':
-                         {'logp': [0],
-                          'logy': [20],
-                          'nmlogy': [20],
-                          'nmstd': [20],
+                self.features_structure = \
+                    {'regression':
+                         {'logy': [10, 20, 60, 120],
+                          'std': [10, 20, 60],
+                          'stdnew': [10, 20],
+                          'mdd': [20, 60, 120],
+                          'fft': [3, 100],
+                          'cslogy': [10, 20],
+                          'csstd': [10, 20],
                           },
-                      },
-                 'classification':
-                     {'logp_base':
-                        {'pos': [20]}
-                      }
-                 }
+                     'classification':
+                         {'pos': [10, 20, 60, 120]}}
 
-            # self.features_structure = \
-            #     {'regression':
-            #          {'logp_base':
-            #              {'logp': [0],
-            #               'logy': [20, 60, 120, 250],
-            #               'std': [20, 60, 120],
-            #               'stdnew': [20, 60],
-            #               'mdd': [20, 60, 120],
-            #               'fft': [100, 3],
-            #               'nmlogy': [20, 60],
-            #               'nmstd': [20, 60],
-            #               },
-            #           'size_base': {'nmsize': [0]},
-            #           'turnover_base': {'nmturnover': [0],
-            #                             'tsturnover': [0]},
-            #           # 'ivol_base': {'nmivol': [0]},
-            #           },
-            #      'classification':
-            #          {'logp_base':
-            #               {'pos': [20, 60, 120, 250]}
-            #           }
-            #      }
+            elif k_days == 20:
+                # self.model_predictor_list = ['logy', 'pos_20', 'pos_60', 'pos_120', 'std', 'mdd', 'fft']
+                # self.model_predictor_list = ['logy', 'cslogy', 'csstd', 'std', 'stdnew', 'mdd', 'fft', 'pos_20', 'pos_60']
 
+                # self.model_predictor_list = ['logy', 'cslogy', 'std', 'stdnew', 'mdd', 'fft', 'pos_20', 'pos_60']
 
-    def set_kdays(self, k_days, pred='pos'):
+                # self.model_predictor_list = ['std']
+                self.model_predictor_list = ['logp', 'nmlogy', 'nmstd', 'pos']
+                # self.model_predictor_list = ['nmlogy', 'nmstd', 'pos_20']
+                # self.model_predictor_list = ['nmlogy']
+
+                self.features_structure = \
+                    {'regression':
+                         {'logp_base':
+                             {'logp': [0],
+                              'logy': [20],
+                              'nmlogy': [20],
+                              'nmstd': [20],
+                              },
+                          },
+                     'classification':
+                         {'logp_base':
+                            {'pos': [20]}
+                          }
+                     }
+
+                # self.features_structure = \
+                #     {'regression':
+                #          {'logp_base':
+                #              {'logp': [0],
+                #               'logy': [20, 60, 120, 250],
+                #               'std': [20, 60, 120],
+                #               'stdnew': [20, 60],
+                #               'mdd': [20, 60, 120],
+                #               'fft': [100, 3],
+                #               'nmlogy': [20, 60],
+                #               'nmstd': [20, 60],
+                #               },
+                #           'size_base': {'nmsize': [0]},
+                #           'turnover_base': {'nmturnover': [0],
+                #                             'tsturnover': [0]},
+                #           # 'ivol_base': {'nmivol': [0]},
+                #           },
+                #      'classification':
+                #          {'logp_base':
+                #               {'pos': [20, 60, 120, 250]}
+                #           }
+                #      }
+
+    def set_kdays(self, k_days, pred='pos', **kwargs):
         self.k_days = k_days
         self.label_feature = 'logy_{}'.format(self.k_days)
-        if pred == 'pos':
-            self.pred_feature = 'pos_{}'.format(self.k_days)
-        # elif pred == 'cslogy':
-        #     self.pred_feature = 'cslogy_{}'.format(self.k_days)
-        else:
-            self.pred_feature = pred
+        self.pred_feature = pred
 
-        self.set_features_info(k_days)
+        self.set_features_info(k_days, **kwargs)
+        self.embedding_size = len(self.key_list_with_macro)
+
+    def get_main_feature(self, feature):
+        if feature in ['logp', 'nmsize', 'nmturnover', 'tsturnover', 'nmivol', 'value', 'tsnormal', 'csnormal']:
+            return '{}_0'.format(feature)
+        elif feature in ['fft']:
+            return '{}_100'.format(feature)
+        else:
+            return '{}_{}'.format(feature, self.k_days)
 
     def export(self):
         return_str = ""

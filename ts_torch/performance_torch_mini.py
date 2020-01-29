@@ -69,8 +69,10 @@ class Performance:
         self.label_feature = configs.label_feature
         self.pred_feature = configs.pred_feature
         self.cost_rate = configs.cost_rate
-
-        self.adj_feature = 'nmlogy'
+        if 'nmlogy' in configs.model_predictor_list:
+            self.adj_feature = 'nmlogy'
+        else:
+            self.adj_feature = None
 
     def define_variables(self, t_steps, assets, f_keys=None):
         var_dict = dict(y=np.zeros([t_steps, 1]),
@@ -162,7 +164,6 @@ class Performance:
             predictions[key] = tu.np_ify(predictions[key])
 
         value_ = dict()
-        value_[self.adj_feature] = predictions[self.adj_feature][:, 0, 0]
         value_['main'] = predictions[self.pred_feature][:, 0, 0]
         result_t['score'] = value_['main']
 
@@ -170,7 +171,11 @@ class Performance:
         scale_ls = weight_scale(value_['main'], method='ls_5_20', mc=mc)
         # long-only score
         scale_l_temp = weight_scale(value_['main'], method='l_60', mc=mc)
-        scale_l = scale_l_temp * weight_scale(value_[self.adj_feature], method='l_60', mc=mc)
+        if self.adj_feature is not None:
+            value_[self.adj_feature] = predictions[self.adj_feature][:, 0, 0]
+            scale_l = scale_l_temp * weight_scale(value_[self.adj_feature], method='l_60', mc=mc)
+        else:
+            scale_l = scale_l_temp
 
         result_t['ls_score'] = scale_ls
         result_t['model_ew'] = scale_ls / np.sum(scale_ls)
@@ -277,7 +282,9 @@ class Performance:
                 predictions[key] = tu.np_ify(predictions[key])
             value_ = dict()
 
-            value_[self.adj_feature] = predictions[self.adj_feature][:, 0, 0]
+            if self.adj_feature is not None:
+                value_[self.adj_feature] = predictions[self.adj_feature][:, 0, 0]
+
             for f_ in features_for_plot:
                 f_for_y = ('y' if f_ == 'main' else f_)
                 if f_ == 'main':
@@ -298,7 +305,11 @@ class Performance:
                     scale = weight_scale(value_[f_], method=ls_method, mc=mc)
                 elif m_args[0] == 'l':
                     scale1 = weight_scale(value_[f_], method=ls_method, mc=mc)
-                    scale = scale1 * weight_scale(value_[self.adj_feature], method=ls_method, mc=mc)
+                    if self.adj_feature is not None:
+                        scale = scale1 * weight_scale(value_[self.adj_feature], method=ls_method, mc=mc)
+                    else:
+                        scale = scale1
+
                 elif m_args[0] == 'limit-LS':
                     pass
                 heatmap_test = False
@@ -659,8 +670,9 @@ class Performance:
             for key in predictions.keys():
                 predictions[key] = tu.np_ify(predictions[key])
             value_ = dict()
+            if self.adj_feature is not None:
+                value_[self.adj_feature] = predictions[self.adj_feature][:, 0, 0]
 
-            value_[self.adj_feature] = predictions[self.adj_feature][:, 0, 0]
             for f_ in features_for_plot:
                 f_for_y = ('y' if f_ == 'main' else f_)
                 if f_ == 'main':
@@ -679,7 +691,11 @@ class Performance:
                     scale = weight_scale(value_[f_], method=ls_method, mc=mc)
                 elif m_args[0] == 'l':
                     scale1 = weight_scale(value_[f_], method=ls_method, mc=mc)
-                    scale = scale1 * weight_scale(value_[self.adj_feature], method=ls_method, mc=mc)
+
+                    if self.adj_feature is not None:
+                        scale = scale1 * weight_scale(value_[self.adj_feature], method=ls_method, mc=mc)
+                    else:
+                        scale = scale1
                 elif m_args[0] == 'limit-LS':
                     pass
 
@@ -1043,7 +1059,8 @@ class Performance:
 
             value_ = dict()
 
-            value_[self.adj_feature] = predictions[self.adj_feature][:, 0, 0]
+            if self.adj_feature is not None:
+                value_[self.adj_feature] = predictions[self.adj_feature][:, 0, 0]
             for f_ in features_for_plot:
                 f_for_y = ('y' if f_ == 'main' else f_)
                 if f_ == 'main':
@@ -1062,7 +1079,10 @@ class Performance:
                     scale = weight_scale(value_[f_], method=ls_method, mc=mc)
                 elif m_args[0] == 'l':
                     scale1 = weight_scale(value_[f_], method=ls_method, mc=mc)
-                    scale = scale1 * weight_scale(value_[self.adj_feature], method=ls_method, mc=mc)
+                    if self.adj_feature is not None:
+                        scale = scale1 * weight_scale(value_[self.adj_feature], method=ls_method, mc=mc)
+                    else:
+                        scale = scale1
                 elif m_args[0] == 'limit-LS':
                     pass
 

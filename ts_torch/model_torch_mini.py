@@ -797,7 +797,7 @@ class TSModel(Base):
                             self.predictor[key] = FeedForward(c.d_model, n_size, 2, out_activation='linear')
                             if c.use_uncertainty:
                                 self.predictor_var[key] = FeedForward(c.d_model, n_size, 2, out_activation='positive')
-                            self.predictor_helper[key] = c.features_structure['regression']['logp_base']['logy'].index(int(tags[1]))
+                            self.predictor_helper[key] = c.features_structure['regression']['logp_base']['logy'].index(c.k_days)
                         # elif tags[0] in configs.features_structure['crosssection'].keys():
                         #     self.predictor[key] = FeedForward(64, len(configs.features_structure['regression'][key]))
 

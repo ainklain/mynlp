@@ -18,9 +18,10 @@ from ts_torch import torch_util_mini as tu
 
 
 def run2():
+    use_swa = True
     for use_macro in [False]:
         #
-        run_weekend(10, use_macro,
+        run_weekend(10, use_macro, use_swa,
                     ['nmlogy'],
                     {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},},
                      'classification': {'logp_base': {'pos': [20]}}})
@@ -28,55 +29,89 @@ def run2():
 
 
 def run():
-    for use_macro in [False]:
+    use_swa = True
+    use_macro = False
+    for use_swa in [False, True]:
         #
-        run_weekend(1, use_macro,
+        run_weekend(11, use_macro, use_swa,
+                    ['nmstd'],
+                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
+                                    'size_base': {'nmsize': [0]},
+                                    'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                    },
+                     'classification': {'logp_base':{'pos': [20]}}})
+
+        run_weekend(12, use_macro, use_swa,
+                    ['nmturnover'],
+                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
+                                    'size_base': {'nmsize': [0]},
+                                    'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                    },
+                     'classification': {'logp_base':{'pos': [20]}}})
+
+        run_weekend(13, use_macro, use_swa,
+                    ['tsturnover'],
+                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
+                                    'size_base': {'nmsize': [0]},
+                                    'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                    },
+                     'classification': {'logp_base':{'pos': [20]}}})
+
+        run_weekend(14, use_macro, use_swa,
+                    ['pos'],
+                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], },
+                                    'size_base': {'nmsize': [0]},
+                                    'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                    },
+                     'classification': {'logp_base': {'pos': [20]}}})
+
+        run_weekend(1, use_macro, use_swa,
                     ['logp', 'nmlogy', 'nmstd', 'pos_20'],
                     {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},},
                      'classification': {'logp_base':{'pos': [20]}}})
 
         #
-        run_weekend(2, use_macro,
+        run_weekend(2, use_macro, use_swa,
                     ['nmlogy', 'nmstd', 'pos_20'],
                     {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},},
                      'classification': {'logp_base':{'pos': [20]}}})
         #
-        run_weekend(3, use_macro,
-                    ['logp', 'nmlogy', 'nmstd', 'pos_20'],
-                    {'regression': {'logp_base': {'nmlogy': [20], 'nmstd': [20],},},
+        run_weekend(3, use_macro, use_swa,
+                    ['nmlogy', 'nmstd', 'pos_20'],
+                    {'regression': {'logp_base': {'logy': [20], 'nmlogy': [20], 'nmstd': [20],},},
                      'classification': {'logp_base':{'pos': [20]}}})
         #
-        run_weekend(4, use_macro,
+        run_weekend(4, use_macro, use_swa,
                     ['logp', 'nmlogy', 'nmstd', 'pos_20'],
                     {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
                                     'size_base': {'nmsize': [0]},
                                     },
                      'classification': {'logp_base':{'pos': [20]}}})
         #
-        run_weekend(5, use_macro,
-                    ['logp', 'nmlogy', 'nmstd', 'pos_20'],
+        run_weekend(5, use_macro, use_swa,
+                    ['logp_0', 'nmlogy_20', 'nmstd_20', 'pos_20'],
                     {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
                                     'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
                                     },
                      'classification': {'logp_base':{'pos': [20]}}})
 
-        run_weekend(6, use_macro,
-                    ['logp', 'nmlogy', 'nmstd', 'pos_20'],
-                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
-                                    'size_base': {'nmsize': [0]},
-                                    'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
-                                    },
-                     'classification': {'logp_base':{'pos': [20]}}})
-
-        run_weekend(7, use_macro,
-                    ['nmlogy'],
+        run_weekend(6, use_macro, use_swa,
+                    ['logp_0', 'nmlogy_20', 'nmstd_20', 'pos_20'],
                     {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
                                     'size_base': {'nmsize': [0]},
                                     'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
                                     },
                      'classification': {'logp_base':{'pos': [20]}}})
 
-        run_weekend(8, use_macro,
+        run_weekend(7, use_macro, use_swa,
+                    ['nmlogy_20'],
+                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
+                                    'size_base': {'nmsize': [0]},
+                                    'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                    },
+                     'classification': {'logp_base':{'pos': [20]}}})
+
+        run_weekend(8, use_macro, use_swa,
                     ['logp'],
                     {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
                                     'size_base': {'nmsize': [0]},
@@ -84,7 +119,7 @@ def run():
                                     },
                      'classification': {'logp_base':{'pos': [20]}}})
 
-        run_weekend(9, use_macro,
+        run_weekend(9, use_macro, use_swa,
                     ['nmsize'],
                     {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
                                     'size_base': {'nmsize': [0]},
@@ -92,7 +127,7 @@ def run():
                                     },
                      'classification': {'logp_base':{'pos': [20]}}})
 
-        run_weekend(10, use_macro,
+        run_weekend(10, use_macro, use_swa,
                     ['nmlogy', 'nmsize'],
                     {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
                                     'size_base': {'nmsize': [0]},
@@ -100,25 +135,36 @@ def run():
                                     },
                      'classification': {'logp_base':{'pos': [20]}}})
 
-# use_macro = False
-def run_weekend(i, use_macro, model_predictor_list, features_structure):
 
-    configs = Config(use_macro=use_macro)
+def example():
+    model_predictor_list = ['nmlogy', 'nmsize']
+    features_structure = {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], },
+                    'size_base': {'nmsize': [0]},
+                    'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                    },
+     'classification': {'logp_base': {'pos': [20]}}}
 
-    k_days = 20; pred='nmlogy';
+    return model_predictor_list, features_structure
+
+
+def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure):
+    # i=111; use_macro = False; use_swa=True; model_predictor_list, features_structure=example()
+
+    configs = Config(use_macro=use_macro, use_swa=use_swa)
+
+    k_days = 20;
+    pred = model_predictor_list[0];
     country = 'kr';
     configs.set_datatype(country + '_stock')
     configs.sampling_days = k_days
-    configs.set_kdays(k_days)
-    configs.model_predictor_list = model_predictor_list
-    configs.features_structure = features_structure
-    configs.pred_feature = pred
+    configs.set_kdays(k_days, pred=pred, model_predictor_list=model_predictor_list, features_structure=features_structure)
     configs.n_heads = 8
     # configs.f_name ='testtesttes_04'
-    if use_macro:
-        configs.f_name = '{}_{}_{}_macro_r0{}'.format(country, k_days, pred, i)
+    if use_swa:
+        configs.f_name = '{}_{}_swa_r0{}'.format(country, k_days, i)
     else:
-        configs.f_name = '{}_{}_{}_nmacro_r0{}'.format(country, k_days, pred, i)
+        configs.f_name = '{}_{}_nswa_r0{}'.format(country, k_days, i)
+
     configs.early_stopping_count = 5
     configs.learning_rate = 5e-4
     configs.update_comment = 'single pred per task'
@@ -127,7 +173,7 @@ def run_weekend(i, use_macro, model_predictor_list, features_structure):
 
     features_cls = FeatureNew(configs)
     ds = DataScheduler(configs, features_cls)
-    ds.set_idx(7000)
+    ds.set_idx(6500)
     ds.test_end_idx += 500
 
     os.makedirs(os.path.join(ds.data_out_path), exist_ok=True)
@@ -135,12 +181,20 @@ def run_weekend(i, use_macro, model_predictor_list, features_structure):
         f.write(config_str)
 
     model = TSModel(configs, features_cls, weight_scheme=configs.weight_scheme)
+    if configs.use_swa:
+        model_swa = TSModel(configs, features_cls, weight_scheme=configs.weight_scheme)
 
     performer = Performance(configs)
     if configs.use_maml:
         optimizer = optim.Adam(model.parameters(), lr=configs.meta_lr)
     else:
-        optimizer = optim.Adam(model.parameters(), lr=configs.learning_rate)
+        if configs.use_swa:
+            optimizer = optim.SGD(model.parameters(),
+                                  lr=configs.lr_init,
+                                  momentum=configs.momentum,
+                                  weight_decay=configs.wd)
+        else:
+            optimizer = optim.Adam(model.parameters(), lr=configs.learning_rate)
         # optimizer = optim.SGD(model.parameters(), lr=configs.learning_rate)
 
     ds.load(model, optimizer)
@@ -150,9 +204,12 @@ def run_weekend(i, use_macro, model_predictor_list, features_structure):
     while True:
         ds.save(0, model, optimizer)
         if configs.use_maml:
-            ds.train_maml(model, optimizer, performer, num_epochs=100, early_stopping_count=configs.early_stopping_count)
+            ds.train_maml(model, optimizer, performer, num_epochs=100)
         else:
-            ds.train(model, optimizer, performer, num_epochs=100, early_stopping_count=configs.early_stopping_count)
+            if configs.use_swa:
+                ds.train_swa(model, model_swa, optimizer, performer, num_epochs=100)
+            else:
+                ds.train(model, optimizer, performer, num_epochs=100)
 
         # recent_month_end = '2019-12-31'
         # dataloader_t = ds.dataloader_t(recent_month_end, force_calc=True)
