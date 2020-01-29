@@ -249,6 +249,9 @@ class Performance:
         model_ew = ew_dict['model']
         model_mw = mw_dict['model']
 
+        label_main = np.zeros([len(all_assets_list), t_steps])
+        predvalue_main = np.zeros([len(all_assets_list), t_steps])
+
         for i, (features, add_info) in enumerate(zip(*dataloader)):
             # i=0; features, add_info = next(iter(zip(*dataloader)))
             if i % t_stepsize != 0:
@@ -257,7 +260,6 @@ class Performance:
 
             mc = np.array(add_info['mktcap'], dtype=np.float32).squeeze()
             label_y = np.array(add_info['next_y'])
-            label_main = np.array(add_info['next_label'])
 
             assets = np.array(add_info['asset_list'], dtype=np.float32)
 
@@ -312,14 +314,6 @@ class Performance:
 
                 elif m_args[0] == 'limit-LS':
                     pass
-                heatmap_test = False
-                if heatmap_test is True:
-                    import seaborn as sns
-                    fig = plt.figure()
-                    ax1 = fig.add_subplot(121)
-                    ax2 = fig.add_subplot(122)
-                    sns.heatmap(label_main[:, np.newaxis], ax=ax1)
-                    sns.heatmap(value_['main'][:, np.newaxis], ax=ax2)
 
                 model_ew[f_for_y][t] = np.sum(label_y * scale) / np.sum(scale)
                 model_mw[f_for_y][t] = np.sum(label_y * mc * scale) / np.sum(mc * scale)
@@ -333,6 +327,30 @@ class Performance:
                     model_mw['wgt'].loc[:, 'new'] = 0
                     model_mw['wgt'].loc[assets, 'new'] = mc * scale / np.sum(mc * scale)
                     self.calculate_cost(t, model_mw, assets, label_y)
+
+            scale_vm = weight_scale(value_['main'], method=ls_method, mc=mc)
+            scale_nl = weight_scale(add_info['next_label'], method=ls_method, mc=mc)
+            label_main[:len(assets), i] = np.array(scale_nl[np.argsort(scale_nl)])
+            predvalue_main[:len(assets), i] = np.array(scale_vm[np.argsort(scale_nl)])
+
+        heatmap_test = True
+        if heatmap_test is True:
+            import seaborn as sns
+            fig = plt.figure()
+            ax1 = fig.add_subplot(121)
+            ax2 = fig.add_subplot(122)
+            sns.heatmap(label_main, ax=ax1)
+            sns.heatmap(predvalue_main, ax=ax2)
+
+            if file_nm is None:
+                save_file_name = '{}/{}'.format(save_dir, '_heatmap.png')
+            else:
+                save_dir_v = os.path.join(save_dir, 'main')
+                os.makedirs(save_dir_v, exist_ok=True)
+                file_nm_v = file_nm.replace(file_nm[-4:], "_{}_heatmap{}".format(f_, file_nm[-4:]))
+                save_file_name = '{}/{}'.format(save_dir_v, file_nm_v)
+
+            fig.savefig(save_file_name)
 
         for f_ in features_for_plot:
             f_for_y = ('y' if f_ == 'main' else f_)
