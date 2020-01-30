@@ -1554,8 +1554,8 @@ class DataGeneratorDynamic:
             macro_path = './data/kr_macro_daily.csv'
             ivol_path = './data/kr_ivol.csv'
 
-            if os.path.exists(ivol_path):
-                add_path['ivol'] = ivol_path
+            # if os.path.exists(ivol_path):
+            #     add_path['ivol'] = ivol_path
 
             if univ_type == 'selected':
                 univ_path = './data/kr_factor_wgt.csv'  # [work_m / univ_nm / gicode / infocode / wgt] # monthly
@@ -1735,7 +1735,9 @@ class DataGeneratorDynamic:
 
         # mc_adj_y
         wgt_arr = np.abs(mkt_arr_dict['mktcap']) / np.sum(np.abs(mkt_arr_dict['mktcap']), axis=1, keepdims=True)
-        mkt_arr_dict['wlogp'] = features_cls.get_weighted_arr(logp_arr, wgt_arr)
+        mkt_arr_dict['wlogy'] = features_cls.get_weighted_arr(logp_arr, wgt_arr)
+        mkt_arr_dict['wlogy'] = np.argsort(mkt_arr_dict['wlogy'], axis=1)
+        mkt_arr_dict['wlogy'] = (mkt_arr_dict['wlogy'] - np.mean(mkt_arr_dict['wlogy'], axis=1, keepdims=True)) / (np.std(mkt_arr_dict['wlogy'], axis=1, ddof=1, keepdims=True) + 1e-6)
 
         # calculate features
         features_dict, labels_dict = features_cls.calc_features(logp_arr, debug=debug)
@@ -1747,8 +1749,10 @@ class DataGeneratorDynamic:
                 calc_list = ['nmturnover_0', 'tsturnover_0']
             elif key == 'ivol':
                 calc_list = ['nmivol_0']
-            elif key == 'wlogp':
+            elif key == 'wlogy':
                 calc_list = ['wlogy_0', 'nmwlogy_0']
+            else:
+                continue
 
             f_, l_ = features_cls.calc_features(mkt_arr_dict[key], debug=debug, calc_list=calc_list)
             features_dict.update(f_)

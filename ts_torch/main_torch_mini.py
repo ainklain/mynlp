@@ -18,13 +18,80 @@ from ts_torch import torch_util_mini as tu
 
 
 def run2():
-    use_swa = True
-    for use_macro in [False]:
+    use_macro, use_swa = False, False
+    run_weekend(1, use_macro, use_swa,
+                ['nmwlogy', 'nmir', 'logp', 'nmlogy', 'nmstd', 'pos_20'],
+                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],},
+                                'size_base': {'nmsize': [0]},
+                                'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
+                                # 'ivol_base': {'nmivol': [0]},
+                                },
+                 'classification': {'logp_base':{'pos': [20]}}})
+
+    run_weekend(2, use_macro, use_swa,
+                ['nmlogy'],
+                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],},
+                                'size_base': {'nmsize': [0]},
+                                'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
+                                },
+                 'classification': {'logp_base':{'pos': [20]}}})
         #
-        run_weekend(10, use_macro, use_swa,
-                    ['nmlogy'],
-                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},},
-                     'classification': {'logp_base': {'pos': [20]}}})
+
+    run_weekend(3, use_macro, use_swa,
+                ['nmir'],
+                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],},
+                                'size_base': {'nmsize': [0]},
+                                'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
+                                },
+                 'classification': {'logp_base':{'pos': [20]}}})
+
+    run_weekend(4, use_macro, use_swa,
+                ['nmwlogy'],
+                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],},
+                                'size_base': {'nmsize': [0]},
+                                'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
+                                },
+                 'classification': {'logp_base':{'pos': [20]}}})
+
+    run_weekend(5, use_macro, use_swa,
+                ['nmwlogy', 'nmsize'],
+                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],},
+                                'size_base': {'nmsize': [0]},
+                                'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
+                                },
+                 'classification': {'logp_base':{'pos': [20]}}})
+
+    run_weekend(6, use_macro, use_swa,
+                ['nmlogy', 'nmsize'],
+                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20], },
+                                'size_base': {'nmsize': [0]},
+                                'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
+                                },
+                 'classification': {'logp_base': {'pos': [20]}}})
+
+    run_weekend(7, use_macro, use_swa,
+                ['nmwlogy'],
+                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],},
+                                'size_base': {'nmsize': [0]},
+                                'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
+                                },
+                 'classification': {'logp_base':{'pos': [20]}}})
+
+    run_weekend(8, use_macro, use_swa,
+                ['nmir', 'nmsize'],
+                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],},
+                                'size_base': {'nmsize': [0]},
+                                'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
+                                },
+                 'classification': {'logp_base':{'pos': [20]}}})
 
 
 
@@ -188,7 +255,7 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
     else:
         configs.f_name = '{}_{}_nswa_r00{}'.format(country, k_days, i)
 
-    configs.early_stopping_count = 20
+    configs.early_stopping_count = 2
     configs.learning_rate = 5e-4
     configs.update_comment = 'single pred per task'
     config_str = configs.export()
