@@ -32,6 +32,23 @@ def run():
     use_swa = True
     use_macro = False
     for use_swa in [False, True]:
+        run_weekend(15, use_macro, use_swa,
+                    ['nmivol'],
+                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
+                                    'size_base': {'nmsize': [0]},
+                                    'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                    'ivol_base': {'nmivol': [0]}
+                                    },
+                     'classification': {'logp_base': {'pos': [20]}}})
+
+        run_weekend(16, use_macro, use_swa,
+                    ['nmlogy', 'nmivol'],
+                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
+                                    'size_base': {'nmsize': [0]},
+                                    'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                    'ivol_base': {'nmivol': [0]}
+                                    },
+                     'classification': {'logp_base': {'pos': [20]}}})
         #
         run_weekend(11, use_macro, use_swa,
                     ['nmstd'],
@@ -58,16 +75,22 @@ def run():
                      'classification': {'logp_base':{'pos': [20]}}})
 
         run_weekend(14, use_macro, use_swa,
-                    ['pos'],
-                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], },
+                    ['pos_20'],
+                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'ir': [20]},
                                     'size_base': {'nmsize': [0]},
                                     'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                    'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]}
                                     },
                      'classification': {'logp_base': {'pos': [20]}}})
 
         run_weekend(1, use_macro, use_swa,
-                    ['logp', 'nmlogy', 'nmstd', 'pos_20'],
-                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},},
+                    ['nmwlogy', 'nmir', 'logp', 'nmlogy', 'nmstd', 'pos_20'],
+                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],},
+                                    'size_base': {'nmsize': [0]},
+                                    'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                    'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
+                                    'ivol_base': {'nmivol': [0]},
+                                    },
                      'classification': {'logp_base':{'pos': [20]}}})
 
         #
@@ -89,14 +112,14 @@ def run():
                      'classification': {'logp_base':{'pos': [20]}}})
         #
         run_weekend(5, use_macro, use_swa,
-                    ['logp_0', 'nmlogy_20', 'nmstd_20', 'pos_20'],
+                    ['logp', 'nmlogy', 'nmstd', 'pos_20'],
                     {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
                                     'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
                                     },
                      'classification': {'logp_base':{'pos': [20]}}})
 
         run_weekend(6, use_macro, use_swa,
-                    ['logp_0', 'nmlogy_20', 'nmstd_20', 'pos_20'],
+                    ['logp', 'nmlogy', 'nmstd', 'pos_20'],
                     {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
                                     'size_base': {'nmsize': [0]},
                                     'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
@@ -104,7 +127,7 @@ def run():
                      'classification': {'logp_base':{'pos': [20]}}})
 
         run_weekend(7, use_macro, use_swa,
-                    ['nmlogy_20'],
+                    ['nmlogy'],
                     {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20],},
                                     'size_base': {'nmsize': [0]},
                                     'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
@@ -161,11 +184,11 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
     configs.n_heads = 8
     # configs.f_name ='testtesttes_04'
     if use_swa:
-        configs.f_name = '{}_{}_swa_r0{}'.format(country, k_days, i)
+        configs.f_name = '{}_{}_swa_r00{}'.format(country, k_days, i)
     else:
-        configs.f_name = '{}_{}_nswa_r0{}'.format(country, k_days, i)
+        configs.f_name = '{}_{}_nswa_r00{}'.format(country, k_days, i)
 
-    configs.early_stopping_count = 5
+    configs.early_stopping_count = 20
     configs.learning_rate = 5e-4
     configs.update_comment = 'single pred per task'
     config_str = configs.export()

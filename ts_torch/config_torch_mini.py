@@ -33,7 +33,7 @@ class Config:
         self.use_beta = False
         self.univ_type = 'selected'     # all / selected
         self.balancing_method = 'nothing'  # each / once / nothing
-        self.weight_scheme = 'mw'       # mw / ew
+        self.weight_scheme = 'ew'       # mw / ew
         self.size_encoding = False          # decoder input에 size_value add할지 여부
         self.app_rate = 1.     # 적용 비율
         # # features info
@@ -77,10 +77,11 @@ class Config:
 
         # additional features
 
-        self.possible_func = {'logp_base': ['logp', 'logy', 'std', 'stdnew', 'pos', 'mdd', 'fft', 'cslogy', 'csstd', 'nmlogy', 'nmstd', 'tsnormal', 'csnormal', 'value'],
+        self.possible_func = {'logp_base': ['logp', 'logy', 'std', 'stdnew', 'pos', 'mdd', 'fft', 'cslogy', 'csstd', 'nmlogy', 'nmstd', 'tsnormal', 'csnormal', 'value', 'ir', 'nmir'],
                               'size_base': ['nmsize'],
                               'turnover_base': ['nmturnover', 'tsturnover'],
-                              'ivol_base': ['nmivol']}
+                              'ivol_base': ['nmivol'],
+                              'wlogy_base': ['wlogy', 'nmwlogy']}
         # macro
         # TODO: 전체 데이터 (파일 저장용 - 변수명 및 위치 변경)
         self.macro_dict = {
@@ -119,7 +120,7 @@ class Config:
             self.lr_init = 0.01
             self.momentum = 0.9  # SGD momentum
             self.wd = 1e-4  # weight decay
-            self.swa_lr = 0.05
+            self.swa_lr = 0.005
             self.swa_start = 6
             self.swa_c_epochs = 1
             self.eval_freq = 5
@@ -287,10 +288,15 @@ class Config:
         self.embedding_size = len(self.key_list_with_macro)
 
     def get_main_feature(self, feature):
-        if feature in ['logp', 'nmsize', 'nmturnover', 'tsturnover', 'nmivol', 'value', 'tsnormal', 'csnormal']:
+        if feature in ['logp', 'nmsize', 'nmturnover', 'tsturnover', 'nmivol', 'value', 'tsnormal', 'csnormal', 'nmwlogy', 'wlogy']:
             return '{}_0'.format(feature)
         elif feature in ['fft']:
             return '{}_100'.format(feature)
+        elif feature[:3] == 'pos':
+            if len(feature) == 3:
+                return '{}_{}'.format(feature, self.k_days)
+            else:
+                return feature
         else:
             return '{}_{}'.format(feature, self.k_days)
 

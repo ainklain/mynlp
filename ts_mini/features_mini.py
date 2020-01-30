@@ -107,23 +107,23 @@ class FeatureNew:
             label_ = data_arr[self.m_days:][self.delay_days:]
         return data_, label_
 
-    def calc_func_size(self, arr):
-        calc_length, m_days, k_days, delay_days = self.calc_length, self.m_days, self.k_days, self.delay_days
-        k_days_adj = k_days + delay_days
-        result = arr_to_normal(arr[calc_length:])
-        result[np.isnan(result)] = 0   # TODO: 임시로 nan값 0처리
-        feature, label = self.split_data_label(result)
-
-        if label is None:
-            label_ = None
-        # label 산출을 위한 최소한의 데이터가 없는 경우 (ex. predict)
-        else:
-            if len(label) <= 1:
-                label_ = None
-            else:
-                label_ = label[1]
-
-        return feature[::self.sampling_days], label_
+    # def calc_func_size(self, arr):
+    #     calc_length, m_days, k_days, delay_days = self.calc_length, self.m_days, self.k_days, self.delay_days
+    #     k_days_adj = k_days + delay_days
+    #     result = arr_to_normal(arr[calc_length:])
+    #     result[np.isnan(result)] = 0   # TODO: 임시로 nan값 0처리
+    #     feature, label = self.split_data_label(result)
+    #
+    #     if label is None:
+    #         label_ = None
+    #     # label 산출을 위한 최소한의 데이터가 없는 경우 (ex. predict)
+    #     else:
+    #         if len(label) <= 1:
+    #             label_ = None
+    #         else:
+    #             label_ = label[1]
+    #
+    #     return feature[::self.sampling_days], label_
 
     def calc_func(self, arr, feature_nm, debug=False):
 
@@ -152,6 +152,10 @@ class FeatureNew:
             result = std_nd(arr, n)[calc_length:]
             if debug:
                 result_debug = std_nd(arr_debug, n)[calc_length:]
+        elif func_nm == 'ir':
+            result = np.exp(log_y_nd(arr, n)[calc_length:]) / (std_nd(arr, n)[calc_length:] + 1e-6)
+            if debug:
+                result_debug = np.exp(log_y_nd(arr_debug, n)[calc_length:]) / (std_nd(arr_debug, n)[calc_length:] + 1e-6)
         elif func_nm == 'stdnew':
             result = std_nd_new(arr, n)[calc_length:]
             if debug:
@@ -190,16 +194,20 @@ class FeatureNew:
             result = arr_to_normal(std_nd_new(arr, n)[calc_length:])
             if debug:
                 result_debug = arr_to_normal(std_nd_new(arr_debug, n)[calc_length:])
+        elif func_nm == 'nmir':
+            result = arr_to_normal(np.exp(log_y_nd(arr, n)[calc_length:]) / (std_nd(arr, n)[calc_length:] + 1e-6))
+            if debug:
+                result_debug = arr_to_normal(np.exp(log_y_nd(arr_debug, n)[calc_length:]) / (std_nd(arr_debug, n)[calc_length:] + 1e-6))
 
         # arr : size_arr   TODO: arr Type ISSUE
-        elif func_nm in ['nmsize', 'nmturnover', 'nmivol', 'csnormal']:
+        elif func_nm in ['nmsize', 'nmturnover', 'nmivol', 'csnormal', 'nmwlogy']:
             result = arr_to_normal(arr[calc_length:])
             result[np.isnan(result)] = 0  # TODO: 임시로 nan값 0처리
             if debug:
                 result_debug = arr_to_normal(arr_debug[calc_length:])
                 result_debug[np.isnan(result_debug)] = 0  # TODO: 임시로 nan값 0처리
 
-        elif func_nm in ['value']:
+        elif func_nm in ['value', 'wlogy']:
             result = arr[calc_length:]
             result[np.isnan(result)] = 0  # TODO: 임시로 nan값 0처리
             if debug:
@@ -255,6 +263,10 @@ class FeatureNew:
                 features_dict[nm], labels_dict[nm] = self.calc_func(arr, nm, debug)
 
         return features_dict, labels_dict
+
+    def get_weighted_arr(self, logp_arr, wgt_arr):
+        result = log_y_nd(logp_arr, self.k_days) * wgt_arr
+        return result
 
     def labels_for_mtl(self, features_list, labels, size_factor, importance_wgt):
         labels_mtl = dict()

@@ -902,9 +902,10 @@ class TSModel(Base):
         predict, dec_self_attns, dec_enc_attns = self.decoder(dec_in, output_seq_size, enc_in, enc_out, return_attn)
 
         if self.weight_scheme == 'mw':
-            adj_weight = labels_mtl['size_rnk'] * 2.  # size_rnk: 0~1사이 랭크
+            adj_weight = torch.exp(labels_mtl['size_rnk'] * 2.) / torch.sum(torch.exp(labels_mtl['size_rnk'] * 2.))   # size_rnk: 0~1사이 랭크
+
         else:
-            adj_weight = 1.
+            adj_weight = torch.ones_like(labels_mtl['size_rnk'])
 
         if labels_mtl.get('importance_wgt') is not None:  # TODO: MAML에서 정의 안됨
             adj_importance = labels_mtl['importance_wgt']

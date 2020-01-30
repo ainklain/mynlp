@@ -105,6 +105,23 @@ def schedule(epoch, configs):
 
 # SWA end
 
+def cyclical_lr(stepsize, min_lr=3e-4, max_lr=3e-3):
+
+    # Scaler: we can adapt this if we do not want the triangular CLR
+    scaler = lambda x: 1.
+
+    # Lambda function to calculate the LR
+    lr_lambda = lambda it: min_lr + (max_lr - min_lr) * relative(it, stepsize)
+
+    # Additional function to see where on the cycle we are
+    def relative(it, stepsize):
+        cycle = math.floor(1 + it / (2 * stepsize))
+        x = abs(it / stepsize - 2 * cycle + 1)
+        return max(0, (1 - x)) * scaler(cycle)
+
+    return lr_lambda
+
+
 
 def normalize(x):
     return (x - np.mean(x)) / np.std(x, ddof=1)
@@ -717,9 +734,9 @@ class DataScheduler:
 
             if ep % 2 == 0:
                 self.logger.info("[train] [Ep %d] plot", ep)
-                self.test_plot(performer, model, ep, is_monthly=False)
-                self.test_plot(performer, model, ep, is_monthly=True)
-                # self.test_plot(performer, model, ep, is_monthly=True, is_insample=True)
+                # self.test_plot(performer, model, ep, is_monthly=False)
+                # self.test_plot(performer, model, ep, is_monthly=True)
+                self.test_plot(performer, model, ep, is_monthly=True, is_insample=True)
 
             self.logger.info("[train] [Ep %d] model evaluation ...", ep)
             eval_loss = self.step_epoch(ep, model, optimizer, is_train=False)
@@ -767,9 +784,9 @@ class DataScheduler:
             if ep == 0 or ep % eval_freq == 0:
                 self.logger.info("[train] [Ep %d] plot", ep)
                 # self.test_plot(performer, model, ep, is_monthly=False)
-                self.test_plot(performer, model, ep, is_monthly=True)
-                self.test_plot(performer, model_swa, ep, is_monthly=True, nickname='_swa')
-                # self.test_plot(performer, model, ep, is_monthly=True, is_insample=True)
+                # self.test_plot(performer, model, ep, is_monthly=True)
+                self.test_plot(performer, model_swa, ep, is_monthly=True, nickname='_swa', is_insample=True)
+                self.test_plot(performer, model, ep, is_monthly=True, is_insample=True)
 
             self.logger.info("[train] [Ep %d] model evaluation ...", ep)
             if ep % eval_freq == 0 or ep == num_epochs - 1:
@@ -782,17 +799,18 @@ class DataScheduler:
                 swa_n += 1
                 if ep % eval_freq == 0 or ep == num_epochs - 1:
                     swa_eval_loss = self.step_epoch(ep, model_swa, optimizer, is_train=False, use_swa=True)
+                    print('eval: {} swa: {}'.format(eval_loss, swa_eval_loss))
                 else:
                     swa_eval_loss = None
 
-                print('eval: {} swa: {}'.format(eval_loss, swa_eval_loss))
 
-            if eval_loss > min_eval_loss:
-                stop_count += 1
-            else:
-                model.save_to_optim()
-                min_eval_loss = eval_loss
-                stop_count = 0
+            if ep % eval_freq == 0 or ep == num_epochs - 1:
+                if eval_loss > min_eval_loss:
+                    stop_count += 1
+                else:
+                    model.save_to_optim()
+                    min_eval_loss = eval_loss
+                    stop_count = 0
 
             self.logger.info("[train] [Ep %d] count: %d/%d", ep, stop_count, early_stopping_count)
             self.logger_train.info("[train] [Ep %d] count: %d/%d", ep, stop_count, early_stopping_count)
@@ -1049,8 +1067,8 @@ class DataScheduler:
 
         performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}{}.png'.format(ep, nickname)
                        , ylog=False, ls_method='ls_5_20', plot_all_features=True)
-        performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}-mc{}.png'.format(ep, nickname)
-                       , ylog=False, ls_method='ls-mc_5_20', plot_all_features=True)
+        # performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}-mc{}.png'.format(ep, nickname)
+        #                , ylog=False, ls_method='ls-mc_5_20', plot_all_features=True)
 
     @done_decorator_with_logger
     def test_plot_maml(self, performer, model, ep, is_monthly, is_insample=False):
@@ -1522,7 +1540,7 @@ class DataGeneratorDynamic:
 
         data_type = configs.data_type
         univ_type = configs.univ_type
-        use_macro = configs.use_macro
+        self.use_macro = configs.use_macro
         min_size_port = configs.min_size_port
 
         add_path = dict()
@@ -1536,8 +1554,8 @@ class DataGeneratorDynamic:
             macro_path = './data/kr_macro_daily.csv'
             ivol_path = './data/kr_ivol.csv'
 
-            # if os.path.exists(ivol_path):
-            #     add_path['ivol'] = ivol_path
+            if os.path.exists(ivol_path):
+                add_path['ivol'] = ivol_path
 
             if univ_type == 'selected':
                 univ_path = './data/kr_factor_wgt.csv'  # [work_m / univ_nm / gicode / infocode / wgt] # monthly
@@ -1550,7 +1568,7 @@ class DataGeneratorDynamic:
         self.set_return_and_date(return_path)
         self.set_marketdata(market_path, **add_path)
         self.set_univ(univ_path, date_mapping_path, min_size_port)
-        if use_macro:
+        if self.use_macro:
             self.set_macrodata(macro_path)
 
     def set_return_and_date(self, return_path, min_stocks_per_day=10):
@@ -1715,6 +1733,10 @@ class DataGeneratorDynamic:
             assert logp_arr.shape == mkt_arr.shape
             mkt_arr_dict[mkt_f] = mkt_arr
 
+        # mc_adj_y
+        wgt_arr = np.abs(mkt_arr_dict['mktcap']) / np.sum(np.abs(mkt_arr_dict['mktcap']), axis=1, keepdims=True)
+        mkt_arr_dict['wlogp'] = features_cls.get_weighted_arr(logp_arr, wgt_arr)
+
         # calculate features
         features_dict, labels_dict = features_cls.calc_features(logp_arr, debug=debug)
 
@@ -1725,6 +1747,8 @@ class DataGeneratorDynamic:
                 calc_list = ['nmturnover_0', 'tsturnover_0']
             elif key == 'ivol':
                 calc_list = ['nmivol_0']
+            elif key == 'wlogp':
+                calc_list = ['wlogy_0', 'nmwlogy_0']
 
             f_, l_ = features_cls.calc_features(mkt_arr_dict[key], debug=debug, calc_list=calc_list)
             features_dict.update(f_)
@@ -1735,6 +1759,7 @@ class DataGeneratorDynamic:
         spot_dict['asset_list'] = univ_list
         spot_dict['mktcap'] = size_code.loc[univ_list]
         spot_dict['size_rnk'] = spot_dict['mktcap'].rank() / len(spot_dict['mktcap'])
+        spot_dict['mc_wgt'] = size_code.loc[univ_list] / size_code.loc[univ_list].sum()
 
         # macro
         if self.use_macro:
