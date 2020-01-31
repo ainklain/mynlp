@@ -198,9 +198,13 @@ class FeatureNew:
             result = arr_to_normal(np.exp(log_y_nd(arr, n)[calc_length:]) / (std_nd(arr, n)[calc_length:] + 1e-6))
             if debug:
                 result_debug = arr_to_normal(np.exp(log_y_nd(arr_debug, n)[calc_length:]) / (std_nd(arr_debug, n)[calc_length:] + 1e-6))
+        elif func_nm == 'nmirnew':
+            result = arr_to_normal(np.exp(log_y_nd(arr, n)[calc_length:]) / (std_nd_new(arr, n)[calc_length:] + 1e-6))
+            if debug:
+                result_debug = arr_to_normal(np.exp(log_y_nd(arr_debug, n)[calc_length:]) / (std_nd_new(arr_debug, n)[calc_length:] + 1e-6))
 
         # arr : size_arr   TODO: arr Type ISSUE
-        elif func_nm in ['nmsize', 'nmturnover', 'nmivol', 'csnormal', 'nmwlogy']:
+        elif func_nm in ['nmsize', 'nmturnover', 'nmivol', 'csnormal', 'nmwlogy', 'nmwlogyrnk']:
             result = arr_to_normal(arr[calc_length:])
             result[np.isnan(result)] = 0  # TODO: 임시로 nan값 0처리
             if debug:
@@ -265,8 +269,12 @@ class FeatureNew:
         return features_dict, labels_dict
 
     def get_weighted_arr(self, logp_arr, wgt_arr):
-        result = log_y_nd(logp_arr, self.k_days) * wgt_arr
-        return result
+        delayed_wgt_arr = np.ones_like(wgt_arr)
+        delayed_wgt_arr[self.k_days:, :] = wgt_arr[:-self.k_days, :]
+        wlogy = np.exp(log_y_nd(logp_arr, self.k_days)) * wgt_arr
+        # wstd = std_nd(logp_arr, self.k_days) * wgt_arr
+        # wstdnew = std_nd_new(logp_arr, self.k_days) * wgt_arr
+        return wlogy #, wstd, wstdnew
 
     def labels_for_mtl(self, features_list, labels, size_factor, importance_wgt):
         labels_mtl = dict()

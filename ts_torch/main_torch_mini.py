@@ -17,6 +17,36 @@ from ts_torch.performance_torch_mini import Performance
 from ts_torch import torch_util_mini as tu
 
 
+def run3():
+    use_macro, use_swa = False, False
+    run_weekend(1111, use_macro, use_swa,
+                ['nmwlogy'],
+                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],
+                                              'nmirnew': [20], },
+                                'size_base': {'nmsize': [0]},
+                                'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
+                                },
+                 'classification': {'logp_base': {'pos': [20]}}})
+    run_weekend(1112, use_macro, use_swa,
+                ['nmir'],
+                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],
+                                              'nmirnew': [20], },
+                                'size_base': {'nmsize': [0]},
+                                'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
+                                },
+                 'classification': {'logp_base': {'pos': [20]}}})
+    run_weekend(1113, use_macro, use_swa,
+                ['nmirnew'],
+                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],
+                                              'nmirnew': [20], },
+                                'size_base': {'nmsize': [0]},
+                                'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
+                                },
+                 'classification': {'logp_base': {'pos': [20]}}})
+
 def run2():
     use_macro, use_swa = False, False
     run_weekend(1, use_macro, use_swa,
@@ -227,10 +257,13 @@ def run():
 
 
 def example():
-    model_predictor_list = ['nmlogy', 'nmsize']
-    features_structure = {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], },
+    model_predictor_list = ['nmwlogy']
+    features_structure = {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmirnew': [20]},
                     'size_base': {'nmsize': [0]},
                     'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                        'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
+                        # 'wlogyrnk_base': {'nmwlogyrnk': [0]},
+
                     },
      'classification': {'logp_base': {'pos': [20]}}}
 
@@ -238,7 +271,7 @@ def example():
 
 
 def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure):
-    # i=111; use_macro = False; use_swa=True; model_predictor_list, features_structure=example()
+    # i=111; use_macro = False; use_swa=False; model_predictor_list, features_structure=example()
 
     configs = Config(use_macro=use_macro, use_swa=use_swa)
 

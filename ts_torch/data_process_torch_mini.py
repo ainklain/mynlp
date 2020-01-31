@@ -10,9 +10,7 @@ import numpy as np
 import os
 
 
-
 # SWA start
-
 
 def adjust_learning_rate(optimizer, lr):
     for param_group in optimizer.param_groups:
@@ -596,7 +594,7 @@ class DataScheduler:
 
             # plot용
             idx_y = features_list.index(c.label_feature)
-            tgt_add_info['next_y'] = tgt_dout[:, 0, idx_y]
+            tgt_add_info['next_y'] = np.exp(tgt_dout[:, 0, idx_y]) - 1.
 
             spt_list.append([spt_ein, spt_din, spt_dout, spt_add_info])
             tgt_list.append([tgt_ein, tgt_din, tgt_dout, tgt_add_info])
@@ -680,7 +678,7 @@ class DataScheduler:
                 new_din_t[:, 0, :] = din_t[:, 0, :]
 
                 # label 값 (t+1수익률)
-                add_info['next_y'] = dout_t[:, 0, idx_y]
+                add_info['next_y'] = np.exp(dout_t[:, 0, idx_y]) - 1.
                 add_info['next_label'] = dout_t[:, 0, idx_pred]
 
                 if c.size_encoding:
@@ -1736,8 +1734,8 @@ class DataGeneratorDynamic:
         # mc_adj_y
         wgt_arr = np.abs(mkt_arr_dict['mktcap']) / np.sum(np.abs(mkt_arr_dict['mktcap']), axis=1, keepdims=True)
         mkt_arr_dict['wlogy'] = features_cls.get_weighted_arr(logp_arr, wgt_arr)
-        mkt_arr_dict['wlogy'] = np.argsort(mkt_arr_dict['wlogy'], axis=1)
-        mkt_arr_dict['wlogy'] = (mkt_arr_dict['wlogy'] - np.mean(mkt_arr_dict['wlogy'], axis=1, keepdims=True)) / (np.std(mkt_arr_dict['wlogy'], axis=1, ddof=1, keepdims=True) + 1e-6)
+        order = np.argsort(mkt_arr_dict['wlogy'], axis=1)
+        mkt_arr_dict['wlogyrnk'] = np.argsort(order, axis=1)
 
         # calculate features
         features_dict, labels_dict = features_cls.calc_features(logp_arr, debug=debug)
@@ -1751,6 +1749,8 @@ class DataGeneratorDynamic:
                 calc_list = ['nmivol_0']
             elif key == 'wlogy':
                 calc_list = ['wlogy_0', 'nmwlogy_0']
+            elif key == 'wlogyrnk':
+                calc_list = ['nmwlogyrnk_0']
             else:
                 continue
 

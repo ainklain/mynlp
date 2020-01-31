@@ -77,11 +77,13 @@ class Config:
 
         # additional features
 
-        self.possible_func = {'logp_base': ['logp', 'logy', 'std', 'stdnew', 'pos', 'mdd', 'fft', 'cslogy', 'csstd', 'nmlogy', 'nmstd', 'tsnormal', 'csnormal', 'value', 'ir', 'nmir'],
+        self.possible_func = {'logp_base': ['logp', 'logy', 'std', 'stdnew', 'pos', 'mdd', 'fft', 'cslogy', 'csstd', 'nmlogy', 'nmstd', 'tsnormal', 'csnormal', 'value', 'ir', 'nmir', 'nmirnew'],
                               'size_base': ['nmsize'],
                               'turnover_base': ['nmturnover', 'tsturnover'],
                               'ivol_base': ['nmivol'],
-                              'wlogy_base': ['wlogy', 'nmwlogy']}
+                              'wlogy_base': ['wlogy', 'nmwlogy'],
+                              'wlogyrnk_base': ['nmwlogyrnk'],
+                              }
         # macro
         # TODO: 전체 데이터 (파일 저장용 - 변수명 및 위치 변경)
         self.macro_dict = {
@@ -288,7 +290,7 @@ class Config:
         self.embedding_size = len(self.key_list_with_macro)
 
     def get_main_feature(self, feature):
-        if feature in ['logp', 'nmsize', 'nmturnover', 'tsturnover', 'nmivol', 'value', 'tsnormal', 'csnormal', 'nmwlogy', 'wlogy']:
+        if feature in ['logp', 'nmsize', 'nmturnover', 'tsturnover', 'nmivol', 'value', 'tsnormal', 'csnormal', 'nmwlogy', 'wlogy', 'nmwlogyrnk']:
             return '{}_0'.format(feature)
         elif feature in ['fft']:
             return '{}_100'.format(feature)

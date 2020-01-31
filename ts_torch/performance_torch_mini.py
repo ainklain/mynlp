@@ -208,7 +208,7 @@ class Performance:
                          , ylog=False
                          , ls_method='ls_5_20'
                          , plot_all_features=True):
-        # self=ds; ep=0; is_monthly = False; is_insample=False;  dataloader_set=self._dataloader('test', is_monthly=False);test_out_path = os.path.join(self.data_out_path, '{}/{}'.format(self.base_idx, 'single_test'))
+        # self=ds; ep=0; is_monthly = False;  dataloader_set=self._dataloader('test_insample2', is_monthly=is_monthly);test_out_path = os.path.join(self.data_out_path, '{}/{}'.format(self.base_idx, 'single_test'))
         # self = performer;save_dir = test_out_path; file_nm = 'test_{}.png'.format(0); ylog = False; ls_method = 'ls-mc_5_20'; plot_all_features = True
 
         c = self.configs
