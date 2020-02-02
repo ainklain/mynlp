@@ -19,33 +19,58 @@ from ts_torch import torch_util_mini as tu
 
 def run3():
     use_macro, use_swa = False, False
-    run_weekend(1111, use_macro, use_swa,
-                ['nmwlogy'],
-                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],
-                                              'nmirnew': [20], },
-                                'size_base': {'nmsize': [0]},
-                                'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
-                                'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
-                                },
-                 'classification': {'logp_base': {'pos': [20]}}})
-    run_weekend(1112, use_macro, use_swa,
-                ['nmir'],
-                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],
-                                              'nmirnew': [20], },
-                                'size_base': {'nmsize': [0]},
-                                'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
-                                'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
-                                },
-                 'classification': {'logp_base': {'pos': [20]}}})
-    run_weekend(1113, use_macro, use_swa,
-                ['nmirnew'],
-                {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],
-                                              'nmirnew': [20], },
-                                'size_base': {'nmsize': [0]},
-                                'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
-                                'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
-                                },
-                 'classification': {'logp_base': {'pos': [20]}}})
+    for country in ['us', 'kr']:
+        run_weekend(1111, use_macro, use_swa,
+                    ['nmir'],
+                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],
+                                                  'nmirnew': [20], },
+                                    'size_base': {'nmsize': [0]},
+                                    'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                    'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
+                                    },
+                     'classification': {'logp_base': {'pos': [20]}}},
+                    country)
+        run_weekend(1112, use_macro, use_swa,
+                    ['nmwlogy'],
+                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],
+                                                  'nmirnew': [20], },
+                                    'size_base': {'nmsize': [0]},
+                                    'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                    'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
+                                    },
+                     'classification': {'logp_base': {'pos': [20]}}},
+                    country)
+        run_weekend(1113, use_macro, use_swa,
+                    ['nmirnew'],
+                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],
+                                                  'nmirnew': [20], },
+                                    'size_base': {'nmsize': [0]},
+                                    'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                    'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
+                                    },
+                     'classification': {'logp_base': {'pos': [20]}}},
+                    country)
+        run_weekend(1114, use_macro, use_swa,
+                    ['nmirnew', 'nmsize'],
+                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],
+                                                  'nmirnew': [20], },
+                                    'size_base': {'nmsize': [0]},
+                                    'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                    'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
+                                    },
+                     'classification': {'logp_base': {'pos': [20]}}},
+                    country)
+        run_weekend(1115, use_macro, use_swa,
+                    ['nmir', 'nmsize'],
+                    {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],
+                                                  'nmirnew': [20], },
+                                    'size_base': {'nmsize': [0]},
+                                    'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                                    'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
+                                    },
+                     'classification': {'logp_base': {'pos': [20]}}},
+                    country)
+
 
 def run2():
     use_macro, use_swa = False, False
@@ -257,8 +282,8 @@ def run():
 
 
 def example():
-    model_predictor_list = ['nmwlogy']
-    features_structure = {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmirnew': [20]},
+    model_predictor_list = ['nmir']
+    features_structure = {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20]},
                     'size_base': {'nmsize': [0]},
                     'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
                         'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
@@ -270,25 +295,25 @@ def example():
     return model_predictor_list, features_structure
 
 
-def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure):
-    # i=111; use_macro = False; use_swa=False; model_predictor_list, features_structure=example()
+def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure, country='kr'):
+    # i=113; country='kr'; use_macro = False; use_swa=False; model_predictor_list, features_structure=example()
 
     configs = Config(use_macro=use_macro, use_swa=use_swa)
 
     k_days = 20;
     pred = model_predictor_list[0];
-    country = 'kr';
+    # country = 'kr';
     configs.set_datatype(country + '_stock')
     configs.sampling_days = k_days
     configs.set_kdays(k_days, pred=pred, model_predictor_list=model_predictor_list, features_structure=features_structure)
     configs.n_heads = 8
     # configs.f_name ='testtesttes_04'
     if use_swa:
-        configs.f_name = '{}_{}_swa_r00{}'.format(country, k_days, i)
+        configs.f_name = '{}_{}_swa_d0{}'.format(country, k_days, i)
     else:
-        configs.f_name = '{}_{}_nswa_r00{}'.format(country, k_days, i)
+        configs.f_name = '{}_{}_nswa_d0{}'.format(country, k_days, i)
 
-    configs.early_stopping_count = 2
+    configs.early_stopping_count = 5
     configs.learning_rate = 5e-4
     configs.update_comment = 'single pred per task'
     config_str = configs.export()
@@ -325,6 +350,8 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
     # ds.train_maml(model, optimizer, performer, num_epochs=50, early_stopping_count=configs.early_stopping_count)
 
     while True:
+        model = TSModel(configs, features_cls, weight_scheme=configs.weight_scheme)
+        optimizer = optim.Adam(model.parameters(), lr=configs.learning_rate)
         ds.save(0, model, optimizer)
         if configs.use_maml:
             ds.train_maml(model, optimizer, performer, num_epochs=100)

@@ -516,6 +516,7 @@ class DataScheduler:
                 add_info_temp = add_info.copy()
                 for nm_ in balancing_list:
                     add_info_temp[nm_] = np.array(add_info[nm_], dtype=np.float32).squeeze()
+
                 add_infos.append(add_info_temp)
 
         start_date = self.date_[start_idx]
@@ -595,6 +596,7 @@ class DataScheduler:
             # plot용
             idx_y = features_list.index(c.label_feature)
             tgt_add_info['next_y'] = np.exp(tgt_dout[:, 0, idx_y]) - 1.
+            # tgt_add_info['next_y'] = tgt_dout[:, 0, idx_y]
 
             spt_list.append([spt_ein, spt_din, spt_dout, spt_add_info])
             tgt_list.append([tgt_ein, tgt_din, tgt_dout, tgt_add_info])
@@ -678,7 +680,14 @@ class DataScheduler:
                 new_din_t[:, 0, :] = din_t[:, 0, :]
 
                 # label 값 (t+1수익률)
-                add_info['next_y'] = np.exp(dout_t[:, 0, idx_y]) - 1.
+                # add_info_temp['next_y'] = np.exp(tmp_dout[:, 0, idx_y]) - 1.
+
+                if is_monthly:
+                    print("TEST", np.sum(add_info['next_y'] - (np.exp(dout_t[:, 0, idx_y]) - 1)))
+                add_info['next_y'] = dout_t[:, 0, idx_y]
+                # if not is_monthly:
+                #     add_info['next_y'] = np.exp(dout_t[:, 0, idx_y]) - 1.
+
                 add_info['next_label'] = dout_t[:, 0, idx_pred]
 
                 if c.size_encoding:
@@ -734,6 +743,7 @@ class DataScheduler:
                 self.logger.info("[train] [Ep %d] plot", ep)
                 # self.test_plot(performer, model, ep, is_monthly=False)
                 # self.test_plot(performer, model, ep, is_monthly=True)
+                self.test_plot(performer, model, ep, is_monthly=False, is_insample=True)
                 self.test_plot(performer, model, ep, is_monthly=True, is_insample=True)
 
             self.logger.info("[train] [Ep %d] model evaluation ...", ep)
