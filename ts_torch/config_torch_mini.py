@@ -77,7 +77,7 @@ class Config:
 
         # additional features
 
-        self.possible_func = {'logp_base': ['logp', 'logy', 'std', 'stdnew', 'pos', 'mdd', 'fft', 'cslogy', 'csstd', 'nmlogy', 'nmstd', 'tsnormal', 'csnormal', 'value', 'ir', 'nmir', 'nmirnew'],
+        self.possible_func = {'logp_base': ['logp', 'tsp', 'nmy', 'logy', 'std', 'stdnew', 'pos', 'mdd', 'fft', 'cslogy', 'csstd', 'nmlogy', 'nmstd', 'tsnormal', 'csnormal', 'value', 'ir', 'nmir', 'nmirnew'],
                               'size_base': ['nmsize'],
                               'turnover_base': ['nmturnover', 'tsturnover'],
                               'ivol_base': ['nmivol'],
@@ -290,7 +290,7 @@ class Config:
         self.embedding_size = len(self.key_list_with_macro)
 
     def get_main_feature(self, feature):
-        if feature in ['logp', 'nmsize', 'nmturnover', 'tsturnover', 'nmivol', 'value', 'tsnormal', 'csnormal', 'nmwlogy', 'wlogy', 'nmwlogyrnk']:
+        if feature in ['logp', 'tsp', 'nmsize', 'nmturnover', 'tsturnover', 'nmivol', 'value', 'tsnormal', 'csnormal', 'nmwlogy', 'wlogy', 'nmwlogyrnk']:
             return '{}_0'.format(feature)
         elif feature in ['fft']:
             return '{}_100'.format(feature)

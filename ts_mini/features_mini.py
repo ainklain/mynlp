@@ -144,6 +144,18 @@ class FeatureNew:
             result = arr_to_normal_ts(arr, m_days, calc_length)[calc_length:]
             if debug:
                 result_debug = arr_to_normal_ts(arr_debug, m_days, calc_length)[calc_length:]
+        elif func_nm == 'tsp':
+            arr = np.exp(arr)
+            result = arr_to_normal_ts(arr, m_days, calc_length)[calc_length:]
+            if debug:
+                arr_debug = np.exp(arr_debug)
+                result_debug = arr_to_normal_ts(arr_debug, m_days, calc_length)[calc_length:]
+        elif func_nm == 'nmy':
+            result = log_y_nd(arr, n)[calc_length:]
+            result = arr_to_normal(np.exp(result) - 1.)
+            if debug:
+                result_debug = log_y_nd(arr_debug, n)[calc_length:]
+                result_debug = arr_to_normal(np.exp(result_debug) - 1.)
         elif func_nm == 'logy':
             result = log_y_nd(arr, n)[calc_length:]
             if debug:
@@ -153,9 +165,9 @@ class FeatureNew:
             if debug:
                 result_debug = std_nd(arr_debug, n)[calc_length:]
         elif func_nm == 'ir':
-            result = np.exp(log_y_nd(arr, n)[calc_length:]) / (std_nd(arr, n)[calc_length:] + 1e-6)
+            result = (np.exp(log_y_nd(arr, n)[calc_length:])-1) / (std_nd(arr, n)[calc_length:] + 1e-6)
             if debug:
-                result_debug = np.exp(log_y_nd(arr_debug, n)[calc_length:]) / (std_nd(arr_debug, n)[calc_length:] + 1e-6)
+                result_debug = (np.exp(log_y_nd(arr_debug, n)[calc_length:])-1) / (std_nd(arr_debug, n)[calc_length:] + 1e-6)
         elif func_nm == 'stdnew':
             result = std_nd_new(arr, n)[calc_length:]
             if debug:
@@ -220,7 +232,7 @@ class FeatureNew:
 
         feature, label = self.split_data_label(result)
         if debug:
-            n_error = np.sum(feature - result_debug)
+            n_error = np.sum(np.abs(feature - result_debug) >= 1e-5)
             if n_error != 0:
                 print("[debug: {} nd: {}] data not matched.".format(func_nm, nd))
                 raise AssertionError

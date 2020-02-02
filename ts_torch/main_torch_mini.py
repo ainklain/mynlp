@@ -282,8 +282,8 @@ def run():
 
 
 def example():
-    model_predictor_list = ['nmir']
-    features_structure = {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20]},
+    model_predictor_list = ['nmy']
+    features_structure = {'regression': {'logp_base': {'logp': [0], 'nmy':[20], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20]},
                     'size_base': {'nmsize': [0]},
                     'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
                         'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
