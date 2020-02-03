@@ -19,7 +19,8 @@ from ts_torch import torch_util_mini as tu
 
 def run3():
     use_macro, use_swa = False, False
-    for country in ['us', 'kr']:
+    country = 'kr'
+    for country in ['kr', 'us']:
         run_weekend(1111, use_macro, use_swa,
                     ['nmir'],
                     {'regression': {'logp_base': {'logp': [0], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20],
@@ -282,7 +283,7 @@ def run():
 
 
 def example():
-    model_predictor_list = ['nmy']
+    model_predictor_list = ['nmsize']
     features_structure = {'regression': {'logp_base': {'logp': [0], 'nmy':[20], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20]},
                     'size_base': {'nmsize': [0]},
                     'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
@@ -296,7 +297,7 @@ def example():
 
 
 def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure, country='kr'):
-    # i=113; country='kr'; use_macro = False; use_swa=False; model_predictor_list, features_structure=example()
+    # i=115; country='kr'; use_macro = False; use_swa=False; model_predictor_list, features_structure=example()
 
     configs = Config(use_macro=use_macro, use_swa=use_swa)
 
@@ -309,19 +310,19 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
     configs.n_heads = 8
     # configs.f_name ='testtesttes_04'
     if use_swa:
-        configs.f_name = '{}_{}_swa_d0{}'.format(country, k_days, i)
+        configs.f_name = '{}_{}_swa_e0{}'.format(country, k_days, i)
     else:
-        configs.f_name = '{}_{}_nswa_d0{}'.format(country, k_days, i)
+        configs.f_name = '{}_{}_nswa_e0{}'.format(country, k_days, i)
 
     configs.early_stopping_count = 5
-    configs.learning_rate = 5e-4
+    configs.learning_rate = 5e-3
     configs.update_comment = 'single pred per task'
     config_str = configs.export()
 
 
     features_cls = FeatureNew(configs)
     ds = DataScheduler(configs, features_cls)
-    ds.set_idx(6500)
+    ds.set_idx(8000)
     ds.test_end_idx += 500
 
     os.makedirs(os.path.join(ds.data_out_path), exist_ok=True)

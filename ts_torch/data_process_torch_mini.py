@@ -238,7 +238,9 @@ class DataScheduler:
             data_params['balance_class'] = False
             data_params['label_type'] = 'test_label'        # test: 예측하고자 하는 것만 반영 (k_days)
             decaying_factor = 1.   # 기간별 샘플 중요도
-        elif mode == 'test_insample2':      # train/eval/test 모두 포함
+        elif mode == 'test_insample2':      # train/eval/test 모두 포함 # TODO 원상복구 필요!!
+            # start_idx = self.train_begin_idx + c.retrain_days
+            # end_idx = self.eval_begin_idx
             start_idx = self.eval_begin_idx - c.retrain_days
             end_idx = self.test_end_idx
             data_params['balance_class'] = False
@@ -682,11 +684,11 @@ class DataScheduler:
                 # label 값 (t+1수익률)
                 # add_info_temp['next_y'] = np.exp(tmp_dout[:, 0, idx_y]) - 1.
 
-                if is_monthly:
-                    print("TEST", np.sum(add_info['next_y'] - (np.exp(dout_t[:, 0, idx_y]) - 1)))
-                add_info['next_y'] = dout_t[:, 0, idx_y]
-                # if not is_monthly:
-                #     add_info['next_y'] = np.exp(dout_t[:, 0, idx_y]) - 1.
+                # if is_monthly:
+                #     print("TEST", np.sum(add_info['next_y'] - (np.exp(dout_t[:, 0, idx_y]) - 1)))
+                # add_info['next_y'] = dout_t[:, 0, idx_y]
+                if not is_monthly:
+                    add_info['next_y'] = np.exp(dout_t[:, 0, idx_y]) - 1.
 
                 add_info['next_label'] = dout_t[:, 0, idx_pred]
 
@@ -879,7 +881,8 @@ class DataScheduler:
             mode = 'train'
             model.train()
         else:
-            mode = 'eval'
+            mode = 'eval' # TODO 원상복구 필요!!
+            # mode = 'train'
             model.eval()
 
         if ep == 0:
@@ -901,6 +904,7 @@ class DataScheduler:
                 features_with_noise = {'input': features['input'], 'output': features['output']}
                 labels_with_noise = labels
                 if is_train:
+
                     if self.configs.adversarial_training is True:
                         labels_mtl_noise = self.labels_torch(features_list, labels_with_noise, add_infos)
                         features_with_noise = Noise.adversarial_noise(features_with_noise, labels_mtl_noise, model)
@@ -1074,7 +1078,9 @@ class DataScheduler:
         os.makedirs(test_out_path, exist_ok=True)
 
         performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}{}.png'.format(ep, nickname)
-                       , ylog=False, ls_method='ls_5_20', plot_all_features=True)
+                       , ylog=False, ls_method='ls_5_20', plot_all_features=True, logy=False)
+        performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}-log{}.png'.format(ep, nickname)
+                       , ylog=False, ls_method='ls_5_20', plot_all_features=True, logy=True)
         # performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}-mc{}.png'.format(ep, nickname)
         #                , ylog=False, ls_method='ls-mc_5_20', plot_all_features=True)
 

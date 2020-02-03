@@ -115,7 +115,8 @@ class Performance:
         wgt_.loc[assets, 'old'] = ((1 + label_y) * wgt_.loc[assets, 'new']) / np.sum((1 + label_y) * wgt_.loc[assets, 'new'])
         var_dict['y_w_cost'][t] = np.sum(label_y * wgt_.loc[assets, 'new']) - var_dict['turnover'][t] * self.cost_rate
 
-    def scale_to_wgt(self, base_wgt, scale, rate_, mc, w_method='ew'):
+    def scale_to_wgt(self, base_wgt, scale_, rate_, mc, w_method='ew'):
+        scale = np.copy(scale_)
         port = np.unique(scale)
         if w_method == 'ew':
             scale_normalized = scale / np.sum(scale)
@@ -207,9 +208,9 @@ class Performance:
                          , file_nm='test.png'
                          , ylog=False
                          , ls_method='ls_5_20'
-                         , plot_all_features=True):
+                         , plot_all_features=True, logy=False):
         # self=ds; ep=0; is_monthly = False;  dataloader_set=self._dataloader('test_insample2', is_monthly=is_monthly);test_out_path = os.path.join(self.data_out_path, '{}/{}'.format(self.base_idx, 'single_test'))
-        # self = performer;save_dir = test_out_path; file_nm = 'test_{}.png'.format(0); ylog = False; ls_method = 'ls-mc_5_20'; plot_all_features = True
+        # self = performer;save_dir = test_out_path; file_nm = 'test_{}.png'.format(0); ylog = False; ls_method = 'ls_5_20'; plot_all_features = True
 
         c = self.configs
 
@@ -259,7 +260,10 @@ class Performance:
             t = i // t_stepsize + 1
 
             mc = np.array(add_info['mktcap'], dtype=np.float32).squeeze()
-            label_y = np.array(add_info['next_y'])
+            if not logy:
+                label_y = np.array(add_info['next_y'])
+            else:
+                label_y = np.array(np.log(add_info['next_y'] + 1))
 
             assets = np.array(add_info['asset_list'], dtype=np.float32)
 
@@ -605,7 +609,7 @@ class Performance:
                                             , file_nm='test.png'
                                             , ylog=False
                                             , ls_method='ls_5_20'
-                                            , plot_all_features=True):
+                                            , plot_all_features=True, logy=False):
         # save_dir = test_out_path; file_nm = 'test_{}.png'.format(0); ylog = False; ls_method = 'ls-mc_5_20'; plot_all_features = True
 
         c = self.configs
@@ -661,7 +665,10 @@ class Performance:
             features_t = {'input': features_t['input'].squeeze(0), 'output': features_t['output'].squeeze(0)}
 
             mc = np.array(add_infos_t['mktcap'], dtype=np.float32).squeeze()
-            label_y = np.array(add_infos_t['next_y'], dtype=np.float32).squeeze()
+            if not logy:
+                label_y = np.array(add_infos_t['next_y'], dtype=np.float32).squeeze()
+            else:
+                label_y = np.array(np.log(add_infos_t['next_y'] + 1), dtype=np.float32).squeeze()
 
             assets = np.array(add_infos_t['asset_list'], dtype=np.float32)
 
@@ -984,7 +991,9 @@ class Performance:
                              , ylog=False
                              , ls_method='ls_5_20'
                              , plot_all_features=True
-                             , debug=False):
+                             , debug=False, logy=False):
+        # self=ds; ep=0; is_monthly = True;  dataloader_set=self._dataloader('test_insample2', is_monthly=is_monthly);test_out_path = os.path.join(self.data_out_path, '{}/{}'.format(self.base_idx, 'single_test'))
+        # self = performer;save_dir = test_out_path; file_nm = 'test_{}.png'.format(0); ylog = False; ls_method = 'ls_5_20'; plot_all_features = False
 
         c = self.configs
         rate_ = c.app_rate
@@ -1038,12 +1047,17 @@ class Performance:
         predvalue_main = np.zeros([len(all_assets_list), t_steps])
 
         for i, (features, add_info) in enumerate(zip(*dataloader)):
+            # i = 0; features, add_info = next(iter(zip(*dataloader)))
             t = i + 1
             if debug:
                 print('{} / {}'.format(add_info['factor_d'], add_info['model_d']))
 
             mc = np.array(add_info['mktcap'], dtype=np.float32).squeeze()
-            label_y = np.array(add_info['next_y'])
+            if not logy:
+                label_y = np.array(add_info['next_y'])
+            else:
+                label_y = np.array(np.log(add_info['next_y'] + 1.))
+
 
             assets = np.array(add_info['asset_list'])
 
@@ -1074,7 +1088,7 @@ class Performance:
 
             # ############ For Model ############
             # prediction
-            features['output'] = features['output'].float() # TODO: 임시!! 매크로
+            features['output'] = features['output'].float()  # TODO: 임시!! 매크로
             predictions = model.predict_mtl(features)
             for key in predictions.keys():
                 predictions[key] = tu.np_ify(predictions[key])
@@ -1087,7 +1101,9 @@ class Performance:
             for f_ in features_for_plot:
                 f_for_y = ('y' if f_ == 'main' else f_)
                 if f_ == 'main':
-                    value_['main'] = predictions[self.pred_feature][:, 0, 0]
+                    value_['main'] = predictions[self.pred_feature][:, 0, 0]  # TODO 원상복구 필요
+                    # value_['main'] = label_y[:]
+                    # value_['main'] = np.array(add_info['next_label'])
                 else:
                     value_[f_] = predictions[f_][:, 0, 0]
 

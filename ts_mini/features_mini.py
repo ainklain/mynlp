@@ -129,6 +129,9 @@ class FeatureNew:
 
         func_nm, nd = feature_nm.split('_')
         n = int(nd)
+        if n == 0:
+            # n=0인 features의 label을 위해
+            n = self.k_days
 
         calc_length, m_days, k_days, delay_days = self.calc_length, self.m_days, self.k_days, self.delay_days
         k_days_adj = k_days + delay_days
@@ -283,7 +286,7 @@ class FeatureNew:
     def get_weighted_arr(self, logp_arr, wgt_arr):
         delayed_wgt_arr = np.ones_like(wgt_arr)
         delayed_wgt_arr[self.k_days:, :] = wgt_arr[:-self.k_days, :]
-        wlogy = np.exp(log_y_nd(logp_arr, self.k_days)) * wgt_arr
+        wlogy = (np.exp(log_y_nd(logp_arr, self.k_days)) - 1.) * wgt_arr
         # wstd = std_nd(logp_arr, self.k_days) * wgt_arr
         # wstdnew = std_nd_new(logp_arr, self.k_days) * wgt_arr
         return wlogy #, wstd, wstdnew
