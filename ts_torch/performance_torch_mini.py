@@ -994,7 +994,7 @@ class Performance:
                              , debug=False, logy=False):
         # self=ds; ep=0; is_monthly = True;  dataloader_set=self._dataloader('test_insample2', is_monthly=is_monthly);test_out_path = os.path.join(self.data_out_path, '{}/{}'.format(self.base_idx, 'single_test'))
         # self = performer;save_dir = test_out_path; file_nm = 'test_{}.png'.format(0); ylog = False; ls_method = 'ls_5_20'; plot_all_features = False
-
+#y = (bm_mw, factor_mw, model_ew, model_mw, fm_ew, fm_mw)
         c = self.configs
         rate_ = c.app_rate
         # file_nm = 'test.png'; ylog = False; t_stepsize = 4; ls_method = 'ls_5_20'; plot_all_features = True
@@ -1223,8 +1223,10 @@ class Performance:
                 data['model_turnover_mw'] = model_mw['turnover']
                 data['model_y_w_cost_ew'] = np.cumprod(1. + model_ew['y_w_cost'], axis=0)
                 data['model_y_w_cost_mw'] = np.cumprod(1. + model_mw['y_w_cost'], axis=0)
-                data['diff_w_cost_ew'] = np.cumprod(1. + model_ew['y_w_cost'] - bm_ew['y_w_cost'], axis=0)
-                data['diff_w_cost_mw'] = np.cumprod(1. + model_mw['y_w_cost'] - bm_mw['y_w_cost'], axis=0)
+                data['diff_w_cost_ew'] = np.cumprod(1. + model_ew['y_w_cost'], axis=0) - np.cumprod(1.+bm_ew['y_w_cost'], axis=0)
+                data['diff_w_cost_mw'] = np.cumprod(1. + model_mw['y_w_cost'], axis=0) - np.cumprod(1.+ bm_mw['y_w_cost'], axis=0)
+                # data['diff_w_cost_ew'] = np.cumprod(1. + model_ew['y_w_cost'] - bm_ew['y_w_cost'], axis=0)
+                # data['diff_w_cost_mw'] = np.cumprod(1. + model_mw['y_w_cost'] - bm_mw['y_w_cost'], axis=0)
 
 
                 data['factor_cost_mw'] = factor_mw['total_cost']

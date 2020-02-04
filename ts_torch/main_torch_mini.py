@@ -282,8 +282,31 @@ def run():
                      'classification': {'logp_base':{'pos': [20]}}})
 
 
+def example2():
+    model_predictor_list = ['nmir',  'nmsize']
+    features_structure = {'regression': {'logp_base': {'logp': [0],
+                                                       'logy': [20, 60, 120, 250],
+                                                       'std': [20, 60, 120],
+                                                       'stdnew': [20, 60],
+                                                       'mdd': [20, 60, 120],
+                                                       'fft': [100, 3],
+                                                       'nmlogy': [20, 60],
+                                                       'nmstd': [20, 60],
+                                                       'nmy': [20, 60],
+                                                       'nmir': [20, 60]
+                                                       },
+                    'size_base': {'nmsize': [0]},
+                    'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
+                        # 'wlogy_base': {'nmwlogy': [0], 'wlogy': [0]},
+                        # 'wlogyrnk_base': {'nmwlogyrnk': [0]},
+
+                    },
+     'classification': {'logp_base': {'pos': [20, 60, 120, 250]}}}
+
+    return model_predictor_list, features_structure
+
 def example():
-    model_predictor_list = ['nmsize']
+    model_predictor_list = ['nmlogy','nmir','nmsize','nmstd', 'pos_20']
     features_structure = {'regression': {'logp_base': {'logp': [0], 'nmy':[20], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20]},
                     'size_base': {'nmsize': [0]},
                     'turnover_base': {'nmturnover': [0], 'tsturnover': [0]},
@@ -297,7 +320,7 @@ def example():
 
 
 def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure, country='kr'):
-    # i=115; country='kr'; use_macro = False; use_swa=False; model_predictor_list, features_structure=example()
+    # i=8; country='kr'; use_macro = False; use_swa=False; model_predictor_list, features_structure=example2()
 
     configs = Config(use_macro=use_macro, use_swa=use_swa)
 
@@ -310,20 +333,20 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
     configs.n_heads = 8
     # configs.f_name ='testtesttes_04'
     if use_swa:
-        configs.f_name = '{}_{}_swa_e0{}'.format(country, k_days, i)
+        configs.f_name = '{}_{}_swa_feb0{}'.format(country, k_days, i)
     else:
-        configs.f_name = '{}_{}_nswa_e0{}'.format(country, k_days, i)
+        configs.f_name = '{}_{}_nswa_feb0{}'.format(country, k_days, i)
 
     configs.early_stopping_count = 5
-    configs.learning_rate = 5e-3
+    configs.learning_rate = 5e-4
     configs.update_comment = 'single pred per task'
     config_str = configs.export()
 
 
     features_cls = FeatureNew(configs)
     ds = DataScheduler(configs, features_cls)
-    ds.set_idx(8000)
-    ds.test_end_idx += 500
+    ds.set_idx(8250)
+    ds.test_end_idx = min(ds.test_end_idx + 250, ds.data_generator.max_length - ds.configs.k_days - 1)
 
     os.makedirs(os.path.join(ds.data_out_path), exist_ok=True)
     with open(os.path.join(ds.data_out_path, 'config.txt'), 'w') as f:
@@ -351,8 +374,8 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
     # ds.train_maml(model, optimizer, performer, num_epochs=50, early_stopping_count=configs.early_stopping_count)
 
     while True:
-        model = TSModel(configs, features_cls, weight_scheme=configs.weight_scheme)
-        optimizer = optim.Adam(model.parameters(), lr=configs.learning_rate)
+        # model = TSModel(configs, features_cls, weight_scheme=configs.weight_scheme)
+        # optimizer = optim.Adam(model.parameters(), lr=configs.learning_rate)
         ds.save(0, model, optimizer)
         if configs.use_maml:
             ds.train_maml(model, optimizer, performer, num_epochs=100)
@@ -374,6 +397,11 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
         if ds.base_idx >= 10000:
             print('something wrong')
             break
+
+    recent_month_end = '2020-01-31'
+    dataloader_t = ds.dataloader_t(recent_month_end, force_calc=True)
+    x = performer.extract_portfolio(model, dataloader_t, rate_=configs.app_rate)
+    x.to_csv('./out/{}/result_{}.csv'.format(configs.f_name, ds.base_idx))
 
 
 def etc():

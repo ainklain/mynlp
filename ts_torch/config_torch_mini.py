@@ -5,7 +5,7 @@ import os
 class Config:
     def __init__(self, use_maml=False, use_macro=False, use_swa=False):
         # time series parameter
-        self.train_set_length = 1500    # previous 10 years data
+        self.train_set_length = 2500    # previous 10 years data
         self.retrain_days = 250         # re-train every year
         self.m_days = 120               # input length of encoding layer (key, value)
         self.k_days = 20                # input and output length of decoding layer (query)

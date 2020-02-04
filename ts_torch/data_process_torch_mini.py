@@ -1079,8 +1079,8 @@ class DataScheduler:
 
         performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}{}.png'.format(ep, nickname)
                        , ylog=False, ls_method='ls_5_20', plot_all_features=True, logy=False)
-        performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}-log{}.png'.format(ep, nickname)
-                       , ylog=False, ls_method='ls_5_20', plot_all_features=True, logy=True)
+        # performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}-log{}.png'.format(ep, nickname)
+        #                , ylog=False, ls_method='ls_5_20', plot_all_features=True, logy=True)
         # performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}-mc{}.png'.format(ep, nickname)
         #                , ylog=False, ls_method='ls-mc_5_20', plot_all_features=True)
 
@@ -1636,7 +1636,7 @@ class DataGeneratorDynamic:
             left_on = 'work_m'
 
         univ_mapping = pd.merge(univ_df, date_mapping, left_on=left_on, right_on='work_m')
-        univ_mapping = univ_mapping.loc[:, ['work_m', 'eval_m', 'infocode']]
+        # univ_mapping = univ_mapping.loc[:, ['work_m', 'eval_m', 'infocode']]
         # daily basis
         univ_w_size = pd.merge(univ_mapping, self.size_df,
                                left_on=['infocode', 'work_m'],
