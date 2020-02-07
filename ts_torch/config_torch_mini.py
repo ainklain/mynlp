@@ -23,7 +23,7 @@ class Config:
         self.eval_steps = 100
         self.save_steps = 100
         self.early_stopping_count = 5
-        self.dropout = 0.5
+        self.dropout = 0.4
         self.learning_rate = 1e-4
 
         self.train_decaying_factor = 0.99
@@ -33,7 +33,7 @@ class Config:
         self.use_beta = False
         self.univ_type = 'selected'     # all / selected
         self.balancing_method = 'nothing'  # each / once / nothing
-        self.weight_scheme = 'ew'       # mw / ew
+        self.weight_scheme = 'mw'       # mw / ew
         self.size_encoding = False          # decoder input에 size_value add할지 여부
         self.app_rate = 1.     # 적용 비율
         # # features info

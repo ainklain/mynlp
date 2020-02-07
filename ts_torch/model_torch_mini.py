@@ -902,8 +902,8 @@ class TSModel(Base):
         predict, dec_self_attns, dec_enc_attns = self.decoder(dec_in, output_seq_size, enc_in, enc_out, return_attn)
 
         if self.weight_scheme == 'mw':
-            adj_weight = torch.exp(labels_mtl['size_rnk'] * 2.) / torch.sum(torch.exp(labels_mtl['size_rnk'] * 2.))   # size_rnk: 0~1사이 랭크
-
+            # adj_weight = torch.exp(labels_mtl['size_rnk'] * 2.) / torch.sum(torch.exp(labels_mtl['size_rnk'] * 2.))   # size_rnk: 0~1사이 랭크
+            adj_weight = labels_mtl['size_rnk'] * 2.
         else:
             adj_weight = torch.ones_like(labels_mtl['size_rnk'])
 

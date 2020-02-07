@@ -283,7 +283,7 @@ def run():
 
 
 def example2():
-    model_predictor_list = ['nmir',  'nmsize']
+    model_predictor_list = ['nmir', 'nmsize']
     features_structure = {'regression': {'logp_base': {'logp': [0],
                                                        'logy': [20, 60, 120, 250],
                                                        'std': [20, 60, 120],
@@ -292,7 +292,7 @@ def example2():
                                                        'fft': [100, 3],
                                                        'nmlogy': [20, 60],
                                                        'nmstd': [20, 60],
-                                                       'nmy': [20, 60],
+                                                       # 'nmy': [20, 60],
                                                        'nmir': [20, 60]
                                                        },
                     'size_base': {'nmsize': [0]},
@@ -320,7 +320,7 @@ def example():
 
 
 def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure, country='kr'):
-    # i=8; country='kr'; use_macro = False; use_swa=False; model_predictor_list, features_structure=example2()
+    # i=1; country='kr'; use_macro = False; use_swa=False; model_predictor_list, features_structure=example2()
 
     configs = Config(use_macro=use_macro, use_swa=use_swa)
 
@@ -333,9 +333,9 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
     configs.n_heads = 8
     # configs.f_name ='testtesttes_04'
     if use_swa:
-        configs.f_name = '{}_{}_swa_feb0{}'.format(country, k_days, i)
+        configs.f_name = '{}_{}_swa_traintest_00{}'.format(country, k_days, i)
     else:
-        configs.f_name = '{}_{}_nswa_feb0{}'.format(country, k_days, i)
+        configs.f_name = '{}_{}_nswa_traintest_00{}'.format(country, k_days, i)
 
     configs.early_stopping_count = 5
     configs.learning_rate = 5e-4

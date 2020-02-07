@@ -239,12 +239,13 @@ class DataScheduler:
             data_params['label_type'] = 'test_label'        # test: 예측하고자 하는 것만 반영 (k_days)
             decaying_factor = 1.   # 기간별 샘플 중요도
         elif mode == 'test_insample2':      # train/eval/test 모두 포함 # TODO 원상복구 필요!!
-            # start_idx = self.train_begin_idx + c.retrain_days
+            start_idx = self.train_begin_idx + c.retrain_days
             # end_idx = self.eval_begin_idx
-            start_idx = self.eval_begin_idx - c.retrain_days
+            # start_idx = self.eval_begin_idx - c.retrain_days
             end_idx = self.test_end_idx
             data_params['balance_class'] = False
             data_params['label_type'] = 'test_label'        # test: 예측하고자 하는 것만 반영 (k_days)
+            data_params['lengths'] = [self.eval_begin_idx - start_idx, self.test_begin_idx - start_idx]
             decaying_factor = 1.   # 기간별 샘플 중요도
         elif mode == 'predict':
             start_idx = self.test_begin_idx + c.m_days
@@ -741,7 +742,7 @@ class DataScheduler:
         stop_count = 0
         for ep in range(num_epochs):
 
-            if ep % 2 == 0:
+            if ep % 5 == 0:
                 self.logger.info("[train] [Ep %d] plot", ep)
                 # self.test_plot(performer, model, ep, is_monthly=False)
                 # self.test_plot(performer, model, ep, is_monthly=True)
@@ -881,8 +882,8 @@ class DataScheduler:
             mode = 'train'
             model.train()
         else:
-            mode = 'eval' # TODO 원상복구 필요!!
-            # mode = 'train'
+            # mode = 'eval' # TODO 원상복구 필요!!
+            mode = 'train'
             model.eval()
 
         if ep == 0:
