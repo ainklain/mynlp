@@ -741,7 +741,12 @@ class DataScheduler:
         min_eval_loss = 99999
         stop_count = 0
         for ep in range(num_epochs):
-
+            # if ep % 50 == 0:
+            #     lr = 0.01 / (ep / 50 + 1)
+            # else:
+            #     lr = lr * (1 - (ep % 50) / 50)
+            #
+            # adjust_learning_rate(optimizer, lr)
             if ep % 5 == 0:
                 self.logger.info("[train] [Ep %d] plot", ep)
                 # self.test_plot(performer, model, ep, is_monthly=False)
@@ -882,9 +887,10 @@ class DataScheduler:
             mode = 'train'
             model.train()
         else:
-            # mode = 'eval' # TODO 원상복구 필요!!
-            mode = 'train'
+            mode = 'eval' # TODO 원상복구 필요!!
             model.eval()
+            # mode = 'train'
+            # model.train()
 
         if ep == 0:
             self.dataloader[mode] = self._dataloader(mode)
@@ -905,7 +911,6 @@ class DataScheduler:
                 features_with_noise = {'input': features['input'], 'output': features['output']}
                 labels_with_noise = labels
                 if is_train:
-
                     if self.configs.adversarial_training is True:
                         labels_mtl_noise = self.labels_torch(features_list, labels_with_noise, add_infos)
                         features_with_noise = Noise.adversarial_noise(features_with_noise, labels_mtl_noise, model)
@@ -963,6 +968,7 @@ class DataScheduler:
             model.train()
         else:
             mode = 'eval'
+            # model.train()
             model.eval()
 
         if ep == 0:

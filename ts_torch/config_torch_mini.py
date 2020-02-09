@@ -33,7 +33,7 @@ class Config:
         self.use_beta = False
         self.univ_type = 'selected'     # all / selected
         self.balancing_method = 'nothing'  # each / once / nothing
-        self.weight_scheme = 'mw'       # mw / ew
+        self.weight_scheme = 'ew'       # mw / ew
         self.size_encoding = False          # decoder input에 size_value add할지 여부
         self.app_rate = 1.     # 적용 비율
         # # features info

@@ -283,7 +283,7 @@ def run():
 
 
 def example2():
-    model_predictor_list = ['nmir', 'nmsize']
+    model_predictor_list = ['nmy', 'nmsize']
     features_structure = {'regression': {'logp_base': {'logp': [0],
                                                        'logy': [20, 60, 120, 250],
                                                        'std': [20, 60, 120],
@@ -292,7 +292,7 @@ def example2():
                                                        'fft': [100, 3],
                                                        'nmlogy': [20, 60],
                                                        'nmstd': [20, 60],
-                                                       # 'nmy': [20, 60],
+                                                       'nmy': [20, 60],
                                                        'nmir': [20, 60]
                                                        },
                     'size_base': {'nmsize': [0]},
@@ -320,7 +320,7 @@ def example():
 
 
 def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure, country='kr'):
-    # i=1; country='kr'; use_macro = False; use_swa=False; model_predictor_list, features_structure=example2()
+    # i=16; country='kr'; use_macro = False; use_swa=False; model_predictor_list, features_structure=example2()
 
     configs = Config(use_macro=use_macro, use_swa=use_swa)
 
@@ -337,7 +337,7 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
     else:
         configs.f_name = '{}_{}_nswa_traintest_00{}'.format(country, k_days, i)
 
-    configs.early_stopping_count = 5
+    configs.early_stopping_count = 50
     configs.learning_rate = 5e-4
     configs.update_comment = 'single pred per task'
     config_str = configs.export()
@@ -345,7 +345,7 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
 
     features_cls = FeatureNew(configs)
     ds = DataScheduler(configs, features_cls)
-    ds.set_idx(8250)
+    ds.set_idx(6500)
     ds.test_end_idx = min(ds.test_end_idx + 250, ds.data_generator.max_length - ds.configs.k_days - 1)
 
     os.makedirs(os.path.join(ds.data_out_path), exist_ok=True)
@@ -383,7 +383,7 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
             if configs.use_swa:
                 ds.train_swa(model, model_swa, optimizer, performer, num_epochs=100)
             else:
-                ds.train(model, optimizer, performer, num_epochs=100)
+                ds.train(model, optimizer, performer, num_epochs=1000)
 
         # recent_month_end = '2019-12-31'
         # dataloader_t = ds.dataloader_t(recent_month_end, force_calc=True)
@@ -398,10 +398,10 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
             print('something wrong')
             break
 
-    recent_month_end = '2020-01-31'
-    dataloader_t = ds.dataloader_t(recent_month_end, force_calc=True)
-    x = performer.extract_portfolio(model, dataloader_t, rate_=configs.app_rate)
-    x.to_csv('./out/{}/result_{}.csv'.format(configs.f_name, ds.base_idx))
+    # recent_month_end = '2020-01-31'
+    # dataloader_t = ds.dataloader_t(recent_month_end, force_calc=True)
+    # x = performer.extract_portfolio(model, dataloader_t, rate_=configs.app_rate)
+    # x.to_csv('./out/{}/result_{}.csv'.format(configs.f_name, ds.base_idx))
 
 
 def etc():
