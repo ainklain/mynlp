@@ -123,7 +123,7 @@ class Config:
             self.momentum = 0.9  # SGD momentum
             self.wd = 1e-4  # weight decay
             self.swa_lr = 0.005
-            self.swa_start = 6
+            self.swa_start = 20
             self.swa_c_epochs = 1
             self.eval_freq = 5
 

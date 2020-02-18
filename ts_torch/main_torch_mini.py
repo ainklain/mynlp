@@ -320,8 +320,8 @@ def example():
 
 
 def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure, country='kr'):
-    # i=16; country='kr'; use_macro = False; use_swa=False; model_predictor_list, features_structure=example2()
-
+    # i=2; country='us'; use_macro = False; use_swa=False; model_predictor_list, features_structure=example2()
+    # use_swa = True
     configs = Config(use_macro=use_macro, use_swa=use_swa)
 
     k_days = 20;
@@ -345,7 +345,7 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
 
     features_cls = FeatureNew(configs)
     ds = DataScheduler(configs, features_cls)
-    ds.set_idx(6500)
+    ds.set_idx(8250)
     ds.test_end_idx = min(ds.test_end_idx + 250, ds.data_generator.max_length - ds.configs.k_days - 1)
 
     os.makedirs(os.path.join(ds.data_out_path), exist_ok=True)
@@ -365,8 +365,12 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
                                   lr=configs.lr_init,
                                   momentum=configs.momentum,
                                   weight_decay=configs.wd)
+            scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=1e-4, max_lr=0.01)
         else:
             optimizer = optim.Adam(model.parameters(), lr=configs.learning_rate)
+            scheduler = None
+
+
         # optimizer = optim.SGD(model.parameters(), lr=configs.learning_rate)
 
     ds.load(model, optimizer)
@@ -381,9 +385,9 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
             ds.train_maml(model, optimizer, performer, num_epochs=100)
         else:
             if configs.use_swa:
-                ds.train_swa(model, model_swa, optimizer, performer, num_epochs=100)
+                ds.train_swa(model, model_swa, optimizer, scheduler, performer, num_epochs=1000)
             else:
-                ds.train(model, optimizer, performer, num_epochs=1000)
+                ds.train(model, optimizer, scheduler, performer, num_epochs=1000)
 
         # recent_month_end = '2019-12-31'
         # dataloader_t = ds.dataloader_t(recent_month_end, force_calc=True)

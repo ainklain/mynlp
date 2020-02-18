@@ -245,7 +245,7 @@ class DataScheduler:
             end_idx = self.test_end_idx
             data_params['balance_class'] = False
             data_params['label_type'] = 'test_label'        # test: 예측하고자 하는 것만 반영 (k_days)
-            data_params['lengths'] = [self.eval_begin_idx - start_idx, self.test_begin_idx - start_idx]
+            data_params['lengths'] = [(self.eval_begin_idx - start_idx) // c.k_days, (self.test_begin_idx - start_idx) // c.k_days]
             decaying_factor = 1.   # 기간별 샘플 중요도
         elif mode == 'predict':
             start_idx = self.test_begin_idx + c.m_days
@@ -735,9 +735,9 @@ class DataScheduler:
         return dataloader, features_list, all_assets_list, start_date, end_date
 
     @done_decorator_with_logger
-    def train(self, model, optimizer, performer, num_epochs):
+    def train(self, model, optimizer, scheduler, performer, num_epochs):
         early_stopping_count = self.configs.early_stopping_count
-
+        
         min_eval_loss = 99999
         stop_count = 0
         for ep in range(num_epochs):
@@ -755,7 +755,7 @@ class DataScheduler:
                 self.test_plot(performer, model, ep, is_monthly=True, is_insample=True)
 
             self.logger.info("[train] [Ep %d] model evaluation ...", ep)
-            eval_loss = self.step_epoch(ep, model, optimizer, is_train=False)
+            eval_loss = self.step_epoch(ep, model, optimizer, scheduler=scheduler, is_train=False)
             if eval_loss is False:
                 return False
 
@@ -777,12 +777,12 @@ class DataScheduler:
 
                 break
 
-            train_loss = self.step_epoch(ep, model, optimizer, is_train=True)
+            train_loss = self.step_epoch(ep, model, optimizer, scheduler=scheduler, is_train=True)
             if train_loss is False:
                 return False
 
     @done_decorator_with_logger
-    def train_swa(self, model, model_swa, optimizer, performer, num_epochs):
+    def train_swa(self, model, model_swa, optimizer, scheduler, performer, num_epochs):
         c = self.configs
 
         swa_start = c.swa_start
@@ -794,8 +794,8 @@ class DataScheduler:
         stop_count = 0
         swa_n = 0
         for ep in range(num_epochs):
-            lr = schedule(epoch=ep, configs=c)
-            adjust_learning_rate(optimizer, lr)
+            # lr = schedule(epoch=ep, configs=c)
+            # adjust_learning_rate(optimizer, lr)
 
             if ep == 0 or ep % eval_freq == 0:
                 self.logger.info("[train] [Ep %d] plot", ep)
@@ -806,7 +806,7 @@ class DataScheduler:
 
             self.logger.info("[train] [Ep %d] model evaluation ...", ep)
             if ep % eval_freq == 0 or ep == num_epochs - 1:
-                eval_loss = self.step_epoch(ep, model, optimizer, is_train=False)
+                eval_loss = self.step_epoch(ep, model, optimizer, scheduler=scheduler, is_train=False)
                 if eval_loss is False:
                     return False
 
@@ -814,7 +814,7 @@ class DataScheduler:
                 moving_average(model_swa, model, 1.0 / (swa_n + 1))
                 swa_n += 1
                 if ep % eval_freq == 0 or ep == num_epochs - 1:
-                    swa_eval_loss = self.step_epoch(ep, model_swa, optimizer, is_train=False, use_swa=True)
+                    swa_eval_loss = self.step_epoch(ep, model_swa, optimizer, scheduler=scheduler, is_train=False, use_swa=True)
                     print('eval: {} swa: {}'.format(eval_loss, swa_eval_loss))
                 else:
                     swa_eval_loss = None
@@ -839,7 +839,7 @@ class DataScheduler:
 
                 break
 
-            train_loss = self.step_epoch(ep, model, optimizer, is_train=True)
+            train_loss = self.step_epoch(ep, model, optimizer, scheduler=scheduler, is_train=True)
             if train_loss is False:
                 return False
 
@@ -882,7 +882,7 @@ class DataScheduler:
             if train_loss is False:
                 return False
 
-    def step_epoch(self, ep, model, optimizer, is_train=True, use_swa=False):
+    def step_epoch(self, ep, model, optimizer, scheduler=None, is_train=True, use_swa=False):
         if is_train:
             mode = 'train'
             model.train()
@@ -900,6 +900,11 @@ class DataScheduler:
         dataloader, features_list = self.dataloader[mode]
         if ep == 0:
             self.logger.info("[step_epoch][Ep %d][%s] f_list: %s", ep, mode, features_list)
+
+        if scheduler is not None:
+            scheduler.step()
+            if is_train:
+                self.logger.info("[step_epoch][Ep %d] learning rate: %d", ep, optimizer.param_groups[0]['lr'])
 
         if use_swa:
             bn_update(dataloader, model)
@@ -1061,8 +1066,11 @@ class DataScheduler:
 
         if is_insample:
             mode = 'test_insample2'
+            start_idx, end_idx, data_params, decaying_factor = self.get_data_params(mode)
+            timeseries_lengths = data_params['lengths']
         else:
             mode = 'test'
+            timeseries_lengths = None
         self_mode = 'single_' + mode
 
         if is_monthly:
@@ -1085,7 +1093,7 @@ class DataScheduler:
         os.makedirs(test_out_path, exist_ok=True)
 
         performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}{}.png'.format(ep, nickname)
-                       , ylog=False, ls_method='ls_5_20', plot_all_features=True, logy=False)
+                       , ylog=False, ls_method='ls_5_20', plot_all_features=True, logy=False, timeseries_lengths=timeseries_lengths)
         # performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}-log{}.png'.format(ep, nickname)
         #                , ylog=False, ls_method='ls_5_20', plot_all_features=True, logy=True)
         # performer_func(model, dataloader_set, save_dir=test_out_path, file_nm='test_{}-mc{}.png'.format(ep, nickname)
