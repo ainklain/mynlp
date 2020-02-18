@@ -1,7 +1,7 @@
 
 import torch
 from torch import nn
-import torch.nn.functional as F
+from torch.nn import init, functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 import collections
@@ -483,8 +483,8 @@ def dot_product_attention(q, k, v, normalise):
         tensor of shape [B,m,d_v].
     """
     d_k = q.shape[-1]
-    scale = torch.sqrt(d_k.float())
-    unnorm_weights = torch.bmm(q, k) / scale  # [B,m,n]
+    scale = torch.sqrt(torch.tensor(d_k).float())
+    unnorm_weights = torch.bmm(q, k.transpose(1, 2)) / scale  # [B,m,n]
     if normalise:
         weight_fn = F.softmax
     else:
@@ -494,53 +494,31 @@ def dot_product_attention(q, k, v, normalise):
     return rep
 
 
-class MultiheadAttention(nn.Module):
-    def __init__(self, d_k, d_v, num_heads):
-        head_size = d_v / num_heads
-        key_initializer = tf.random_normal_initializer(stddev=d_k ** -0.5)
-        value_initializer = tf.random_normal_initializer(stddev=d_v ** -0.5)
-
-        for h in range(num_heads):
-
-        self.q_layer = nn.ModuleList()
-        self.k_layer = nn.ModuleList()
-        self.v_layer = nn.ModuleList()
-        for h in range(num_heads):
-            self.q_layer.append(nn.Conv1d(head_size, 1, bias=False, padding=0))
-            self.k_layer.append(nn.Conv1d(head_size, 1, bias=False, padding=0))
-            self.v_layer.append(nn.Conv1d(head_size, 1, bias=False, padding=0))
-
-            o = dot_product_attention(
-                tf.layers.Conv1D(head_size, 1, kernel_initializer=key_initializer,
-                                 name='wq%d' % h, use_bias=False, padding='VALID')(q),
-                tf.layers.Conv1D(head_size, 1, kernel_initializer=key_initializer,
-                                 name='wk%d' % h, use_bias=False, padding='VALID')(k),
-                tf.layers.Conv1D(head_size, 1, kernel_initializer=key_initializer,
-                                 name='wv%d' % h, use_bias=False, padding='VALID')(v),
-                normalise=True)
-            rep += tf.layers.Conv1D(d_v, 1, kernel_initializer=value_initializer,
-                                    name='wo%d' % h, use_bias=False, padding='VALID')(o)
-
-    def forward(self):
-        """Computes multi-head attention.
-
-        Args:
-            q: queries. tensor of  shape [B,m,d_k].
-            k: keys. tensor of shape [B,n,d_k].
-            v: values. tensor of shape [B,n,d_v].
-            num_heads: number of heads. Should divide d_v.
-
-        Returns:
-            tensor of shape [B,m,d_v].
-        """
-
-        rep = torch.tensor(0.0)
-        pass
-
 def multihead_attention(q, k, v, num_heads=8):
-    d_k = q.get_shape().as_list()[-1]
-    d_v = v.get_shape().as_list()[-1]
-    head_size = d_v / num_heads
+    """Computes multi-head attention.
+
+    Args:
+      q: queries. tensor of  shape [B,m,d_k].
+      k: keys. tensor of shape [B,n,d_k].
+      v: values. tensor of shape [B,n,d_v].
+      num_heads: number of heads. Should divide d_v.
+
+    Returns:
+      tensor of shape [B,m,d_v].
+    """
+    d_k = q.shape[-1]
+    d_v = v.shape[-1]
+    head_size = d_v // num_heads
+
+    rep = torch.tensor(0.0)
+
+    for h in range(num_heads):
+        q_head = (nn.Conv1d(in_channels=d_k, out_channels=head_size, kernel_size=1, bias=False)(q.transpose(1, 2))).transpose(1, 2)
+        k_head = (nn.Conv1d(in_channels=d_k, out_channels=head_size, kernel_size=1, bias=False)(k.transpose(1, 2))).transpose(1, 2)
+        v_head = (nn.Conv1d(in_channels=d_v, out_channels=head_size, kernel_size=1, bias=False)(v.transpose(1, 2))).transpose(1, 2)
+        o = dot_product_attention(q_head, k_head, v_head, normalise=True)
+        rep += (nn.Conv1d(in_channels=head_size, out_channels=d_v, kernel_size=1, bias=False)(o.transpose(1, 2))).transpose(1, 2)
+
     key_initializer = tf.random_normal_initializer(stddev=d_k ** -0.5)
     value_initializer = tf.random_normal_initializer(stddev=d_v ** -0.5)
     rep = tf.constant(0.0)
