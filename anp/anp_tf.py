@@ -1,7 +1,5 @@
+import tensorflow as tf
 
-import torch
-from torch import nn
-from torch.nn import init, functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 import collections
@@ -79,23 +77,24 @@ class GPCurvesReader(object):
             The kernel, a float tensor of shape
             [B, y_size, num_total_points, num_total_points].
         """
-        num_total_points = xdata.shape[1]
+        num_total_points = tf.shape(xdata)[1]
 
         # Expand and take the difference
-        xdata1 = torch.unsqueeze(xdata, dim=1)  # [B, 1, num_total_points, x_size]
-        xdata2 = torch.unsqueeze(xdata, dim=2)  # [B, num_total_points, 1, x_size]
+        xdata1 = tf.expand_dims(xdata, axis=1)  # [B, 1, num_total_points, x_size]
+        xdata2 = tf.expand_dims(xdata, axis=2)  # [B, num_total_points, 1, x_size]
         diff = xdata1 - xdata2  # [B, num_total_points, num_total_points, x_size]
 
         # [B, y_size, num_total_points, num_total_points, x_size]
-        norm = torch.pow(diff[:, None, :, :, :] / l1[:, :, None, None, :], 2)
+        norm = tf.square(diff[:, None, :, :, :] / l1[:, :, None, None, :])
 
-        norm = torch.sum(norm, -1)  # [B, data_size, num_total_points, num_total_points]
+        norm = tf.reduce_sum(
+            norm, -1)  # [B, data_size, num_total_points, num_total_points]
 
         # [B, y_size, num_total_points, num_total_points]
-        kernel = torch.pow(sigma_f, 2)[:, :, None, None] * torch.exp(-0.5 * norm)
+        kernel = tf.square(sigma_f)[:, :, None, None] * tf.exp(-0.5 * norm)
 
         # Add some noise to the diagonal to make the cholesky work.
-        kernel += (sigma_noise ** 2) * torch.eye(num_total_points)
+        kernel += (sigma_noise ** 2) * tf.eye(num_total_points)
 
         return kernel
 
@@ -107,49 +106,57 @@ class GPCurvesReader(object):
         Returns:
             A `CNPRegressionDescription` namedtuple.
         """
-        num_context = torch.randint(low=3, high=self._max_num_context, size=[])
+        num_context = tf.random_uniform(
+            shape=[], minval=3, maxval=self._max_num_context, dtype=tf.int32)
 
         # If we are testing we want to have more targets and have them evenly
         # distributed in order to plot the function.
         if self._testing:
             num_target = 400
             num_total_points = num_target
-            x_values = torch.unsqueeze(torch.arange(-2., 2., 1./100, dtype=torch.float32), dim=0).repeat(self._batch_size, 1)
-            x_values = torch.unsqueeze(x_values, dim=-1)
+            x_values = tf.tile(
+                tf.expand_dims(tf.range(-2., 2., 1. / 100, dtype=tf.float32), axis=0),
+                [self._batch_size, 1])
+            x_values = tf.expand_dims(x_values, axis=-1)
         # During training the number of target points and their x-positions are
         # selected at random
         else:
-            num_target = torch.randint(low=0, high=self._max_num_context - num_context, size=[])
+            num_target = tf.random_uniform(shape=(), minval=0,
+                                           maxval=self._max_num_context - num_context,
+                                           dtype=tf.int32)
             num_total_points = num_context + num_target
-            x_values = torch.FloatTensor(self._batch_size, num_total_points, self._x_size).uniform_(-2, 2)
-
+            x_values = tf.random_uniform(
+                [self._batch_size, num_total_points, self._x_size], -2, 2)
 
         # Set kernel parameters
         # Either choose a set of random parameters for the mini-batch
         if self._random_kernel_parameters:
-            l1 = torch.FloatTensor(self._batch_size, self._y_size,
-                                    self._x_size).uniform_(0.1, self._l1_scale)
-            sigma_f = torch.FloatTensor(self._batch_size, self._y_size).uniform_(0.1, self._sigma_scale)
-
+            l1 = tf.random_uniform([self._batch_size, self._y_size,
+                                    self._x_size], 0.1, self._l1_scale)
+            sigma_f = tf.random_uniform([self._batch_size, self._y_size],
+                                        0.1, self._sigma_scale)
         # Or use the same fixed parameters for all mini-batches
         else:
-            l1 = torch.ones([self._batch_size, self._y_size, self._x_size]) * self._l1_scale
-            sigma_f = torch.ones([self._batch_size, self._y_size]) * self._sigma_scale
+            l1 = tf.ones(shape=[self._batch_size, self._y_size,
+                                self._x_size]) * self._l1_scale
+            sigma_f = tf.ones(shape=[self._batch_size,
+                                     self._y_size]) * self._sigma_scale
 
         # Pass the x_values through the Gaussian kernel
         # [batch_size, y_size, num_total_points, num_total_points]
         kernel = self._gaussian_kernel(x_values, l1, sigma_f)
 
         # Calculate Cholesky, using double precision for better stability:
-        cholesky = torch.cholesky(kernel.double()).float()
+        cholesky = tf.cast(tf.cholesky(tf.cast(kernel, tf.float64)), tf.float32)
 
         # Sample a curve
         # [batch_size, y_size, num_total_points, 1]
-        y_values = torch.bmm(cholesky.view(-1, num_total_points, num_total_points),
-                             torch.randn([self._batch_size * self._y_size, num_total_points, 1])).view(self._batch_size, self._y_size, num_total_points, 1)
+        y_values = tf.matmul(
+            cholesky,
+            tf.random_normal([self._batch_size, self._y_size, num_total_points, 1]))
 
         # [batch_size, num_total_points, y_size]
-        y_values = torch.transpose(torch.squeeze(y_values, 3), 1, 2)
+        y_values = tf.transpose(tf.squeeze(y_values, 3), [0, 2, 1])
 
         if self._testing:
             # Select the targets
@@ -157,9 +164,10 @@ class GPCurvesReader(object):
             target_y = y_values
 
             # Select the observations
-            idx = torch.randperm(num_target)
-            context_x = x_values[:, idx[:num_context]]
-            context_y = y_values[:, idx[:num_context]]
+            idx = tf.random_shuffle(tf.range(num_target))
+            context_x = tf.gather(x_values, idx[:num_context], axis=1)
+            context_y = tf.gather(y_values, idx[:num_context], axis=1)
+
         else:
             # Select the targets which will consist of the context points as well as
             # some new target points
@@ -175,44 +183,58 @@ class GPCurvesReader(object):
         return NPRegressionDescription(
             query=query,
             target_y=target_y,
-            num_total_points=target_x.shape[1],
+            num_total_points=tf.shape(target_x)[1],
             num_context_points=num_context)
 
 
-class BatchLinear(nn.Module):
-    def __init__(self, d_in, output_sizes):
-        super(BatchLinear, self).__init__()
-        self.linears = nn.ModuleList()
-        for d_out in output_sizes:
-            self.linears.append(nn.Linear(d_in, d_out))
-            d_in = d_out
+# utility methods
+def batch_mlp(input, output_sizes, variable_scope):
+    """Apply MLP to the final axis of a 3D tensor (reusing already defined MLPs).
 
-    def forward(self, input):
-        batch_size, n_size, filter_size = input.shape
-        output = input.reshape(-1, filter_size)
-        for linear_layer in self.linears[:-1]:
-            output = F.relu(linear_layer(output))
-        output = self.linears[-1](output)
-        output = output.reshape(batch_size, n_size, -1)
+    Args:
+        input: input tensor of shape [B,n,d_in].
+        output_sizes: An iterable containing the output sizes of the MLP as defined
+          in `basic.Linear`.
+        variable_scope: String giving the name of the variable scope. If this is set
+          to be the same as a previously defined MLP, then the weights are reused.
 
-        return output
+    Returns:
+        tensor of shape [B,n,d_out] where d_out=output_sizes[-1]
+    """
+    # Get the shapes of the input and reshape to parallelise across observations
+    batch_size, _, filter_size = input.shape.as_list()
+    output = tf.reshape(input, (-1, filter_size))
+    output.set_shape((None, filter_size))
+
+    # Pass through MLP
+    with tf.variable_scope(variable_scope, reuse=tf.AUTO_REUSE):
+        for i, size in enumerate(output_sizes[:-1]):
+            output = tf.nn.relu(
+                tf.layers.dense(output, size, name="layer_{}".format(i)))
+
+        # Last layer without a ReLu
+        output = tf.layers.dense(
+            output, output_sizes[-1], name="layer_{}".format(i + 1))
+
+    # Bring back into original shape
+    output = tf.reshape(output, (batch_size, -1, output_sizes[-1]))
+    return output
 
 
-class DeterministicEncoder(nn.Module):
+class DeterministicEncoder(object):
     """The Deterministic Encoder."""
 
-    def __init__(self, d_in, output_sizes, attention):
+    def __init__(self, output_sizes, attention):
         """(A)NP deterministic encoder.
 
         Args:
         output_sizes: An iterable containing the output sizes of the encoding MLP.
         attention: The attention module.
         """
-        super(DeterministicEncoder, self).__init__()
-        self.batch_linear = BatchLinear(d_in, output_sizes)
+        self._output_sizes = output_sizes
         self._attention = attention
 
-    def forward(self, context_x, context_y, target_x):
+    def __call__(self, context_x, context_y, target_x):
         """Encodes the inputs into one representation.
 
         Args:
@@ -228,37 +250,33 @@ class DeterministicEncoder(nn.Module):
         """
 
         # Concatenate x and y along the filter axes
-        encoder_input = torch.cat([context_x, context_y], dim=-1)
+        encoder_input = tf.concat([context_x, context_y], axis=-1)
 
         # Pass final axis through MLP
-        hidden = self.batch_linear(encoder_input)
+        hidden = batch_mlp(encoder_input, self._output_sizes,
+                           "deterministic_encoder")
 
         # Apply attention
-        hidden = self._attention(context_x, target_x, hidden)
+        with tf.variable_scope("deterministic_encoder", reuse=tf.AUTO_REUSE):
+            hidden = self._attention(context_x, target_x, hidden)
 
         return hidden
 
 
-class LatentEncoder(nn.Module):
+class LatentEncoder(object):
     """The Latent Encoder."""
 
-    def __init__(self, d_in, output_sizes, num_latents):
+    def __init__(self, output_sizes, num_latents):
         """(A)NP latent encoder.
 
         Args:
             output_sizes: An iterable containing the output sizes of the encoding MLP.
             num_latents: The latent dimensionality.
         """
-        super(LatentEncoder, self).__init__()
-        self.batch_linear = BatchLinear(d_in, output_sizes)
-        # First apply intermediate relu layer
-        interim_dim = (output_sizes[-1] + num_latents) // 2
-        self.interim_layer = nn.Linear(output_sizes[-1], interim_dim)
-        # Then apply further linear layers to output latent mu and log sigma
-        self.mu_layer = nn.Linear(interim_dim, num_latents)
-        self.log_sigma_layer = nn.Linear(interim_dim, num_latents)
+        self._output_sizes = output_sizes
+        self._num_latents = num_latents
 
-    def forward(self, x, y):
+    def __call__(self, x, y):
         """Encodes the inputs into one representation.
 
         Args:
@@ -272,38 +290,44 @@ class LatentEncoder(nn.Module):
         """
 
         # Concatenate x and y along the filter axes
-        encoder_input = torch.cat([x, y], dim=-1)
+        encoder_input = tf.concat([x, y], axis=-1)
 
         # Pass final axis through MLP
-        hidden = self.batch_linear(encoder_input)
+        hidden = batch_mlp(encoder_input, self._output_sizes, "latent_encoder")
 
         # Aggregator: take the mean over all points
-        hidden = hidden.mean(dim=1)
-        hidden = self.interim_layer(hidden)
-        mu = self.mu_layer(hidden)
-        log_sigma = self.log_sigma_layer(hidden)
+        hidden = tf.reduce_mean(hidden, axis=1)
+
+        # Have further MLP layers that map to the parameters of the Gaussian latent
+        with tf.variable_scope("latent_encoder", reuse=tf.AUTO_REUSE):
+            # First apply intermediate relu layer
+            hidden = tf.nn.relu(
+                tf.layers.dense(hidden,
+                                (self._output_sizes[-1] + self._num_latents) / 2,
+                                name="penultimate_layer"))
+            # Then apply further linear layers to output latent mu and log sigma
+            mu = tf.layers.dense(hidden, self._num_latents, name="mean_layer")
+            log_sigma = tf.layers.dense(hidden, self._num_latents, name="std_layer")
 
         # Compute sigma
-        sigma = 0.1 + 0.9 * F.sigmoid(log_sigma)
+        sigma = 0.1 + 0.9 * tf.sigmoid(log_sigma)
 
-        return torch.distributions.Normal(loc=mu, scale=sigma)
+        return tf.contrib.distributions.Normal(loc=mu, scale=sigma)
 
 
-class Decoder(nn.Module):
+class Decoder(object):
     """The Decoder."""
 
-    def __init__(self, d_in, output_sizes):
+    def __init__(self, output_sizes):
         """(A)NP decoder.
 
         Args:
             output_sizes: An iterable containing the output sizes of the decoder MLP
                 as defined in `basic.Linear`.
         """
+        self._output_sizes = output_sizes
 
-        super(Decoder, self).__init__()
-        self.batch_linear = BatchLinear(d_in, output_sizes)
-
-    def forward(self, representation, target_x):
+    def __call__(self, representation, target_x):
         """Decodes the individual targets.
 
         Args:
@@ -321,29 +345,28 @@ class Decoder(nn.Module):
                 Tensor of shape [B,target_observations,d_x].
         """
         # concatenate target_x and representation
-        hidden = torch.cat([representation, target_x], dim=-1)
+        hidden = tf.concat([representation, target_x], axis=-1)
 
         # Pass final axis through MLP
-        hidden = self.batch_linear(hidden)
+        hidden = batch_mlp(hidden, self._output_sizes, "decoder")
 
         # Get the mean an the variance
-        mu, log_sigma = torch.chunk(hidden, 2, dim=-1)
+        mu, log_sigma = tf.split(hidden, 2, axis=-1)
 
         # Bound the variance
-        sigma = 0.1 + 0.9 * F.softplus(log_sigma)
+        sigma = 0.1 + 0.9 * tf.nn.softplus(log_sigma)
 
         # Get the distribution
-        # dist = torch.distributions.MultivariateNormal(
-        #     loc=mu.view(-1, 1), covariance_matrix=sigma.view(-1, 1))
-        dist = torch.distributions.Normal(loc=mu, scale=sigma)
+        dist = tf.contrib.distributions.MultivariateNormalDiag(
+            loc=mu, scale_diag=sigma)
 
         return dist, mu, sigma
 
 
-class LatentModel(nn.Module):
+class LatentModel(object):
     """The (A)NP model."""
 
-    def __init__(self, d_x, d_y, latent_encoder_output_sizes, num_latents,
+    def __init__(self, latent_encoder_output_sizes, num_latents,
                  decoder_output_sizes, use_deterministic_path=True,
                  deterministic_encoder_output_sizes=None, attention=None):
         """Initialises the model.
@@ -363,20 +386,15 @@ class LatentModel(nn.Module):
             attention: The attention module used in the deterministic encoder.
                 Only relevant when use_deterministic_path=True.
         """
-        super(LatentModel, self).__init__()
-        self._latent_encoder = LatentEncoder(d_x+d_y, latent_encoder_output_sizes,
+        self._latent_encoder = LatentEncoder(latent_encoder_output_sizes,
                                              num_latents)
+        self._decoder = Decoder(decoder_output_sizes)
         self._use_deterministic_path = use_deterministic_path
         if use_deterministic_path:
             self._deterministic_encoder = DeterministicEncoder(
-                d_x+d_y, deterministic_encoder_output_sizes, attention)
-            d_decoder = latent_encoder_output_sizes[-1]+deterministic_encoder_output_sizes[-1] + d_x
-        else:
-            d_decoder = latent_encoder_output_sizes[-1] + d_x
+                deterministic_encoder_output_sizes, attention)
 
-        self._decoder = Decoder(d_decoder, decoder_output_sizes)
-
-    def forward(self, query, num_targets, target_y=None):
+    def __call__(self, query, num_targets, target_y=None):
         """Returns the predicted mean and variance at the target points.
 
         Args:
@@ -413,10 +431,12 @@ class LatentModel(nn.Module):
         else:
             posterior = self._latent_encoder(target_x, target_y)
             latent_rep = posterior.sample()
-        latent_rep = torch.unsqueeze(latent_rep, dim=1).repeat([1, num_targets, 1])
+        latent_rep = tf.tile(tf.expand_dims(latent_rep, axis=1),
+                             [1, num_targets, 1])
         if self._use_deterministic_path:
-            deterministic_rep = self._deterministic_encoder(context_x, context_y, target_x)
-            representation = torch.cat([deterministic_rep, latent_rep], dim=-1)
+            deterministic_rep = self._deterministic_encoder(context_x, context_y,
+                                                            target_x)
+            representation = tf.concat([deterministic_rep, latent_rep], axis=-1)
         else:
             representation = latent_rep
 
@@ -425,11 +445,13 @@ class LatentModel(nn.Module):
         # If we want to calculate the log_prob for training we will make use of the
         # target_y. At test time the target_y is not available so we return None.
         if target_y is not None:
-            log_p = dist.log_prob(target_y).squeeze()
+            log_p = dist.log_prob(target_y)
             posterior = self._latent_encoder(target_x, target_y)
-            kl = torch.distributions.kl_divergence(posterior, prior).sum(dim=-1, keepdims=True)
-            kl = kl.repeat([1, num_targets])
-            loss = - (log_p - kl / torch.tensor(num_targets).float()).mean()
+            kl = tf.reduce_sum(
+                tf.contrib.distributions.kl_divergence(posterior, prior),
+                axis=-1, keepdims=True)
+            kl = tf.tile(kl, [1, num_targets])
+            loss = - tf.reduce_mean(log_p - kl / tf.cast(num_targets, tf.float32))
         else:
             log_p = None
             kl = None
@@ -448,8 +470,9 @@ def uniform_attention(q, v):
     Returns:
         tensor of shape [B,m,d_v].
     """
-    total_points = q.shape[1]
-    rep = v.mean(dim=1, keepdims=True).repeat([1, total_points, 1])  # [B,1,d_v]
+    total_points = tf.shape(q)[1]
+    rep = tf.reduce_mean(v, axis=1, keepdims=True)  # [B,1,d_v]
+    rep = tf.tile(rep, [1, total_points, 1])
     return rep
 
 
@@ -466,16 +489,16 @@ def laplace_attention(q, k, v, scale, normalise):
     Returns:
         tensor of shape [B,m,d_v].
     """
-    k = torch.unsqueeze(k, dim=1)  # [B,1,n,d_k]
-    q = torch.unsqueeze(q, dim=2)  # [B,m,1,d_k]
-    unnorm_weights = - torch.abs((k - q) / scale)  # [B,m,n,d_k]
-    unnorm_weights = unnorm_weights.sum(dim=-1)  # [B,m,n]
+    k = tf.expand_dims(k, axis=1)  # [B,1,n,d_k]
+    q = tf.expand_dims(q, axis=2)  # [B,m,1,d_k]
+    unnorm_weights = - tf.abs((k - q) / scale)  # [B,m,n,d_k]
+    unnorm_weights = tf.reduce_sum(unnorm_weights, axis=-1)  # [B,m,n]
     if normalise:
-        weight_fn = F.softmax
+        weight_fn = tf.nn.softmax
     else:
-        weight_fn = lambda x: 1 + F.tanh(x)
+        weight_fn = lambda x: 1 + tf.tanh(x)
     weights = weight_fn(unnorm_weights)  # [B,m,n]
-    rep = torch.bmm(weights, v)  # [B,m,d_v]
+    rep = tf.einsum('bik,bkj->bij', weights, v)  # [B,m,d_v]
     return rep
 
 
@@ -491,15 +514,15 @@ def dot_product_attention(q, k, v, normalise):
     Returns:
         tensor of shape [B,m,d_v].
     """
-    d_k = q.shape[-1]
-    scale = torch.sqrt(torch.tensor(d_k).float())
-    unnorm_weights = torch.bmm(q, k.transpose(1, 2)) / scale  # [B,m,n]
+    d_k = tf.shape(q)[-1]
+    scale = tf.sqrt(tf.cast(d_k, tf.float32))
+    unnorm_weights = tf.einsum('bjk,bik->bij', k, q) / scale  # [B,m,n]
     if normalise:
-        weight_fn = F.softmax
+        weight_fn = tf.nn.softmax
     else:
-        weight_fn = F.sigmoid
+        weight_fn = tf.sigmoid
     weights = weight_fn(unnorm_weights)  # [B,m,n]
-    rep = torch.bmm(weights, v)  # [B,m,d_v]
+    rep = tf.einsum('bik,bkj->bij', weights, v)  # [B,m,d_v]
     return rep
 
 
@@ -507,34 +530,38 @@ def multihead_attention(q, k, v, num_heads=8):
     """Computes multi-head attention.
 
     Args:
-      q: queries. tensor of  shape [B,m,d_k].
-      k: keys. tensor of shape [B,n,d_k].
-      v: values. tensor of shape [B,n,d_v].
-      num_heads: number of heads. Should divide d_v.
+        q: queries. tensor of  shape [B,m,d_k].
+        k: keys. tensor of shape [B,n,d_k].
+        v: values. tensor of shape [B,n,d_v].
+        num_heads: number of heads. Should divide d_v.
 
     Returns:
-      tensor of shape [B,m,d_v].
+        tensor of shape [B,m,d_v].
     """
-    d_k = q.shape[-1]
-    d_v = v.shape[-1]
-    head_size = d_v // num_heads
-
-    rep = torch.tensor(0.0)
-
+    d_k = q.get_shape().as_list()[-1]
+    d_v = v.get_shape().as_list()[-1]
+    head_size = d_v / num_heads
+    key_initializer = tf.random_normal_initializer(stddev=d_k ** -0.5)
+    value_initializer = tf.random_normal_initializer(stddev=d_v ** -0.5)
+    rep = tf.constant(0.0)
     for h in range(num_heads):
-        q_head = (nn.Conv1d(in_channels=d_k, out_channels=head_size, kernel_size=1, bias=False)(q.transpose(1, 2))).transpose(1, 2)
-        k_head = (nn.Conv1d(in_channels=d_k, out_channels=head_size, kernel_size=1, bias=False)(k.transpose(1, 2))).transpose(1, 2)
-        v_head = (nn.Conv1d(in_channels=d_v, out_channels=head_size, kernel_size=1, bias=False)(v.transpose(1, 2))).transpose(1, 2)
-        o = dot_product_attention(q_head, k_head, v_head, normalise=True)
-        rep = rep + (nn.Conv1d(in_channels=head_size, out_channels=d_v, kernel_size=1, bias=False)(o.transpose(1, 2))).transpose(1, 2)
-
+        o = dot_product_attention(
+            tf.layers.Conv1D(head_size, 1, kernel_initializer=key_initializer,
+                             name='wq%d' % h, use_bias=False, padding='VALID')(q),
+            tf.layers.Conv1D(head_size, 1, kernel_initializer=key_initializer,
+                             name='wk%d' % h, use_bias=False, padding='VALID')(k),
+            tf.layers.Conv1D(head_size, 1, kernel_initializer=key_initializer,
+                             name='wv%d' % h, use_bias=False, padding='VALID')(v),
+            normalise=True)
+        rep += tf.layers.Conv1D(d_v, 1, kernel_initializer=value_initializer,
+                                name='wo%d' % h, use_bias=False, padding='VALID')(o)
     return rep
 
 
-class Attention(nn.Module):
+class Attention(object):
     """The Attention module."""
 
-    def __init__(self, rep, d_x, output_sizes, att_type, scale=1., normalise=True,
+    def __init__(self, rep, output_sizes, att_type, scale=1., normalise=True,
                  num_heads=8):
         """Create attention module.
 
@@ -554,7 +581,6 @@ class Attention(nn.Module):
                 2. apply custom transformation to have weights in [0,1].
             num_heads: number of heads for multihead.
         """
-        super(Attention, self).__init__()
         self._rep = rep
         self._output_sizes = output_sizes
         self._type = att_type
@@ -563,9 +589,7 @@ class Attention(nn.Module):
         if self._type == 'multihead':
             self._num_heads = num_heads
 
-        self.batch_linear = BatchLinear(d_x, output_sizes)
-
-    def forward(self, x1, x2, r):
+    def __call__(self, x1, x2, r):
         """Apply attention to create aggregated representation of r.
 
         Args:
@@ -583,8 +607,8 @@ class Attention(nn.Module):
             k, q = (x1, x2)
         elif self._rep == 'mlp':
             # Pass through MLP
-            k = self.batch_linear(x1)
-            q = self.batch_linear(x2)
+            k = batch_mlp(x1, self._output_sizes, "attention")
+            q = batch_mlp(x2, self._output_sizes, "attention")
         else:
             raise NameError("'rep' not among ['identity','mlp']")
 
@@ -603,7 +627,7 @@ class Attention(nn.Module):
         return rep
 
 
-def plot_functions(ep, target_x, target_y, context_x, context_y, pred_y, std):
+def plot_functions(target_x, target_y, context_x, context_y, pred_y, std):
     """Plots the predicted mean and variance and the context points.
 
     Args:
@@ -620,7 +644,6 @@ def plot_functions(ep, target_x, target_y, context_x, context_y, pred_y, std):
         std: An array of shape [B,num_targets,1] that contains the
             predicted std dev of the y values at the target points in target_x.
     """
-    fig = plt.figure()
     # Plot everything
     plt.plot(target_x[0], pred_y[0], 'b', linewidth=2)
     plt.plot(target_x[0], target_y[0], 'k:', linewidth=2)
@@ -639,168 +662,157 @@ def plot_functions(ep, target_x, target_y, context_x, context_y, pred_y, std):
     plt.ylim([-2, 2])
     plt.grid('off')
     ax = plt.gca()
-    fig.savefig('./anp/out/test_{}.png'.format(ep))
-    plt.close(fig)
+    plt.show()
 
 
 def np_train():
-    TRAINING_ITERATIONS = 100000 #@param {type:"number"}
-    MAX_CONTEXT_POINTS = 50 #@param {type:"number"}
-    PLOT_AFTER = 10000 #@param {type:"number"}
-    HIDDEN_SIZE = 128 #@param {type:"number"}
-    MODEL_TYPE = 'NP' #@param ['NP','ANP']
-    ATTENTION_TYPE = 'uniform' #@param ['uniform','laplace','dot_product','multihead']
-    random_kernel_parameters=True #@param {type:"boolean"}
+    TRAINING_ITERATIONS = 100000  # @param {type:"number"}
+    MAX_CONTEXT_POINTS = 50  # @param {type:"number"}
+    PLOT_AFTER = 10000  # @param {type:"number"}
+    HIDDEN_SIZE = 128  # @param {type:"number"}
+    MODEL_TYPE = 'NP'  # @param ['NP','ANP']
+    ATTENTION_TYPE = 'uniform'  # @param ['uniform','laplace','dot_product','multihead']
+    random_kernel_parameters = True  # @param {type:"boolean"}
 
+    tf.reset_default_graph()
     # Train dataset
     dataset_train = GPCurvesReader(
         batch_size=16, max_num_context=MAX_CONTEXT_POINTS, random_kernel_parameters=random_kernel_parameters)
+    data_train = dataset_train.generate_curves()
 
     # Test dataset
     dataset_test = GPCurvesReader(
-        batch_size=1, max_num_context=MAX_CONTEXT_POINTS, testing=True, random_kernel_parameters=random_kernel_parameters)
-
+        batch_size=1, max_num_context=MAX_CONTEXT_POINTS, testing=True,
+        random_kernel_parameters=random_kernel_parameters)
+    data_test = dataset_test.generate_curves()
 
     # Sizes of the layers of the MLPs for the encoders and decoder
     # The final output layer of the decoder outputs two values, one for the mean and
     # one for the variance of the prediction at the target location
-    latent_encoder_output_sizes = [HIDDEN_SIZE]*4
+    latent_encoder_output_sizes = [HIDDEN_SIZE] * 4
     num_latents = HIDDEN_SIZE
-    deterministic_encoder_output_sizes= [HIDDEN_SIZE]*4
-    decoder_output_sizes = [HIDDEN_SIZE]*2 + [2]
+    deterministic_encoder_output_sizes = [HIDDEN_SIZE] * 4
+    decoder_output_sizes = [HIDDEN_SIZE] * 2 + [2]
     use_deterministic_path = True
-
 
     # ANP with multihead attention
     if MODEL_TYPE == 'ANP':
-        attention = Attention(rep='mlp', d_x=dataset_train._x_size, output_sizes=[HIDDEN_SIZE]*2,
-                            att_type=ATTENTION_TYPE)
+        attention = Attention(rep='mlp', output_sizes=[HIDDEN_SIZE] * 2,
+                              att_type=ATTENTION_TYPE)
     # NP - equivalent to uniform attention
     elif MODEL_TYPE == 'NP':
-        attention = Attention(rep='identity', d_x=dataset_train._x_size, output_sizes=deterministic_encoder_output_sizes, att_type='uniform')
+        attention = Attention(rep='identity', output_sizes=None, att_type='uniform')
     else:
         raise NameError("MODEL_TYPE not among ['ANP,'NP']")
 
     # Define the model
-    model = LatentModel(dataset_train._x_size, dataset_train._y_size, latent_encoder_output_sizes, num_latents,
+    model = LatentModel(latent_encoder_output_sizes, num_latents,
                         decoder_output_sizes, use_deterministic_path,
                         deterministic_encoder_output_sizes, attention)
 
+    # Define the loss
+    _, _, log_prob, _, loss = model(data_train.query, data_train.num_total_points,
+                                    data_train.target_y)
+
+    # Get the predicted mean and variance at the target points for the testing set
+    mu, sigma, _, _, _ = model(data_test.query, data_test.num_total_points)
 
     # Set up the optimizer and train step
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = tf.train.AdamOptimizer(1e-4)
+    train_step = optimizer.minimize(loss)
+    init = tf.initialize_all_variables()
 
     # Train and plot
-    for it in range(TRAINING_ITERATIONS):
+    with tf.Session() as sess:
+        sess.run(init)
 
-        model.train()
-
-        data_train = dataset_train.generate_curves()
-        data_test = dataset_test.generate_curves()
-
-        # Define the loss
-        _, _, log_prob, _, loss = model(data_train.query, data_train.num_total_points,
-                                        data_train.target_y)
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        for it in range(TRAINING_ITERATIONS):
+            sess.run([train_step])
 
         # Plot the predictions in `PLOT_AFTER` intervals
         if it % PLOT_AFTER == 0:
-            model.eval()
-            _, _, log_prob, _, loss = model(data_train.query, data_train.num_total_points,
-                                            data_train.target_y)
-
-            # Get the predicted mean and variance at the target points for the testing set
-            mu, sigma, _, _, _ = model(data_test.query, data_test.num_total_points)
-            loss_value, pred_y, std_y, target_y, whole_query = loss.detach().numpy(), mu.detach().numpy(), sigma.detach().numpy(), data_test.target_y, data_test.query
+            loss_value, pred_y, std_y, target_y, whole_query = sess.run(
+                [loss, mu, sigma, data_test.target_y,
+                 data_test.query])
 
             (context_x, context_y), target_x = whole_query
             print('Iteration: {}, loss: {}'.format(it, loss_value))
 
             # Plot the prediction and the context
-            plot_functions(it, target_x, target_y, context_x, context_y, pred_y, std_y)
+            plot_functions(target_x, target_y, context_x, context_y, pred_y, std_y)
 
 
 def anp_train():
-    TRAINING_ITERATIONS = 100000 #@param {type:"number"}
-    MAX_CONTEXT_POINTS = 50 #@param {type:"number"}
-    PLOT_AFTER = 10000 #@param {type:"number"}
-    HIDDEN_SIZE = 128 #@param {type:"number"}
-    MODEL_TYPE = 'ANP' #@param ['NP','ANP']
-    ATTENTION_TYPE = 'multihead' #@param ['uniform','laplace','dot_product','multihead']
-    random_kernel_parameters=True #@param {type:"boolean"}
+    TRAINING_ITERATIONS = 100000  # @param {type:"number"}
+    MAX_CONTEXT_POINTS = 50  # @param {type:"number"}
+    PLOT_AFTER = 10000  # @param {type:"number"}
+    HIDDEN_SIZE = 128  # @param {type:"number"}
+    MODEL_TYPE = 'ANP'  # @param ['NP','ANP']
+    ATTENTION_TYPE = 'multihead'  # @param ['uniform','laplace','dot_product','multihead']
+    random_kernel_parameters = True  # @param {type:"boolean"}
 
+    tf.reset_default_graph()
     # Train dataset
     dataset_train = GPCurvesReader(
         batch_size=16, max_num_context=MAX_CONTEXT_POINTS)
+    data_train = dataset_train.generate_curves()
 
     # Test dataset
     dataset_test = GPCurvesReader(
         batch_size=1, max_num_context=MAX_CONTEXT_POINTS, testing=True)
-
+    data_test = dataset_test.generate_curves()
 
     # Sizes of the layers of the MLPs for the encoders and decoder
     # The final output layer of the decoder outputs two values, one for the mean and
     # one for the variance of the prediction at the target location
-    latent_encoder_output_sizes = [HIDDEN_SIZE]*4
+    latent_encoder_output_sizes = [HIDDEN_SIZE] * 4
     num_latents = HIDDEN_SIZE
-    deterministic_encoder_output_sizes = [HIDDEN_SIZE]*4
-    decoder_output_sizes = [HIDDEN_SIZE]*2 + [2]
+    deterministic_encoder_output_sizes = [HIDDEN_SIZE] * 4
+    decoder_output_sizes = [HIDDEN_SIZE] * 2 + [2]
     use_deterministic_path = True
 
     # ANP with multihead attention
     if MODEL_TYPE == 'ANP':
-        attention = Attention(rep='mlp', d_x=dataset_train._x_size, output_sizes=[HIDDEN_SIZE]*2,
-                            att_type='multihead')
+        attention = Attention(rep='mlp', output_sizes=[HIDDEN_SIZE] * 2,
+                              att_type='multihead')
     # NP - equivalent to uniform attention
     elif MODEL_TYPE == 'NP':
-        attention = Attention(rep='identity', d_x=dataset_train._x_size, output_sizes=None, att_type='uniform')
+        attention = Attention(rep='identity', output_sizes=None, att_type='uniform')
     else:
         raise NameError("MODEL_TYPE not among ['ANP,'NP']")
 
     # Define the model
-    model = LatentModel(dataset_train._x_size, dataset_train._y_size, latent_encoder_output_sizes, num_latents,
+    model = LatentModel(latent_encoder_output_sizes, num_latents,
                         decoder_output_sizes, use_deterministic_path,
                         deterministic_encoder_output_sizes, attention)
 
+    # Define the loss
+    _, _, log_prob, _, loss = model(data_train.query, data_train.num_total_points,
+                                    data_train.target_y)
+
+    # Get the predicted mean and variance at the target points for the testing set
+    mu, sigma, _, _, _ = model(data_test.query, data_test.num_total_points)
 
     # Set up the optimizer and train step
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = tf.train.AdamOptimizer(1e-4)
+    train_step = optimizer.minimize(loss)
+    init = tf.initialize_all_variables()
 
     # Train and plot
-    for it in range(TRAINING_ITERATIONS):
+    with tf.train.MonitoredSession() as sess:
+        sess.run(init)
 
-        model.train()
+        for it in range(TRAINING_ITERATIONS):
+            sess.run([train_step])
 
-        data_train = dataset_train.generate_curves()
-        data_test = dataset_test.generate_curves()
+            # Plot the predictions in `PLOT_AFTER` intervals
+            if it % PLOT_AFTER == 0:
+                loss_value, pred_y, std_y, target_y, whole_query = sess.run(
+                    [loss, mu, sigma, data_test.target_y,
+                     data_test.query])
 
-        # Define the loss
-        _, _, log_prob, _, loss = model(data_train.query, data_train.num_total_points,
-                                        data_train.target_y)
+                (context_x, context_y), target_x = whole_query
+                print('Iteration: {}, loss: {}'.format(it, loss_value))
 
-        # # Get the predicted mean and variance at the target points for the testing set
-        # mu, sigma, _, _, _ = model(data_test.query, data_test.num_total_points)
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        # Plot the predictions in `PLOT_AFTER` intervals
-        if it % PLOT_AFTER == 0:
-            model.eval()
-            _, _, log_prob, _, loss = model(data_train.query, data_train.num_total_points,
-                                            data_train.target_y)
-
-            # Get the predicted mean and variance at the target points for the testing set
-            mu, sigma, _, _, _ = model(data_test.query, data_test.num_total_points)
-            loss_value, pred_y, std_y, target_y, whole_query = loss.detach().numpy(), mu.detach().numpy(), sigma.detach().numpy(), data_test.target_y, data_test.query
-
-            (context_x, context_y), target_x = whole_query
-            print('Iteration: {}, loss: {}'.format(it, loss_value))
-
-            # Plot the prediction and the context
-            plot_functions(it, target_x, target_y, context_x, context_y, pred_y, std_y)
-
+                # Plot the prediction and the context
+                plot_functions(target_x, target_y, context_x, context_y, pred_y, std_y)
