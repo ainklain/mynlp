@@ -6,6 +6,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import collections
 
+from ts_torch.torch_util_mini import np_ify
+
 # The (A)NP takes as input a `NPRegressionDescription` namedtuple with fields:
 #   `query`: a tuple containing ((context_x, context_y), target_x)
 #   `target_y`: a tensor containing the ground truth for the targets to be
@@ -20,6 +22,16 @@ import collections
 NPRegressionDescription = collections.namedtuple(
     "NPRegressionDescription",
     ("query", "target_y", "num_total_points", "num_context_points"))
+
+
+def to_device(data: NPRegressionDescription, device='cuda:0'):
+    ((context_x, context_y), target_x) = data.query
+    query = ((context_x.to(device), context_y.to(device)), target_x.to(device))
+    return NPRegressionDescription(
+            query=query,
+            target_y=data.target_y.to(device),
+            num_total_points=data.num_total_points,
+            num_context_points=data.num_context_points)
 
 
 class GPCurvesReader(object):
@@ -122,7 +134,6 @@ class GPCurvesReader(object):
             num_target = torch.randint(low=0, high=self._max_num_context - num_context, size=[])
             num_total_points = num_context + num_target
             x_values = torch.FloatTensor(self._batch_size, num_total_points, self._x_size).uniform_(-2, 2)
-
 
         # Set kernel parameters
         # Either choose a set of random parameters for the mini-batch
@@ -497,38 +508,63 @@ def dot_product_attention(q, k, v, normalise):
     if normalise:
         weight_fn = F.softmax
     else:
-        weight_fn = F.sigmoid
+        weight_fn = torch.sigmoid
     weights = weight_fn(unnorm_weights)  # [B,m,n]
     rep = torch.bmm(weights, v)  # [B,m,d_v]
     return rep
 
 
-def multihead_attention(q, k, v, num_heads=8):
-    """Computes multi-head attention.
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_k, d_v, num_heads=8):
+        super(MultiHeadAttention, self).__init__()
 
-    Args:
-      q: queries. tensor of  shape [B,m,d_k].
-      k: keys. tensor of shape [B,n,d_k].
-      v: values. tensor of shape [B,n,d_v].
-      num_heads: number of heads. Should divide d_v.
+        head_size = d_v // num_heads
+        self.q_layers = nn.ModuleList()
+        self.k_layers = nn.ModuleList()
+        self.v_layers = nn.ModuleList()
+        self.attn_layers = nn.ModuleList()
+        for h in range(num_heads):
+            self.q_layers.append(nn.Conv1d(in_channels=d_k, out_channels=head_size, kernel_size=1, bias=False))
+            self.k_layers.append(nn.Conv1d(in_channels=d_k, out_channels=head_size, kernel_size=1, bias=False))
+            self.v_layers.append(nn.Conv1d(in_channels=d_v, out_channels=head_size, kernel_size=1, bias=False))
+            self.attn_layers.append(nn.Conv1d(in_channels=head_size, out_channels=d_v, kernel_size=1, bias=False))
 
-    Returns:
-      tensor of shape [B,m,d_v].
-    """
-    d_k = q.shape[-1]
-    d_v = v.shape[-1]
-    head_size = d_v // num_heads
+    def forward(self, q, k, v):
+        rep = torch.tensor(0.0)
+        for i in range(len(self.q_layers)):
+            o = dot_product_attention(self.q_layers[i](q.transpose(1, 2)).transpose(1, 2),
+                                      self.k_layers[i](k.transpose(1, 2)).transpose(1, 2),
+                                      self.v_layers[i](v.transpose(1, 2)).transpose(1, 2),
+                                      normalise=True)
+            rep = rep + self.attn_layers[i](o.transpose(1, 2)).transpose(1, 2)
+        return rep
 
-    rep = torch.tensor(0.0)
-
-    for h in range(num_heads):
-        q_head = (nn.Conv1d(in_channels=d_k, out_channels=head_size, kernel_size=1, bias=False)(q.transpose(1, 2))).transpose(1, 2)
-        k_head = (nn.Conv1d(in_channels=d_k, out_channels=head_size, kernel_size=1, bias=False)(k.transpose(1, 2))).transpose(1, 2)
-        v_head = (nn.Conv1d(in_channels=d_v, out_channels=head_size, kernel_size=1, bias=False)(v.transpose(1, 2))).transpose(1, 2)
-        o = dot_product_attention(q_head, k_head, v_head, normalise=True)
-        rep = rep + (nn.Conv1d(in_channels=head_size, out_channels=d_v, kernel_size=1, bias=False)(o.transpose(1, 2))).transpose(1, 2)
-
-    return rep
+# def multihead_attention(q, k, v, num_heads=8):
+#     """Computes multi-head attention.
+#
+#     Args:
+#       q: queries. tensor of  shape [B,m,d_k].
+#       k: keys. tensor of shape [B,n,d_k].
+#       v: values. tensor of shape [B,n,d_v].
+#       num_heads: number of heads. Should divide d_v.
+#
+#     Returns:
+#       tensor of shape [B,m,d_v].
+#     """
+#     d_k = q.shape[-1]
+#     d_v = v.shape[-1]
+#     head_size = d_v // num_heads
+#
+#     rep = torch.tensor(0.0)
+#
+#     for h in range(num_heads):
+#         q_head = (nn.Conv1d(in_channels=d_k, out_channels=head_size, kernel_size=1, bias=False)(q.transpose(1, 2))).transpose(1, 2)
+#         k_head = (nn.Conv1d(in_channels=d_k, out_channels=head_size, kernel_size=1, bias=False)(k.transpose(1, 2))).transpose(1, 2)
+#         v_head = (nn.Conv1d(in_channels=d_v, out_channels=head_size, kernel_size=1, bias=False)(v.transpose(1, 2))).transpose(1, 2)
+#         o = dot_product_attention(q_head, k_head, v_head, normalise=True)
+#         rep = rep + (nn.Conv1d(in_channels=head_size, out_channels=d_v, kernel_size=1, bias=False)(o.transpose(1, 2))).transpose(1, 2)
+#
+#     return rep
 
 
 class Attention(nn.Module):
@@ -560,8 +596,15 @@ class Attention(nn.Module):
         self._type = att_type
         self._scale = scale
         self._normalise = normalise
+
         if self._type == 'multihead':
+            if self._rep == 'identity':
+                d_k, d_v = d_x, d_x
+            elif self._rep == 'mlp':
+                d_k, d_v = output_sizes[-1], output_sizes[-1]
+
             self._num_heads = num_heads
+            self.multihead_attention = MultiHeadAttention(d_k, d_v, num_heads)
 
         self.batch_linear = BatchLinear(d_x, output_sizes)
 
@@ -595,7 +638,7 @@ class Attention(nn.Module):
         elif self._type == 'dot_product':
             rep = dot_product_attention(q, k, r, self._normalise)
         elif self._type == 'multihead':
-            rep = multihead_attention(q, k, r, self._num_heads)
+            rep = self.multihead_attention(q, k, r)
         else:
             raise NameError(("'att_type' not among ['uniform','laplace','dot_product'"
                              ",'multihead']"))
@@ -650,7 +693,7 @@ def np_train():
     HIDDEN_SIZE = 128 #@param {type:"number"}
     MODEL_TYPE = 'NP' #@param ['NP','ANP']
     ATTENTION_TYPE = 'uniform' #@param ['uniform','laplace','dot_product','multihead']
-    random_kernel_parameters=True #@param {type:"boolean"}
+    random_kernel_parameters = True #@param {type:"boolean"}
 
     # Train dataset
     dataset_train = GPCurvesReader(
@@ -666,7 +709,7 @@ def np_train():
     # one for the variance of the prediction at the target location
     latent_encoder_output_sizes = [HIDDEN_SIZE]*4
     num_latents = HIDDEN_SIZE
-    deterministic_encoder_output_sizes= [HIDDEN_SIZE]*4
+    deterministic_encoder_output_sizes = [HIDDEN_SIZE]*4
     decoder_output_sizes = [HIDDEN_SIZE]*2 + [2]
     use_deterministic_path = True
 
@@ -726,7 +769,7 @@ def np_train():
 def anp_train():
     TRAINING_ITERATIONS = 100000 #@param {type:"number"}
     MAX_CONTEXT_POINTS = 50 #@param {type:"number"}
-    PLOT_AFTER = 10000 #@param {type:"number"}
+    PLOT_AFTER = 1000 #@param {type:"number"}
     HIDDEN_SIZE = 128 #@param {type:"number"}
     MODEL_TYPE = 'ANP' #@param ['NP','ANP']
     ATTENTION_TYPE = 'multihead' #@param ['uniform','laplace','dot_product','multihead']
@@ -765,17 +808,20 @@ def anp_train():
                         decoder_output_sizes, use_deterministic_path,
                         deterministic_encoder_output_sizes, attention)
 
+    model.cuda()
 
     # Set up the optimizer and train step
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
+    data_train = dataset_train.generate_curves()
+    data_test = dataset_test.generate_curves()
+    data_train = to_device(data_train, 'cuda:0')
+    data_test = to_device(data_test, 'cuda:0')
     # Train and plot
     for it in range(TRAINING_ITERATIONS):
 
         model.train()
 
-        data_train = dataset_train.generate_curves()
-        data_test = dataset_test.generate_curves()
 
         # Define the loss
         _, _, log_prob, _, loss = model(data_train.query, data_train.num_total_points,
@@ -791,16 +837,17 @@ def anp_train():
         # Plot the predictions in `PLOT_AFTER` intervals
         if it % PLOT_AFTER == 0:
             model.eval()
-            _, _, log_prob, _, loss = model(data_train.query, data_train.num_total_points,
-                                            data_train.target_y)
+            with torch.set_grad_enabled(False):
+                _, _, log_prob, _, loss = model(data_train.query, data_train.num_total_points,
+                                                data_train.target_y)
 
-            # Get the predicted mean and variance at the target points for the testing set
-            mu, sigma, _, _, _ = model(data_test.query, data_test.num_total_points)
-            loss_value, pred_y, std_y, target_y, whole_query = loss.detach().numpy(), mu.detach().numpy(), sigma.detach().numpy(), data_test.target_y, data_test.query
+                # Get the predicted mean and variance at the target points for the testing set
+                mu, sigma, _, _, _ = model(data_test.query, data_test.num_total_points)
+            loss_value, pred_y, std_y, target_y, whole_query = loss, mu, sigma, data_test.target_y, data_test.query
 
             (context_x, context_y), target_x = whole_query
-            print('Iteration: {}, loss: {}'.format(it, loss_value))
+            print('Iteration: {}, loss: {}'.format(it, np_ify(loss_value)))
 
             # Plot the prediction and the context
-            plot_functions(it, target_x, target_y, context_x, context_y, pred_y, std_y)
+            plot_functions(it, np_ify(target_x), np_ify(target_y), np_ify(context_x), np_ify(context_y), np_ify(pred_y), np_ify(std_y))
 
