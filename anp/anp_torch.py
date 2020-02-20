@@ -290,7 +290,7 @@ class LatentEncoder(nn.Module):
 
         # Aggregator: take the mean over all points
         hidden = hidden.mean(dim=1)
-        hidden = self.interim_layer(hidden)
+        hidden = F.relu(self.interim_layer(hidden))
         mu = self.mu_layer(hidden)
         log_sigma = self.log_sigma_layer(hidden)
 
@@ -388,6 +388,7 @@ class LatentModel(nn.Module):
         self._decoder = Decoder(d_decoder, decoder_output_sizes)
 
     def forward(self, query, num_targets, target_y=None):
+        # query, num_targets, target_y = data_train.query, data_train.num_total_points, data_train.target_y
         """Returns the predicted mean and variance at the target points.
 
         Args:
@@ -513,21 +514,30 @@ def dot_product_attention(q, k, v, normalise):
     rep = torch.bmm(weights, v)  # [B,m,d_v]
     return rep
 
+class Conv1dWithInit(nn.Conv1d):
+    def __init__(self, std, *args, **kwargs):
+        super(Conv1dWithInit, self).__init__(*args, **kwargs)
+        init.normal_(self.weight, std=std)
+
 
 class MultiHeadAttention(nn.Module):
     def __init__(self, d_k, d_v, num_heads=8):
         super(MultiHeadAttention, self).__init__()
 
         head_size = d_v // num_heads
+
+        std_key_init = d_k ** -0.5
+        std_value_init = d_v ** -0.5
+
         self.q_layers = nn.ModuleList()
         self.k_layers = nn.ModuleList()
         self.v_layers = nn.ModuleList()
         self.attn_layers = nn.ModuleList()
         for h in range(num_heads):
-            self.q_layers.append(nn.Conv1d(in_channels=d_k, out_channels=head_size, kernel_size=1, bias=False))
-            self.k_layers.append(nn.Conv1d(in_channels=d_k, out_channels=head_size, kernel_size=1, bias=False))
-            self.v_layers.append(nn.Conv1d(in_channels=d_v, out_channels=head_size, kernel_size=1, bias=False))
-            self.attn_layers.append(nn.Conv1d(in_channels=head_size, out_channels=d_v, kernel_size=1, bias=False))
+            self.q_layers.append(Conv1dWithInit(std_key_init, in_channels=d_k, out_channels=head_size, kernel_size=1, bias=False))
+            self.k_layers.append(Conv1dWithInit(std_key_init, in_channels=d_k, out_channels=head_size, kernel_size=1, bias=False))
+            self.v_layers.append(Conv1dWithInit(std_key_init, in_channels=d_v, out_channels=head_size, kernel_size=1, bias=False))
+            self.attn_layers.append(Conv1dWithInit(std_value_init, in_channels=head_size, out_channels=d_v, kernel_size=1, bias=False))
 
     def forward(self, q, k, v):
         rep = torch.tensor(0.0)
@@ -689,7 +699,7 @@ def plot_functions(ep, target_x, target_y, context_x, context_y, pred_y, std):
 def np_train():
     TRAINING_ITERATIONS = 100000 #@param {type:"number"}
     MAX_CONTEXT_POINTS = 50 #@param {type:"number"}
-    PLOT_AFTER = 10000 #@param {type:"number"}
+    PLOT_AFTER = 1000 #@param {type:"number"}
     HIDDEN_SIZE = 128 #@param {type:"number"}
     MODEL_TYPE = 'NP' #@param ['NP','ANP']
     ATTENTION_TYPE = 'uniform' #@param ['uniform','laplace','dot_product','multihead']
@@ -739,7 +749,6 @@ def np_train():
         model.train()
 
         data_train = dataset_train.generate_curves()
-        data_test = dataset_test.generate_curves()
 
         # Define the loss
         _, _, log_prob, _, loss = model(data_train.query, data_train.num_total_points,
@@ -751,6 +760,7 @@ def np_train():
 
         # Plot the predictions in `PLOT_AFTER` intervals
         if it % PLOT_AFTER == 0:
+            data_test = dataset_test.generate_curves()
             model.eval()
             _, _, log_prob, _, loss = model(data_train.query, data_train.num_total_points,
                                             data_train.target_y)
@@ -813,15 +823,13 @@ def anp_train():
     # Set up the optimizer and train step
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
-    data_train = dataset_train.generate_curves()
-    data_test = dataset_test.generate_curves()
-    data_train = to_device(data_train, 'cuda:0')
-    data_test = to_device(data_test, 'cuda:0')
     # Train and plot
     for it in range(TRAINING_ITERATIONS):
 
         model.train()
 
+        data_train = dataset_train.generate_curves()
+        data_train = to_device(data_train, 'cuda:0')
 
         # Define the loss
         _, _, log_prob, _, loss = model(data_train.query, data_train.num_total_points,
@@ -836,6 +844,8 @@ def anp_train():
 
         # Plot the predictions in `PLOT_AFTER` intervals
         if it % PLOT_AFTER == 0:
+            data_test = dataset_test.generate_curves()
+            data_test = to_device(data_test, 'cuda:0')
             model.eval()
             with torch.set_grad_enabled(False):
                 _, _, log_prob, _, loss = model(data_train.query, data_train.num_total_points,
