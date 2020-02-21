@@ -5,6 +5,7 @@ from torch.nn import init, functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 import collections
+from functools import partial
 
 from ts_torch.torch_util_mini import np_ify
 
@@ -483,7 +484,7 @@ def laplace_attention(q, k, v, scale, normalise):
     unnorm_weights = - torch.abs((k - q) / scale)  # [B,m,n,d_k]
     unnorm_weights = unnorm_weights.sum(dim=-1)  # [B,m,n]
     if normalise:
-        weight_fn = F.softmax
+        weight_fn = partial(F.softmax, dim=-1)
     else:
         weight_fn = lambda x: 1 + F.tanh(x)
     weights = weight_fn(unnorm_weights)  # [B,m,n]
@@ -507,7 +508,7 @@ def dot_product_attention(q, k, v, normalise):
     scale = torch.sqrt(torch.tensor(d_k).float())
     unnorm_weights = torch.bmm(q, k.transpose(1, 2)) / scale  # [B,m,n]
     if normalise:
-        weight_fn = F.softmax
+        weight_fn = partial(F.softmax, dim=-1)
     else:
         weight_fn = torch.sigmoid
     weights = weight_fn(unnorm_weights)  # [B,m,n]
@@ -702,7 +703,6 @@ def np_train():
     PLOT_AFTER = 1000 #@param {type:"number"}
     HIDDEN_SIZE = 128 #@param {type:"number"}
     MODEL_TYPE = 'NP' #@param ['NP','ANP']
-    ATTENTION_TYPE = 'uniform' #@param ['uniform','laplace','dot_product','multihead']
     random_kernel_parameters = True #@param {type:"boolean"}
 
     # Train dataset
@@ -727,7 +727,7 @@ def np_train():
     # ANP with multihead attention
     if MODEL_TYPE == 'ANP':
         attention = Attention(rep='mlp', d_x=dataset_train._x_size, output_sizes=[HIDDEN_SIZE]*2,
-                            att_type=ATTENTION_TYPE)
+                            att_type='multihead')
     # NP - equivalent to uniform attention
     elif MODEL_TYPE == 'NP':
         attention = Attention(rep='identity', d_x=dataset_train._x_size, output_sizes=deterministic_encoder_output_sizes, att_type='uniform')
@@ -782,7 +782,6 @@ def anp_train():
     PLOT_AFTER = 1000 #@param {type:"number"}
     HIDDEN_SIZE = 128 #@param {type:"number"}
     MODEL_TYPE = 'ANP' #@param ['NP','ANP']
-    ATTENTION_TYPE = 'multihead' #@param ['uniform','laplace','dot_product','multihead']
     random_kernel_parameters=True #@param {type:"boolean"}
 
     # Train dataset
@@ -806,7 +805,7 @@ def anp_train():
     # ANP with multihead attention
     if MODEL_TYPE == 'ANP':
         attention = Attention(rep='mlp', d_x=dataset_train._x_size, output_sizes=[HIDDEN_SIZE]*2,
-                            att_type='multihead')
+                            att_type='dot_product', normalise=False)
     # NP - equivalent to uniform attention
     elif MODEL_TYPE == 'NP':
         attention = Attention(rep='identity', d_x=dataset_train._x_size, output_sizes=None, att_type='uniform')
