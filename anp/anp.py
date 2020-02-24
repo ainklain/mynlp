@@ -183,7 +183,6 @@ class GPCurvesReader(object):
             num_context_points=num_context)
 
 
-
 class Linear(nn.Module):
     """
     Linear Module

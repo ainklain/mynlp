@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 from ts_torch.torch_util_mini import np_ify
 
 
-
 NPRegressionDescription = collections.namedtuple(
     "NPRegressionDescription",
     ("query", "target_y", "num_total_points", "num_context_points"))
@@ -547,53 +546,146 @@ class LatentModel(nn.Module):
         return kl_div
 
 
-
 class ImaginaryContext(nn.Module):
-    def __init__(self):
+    def __init__(self, d_hidden, d_model, batch_size):
         super(ImaginaryContext, self).__init__()
+        self.d_hidden = d_hidden
+        self.d_model = d_model
+        self.batch_size = batch_size
+
         # key_inference
-        self.ikey_lstm = LSTMCell(d_key+d_model, d_hidden, batch_size)
+        self.ikey_lstm = LSTMCell(d_hidden+d_model, d_hidden, batch_size)
         self.ikey_hidden_layer = Linear(d_hidden, d_hidden, w_init='relu')
-        self.ikey_infer_mu = Linear(d_hidden, d_key)
-        self.ikey_infer_logsigma = Linear(d_hidden, d_key)
+        self.ikey_infer_mu = Linear(d_hidden, d_hidden)
+        self.ikey_infer_logsigma = Linear(d_hidden, d_hidden)
 
         # imagination tracker
-        self.itraker_lstm = LSTMCell(d_key+d_value, d_hidden, batch_size)
+        self.itracker_lstm = LSTMCell(d_hidden+d_model, d_hidden, batch_size)
         self.itracker_cross_attentions = nn.ModuleList([Attention(d_hidden) for _ in range(2)])
         self.itracker_hidden_layer = Linear(d_hidden, d_hidden, w_init='relu')
-        self.itracker_mu = Linear(d_hidden, d_value)
-        self.itracker_logsigma = Linear(d_hidden, d_value)
+        self.itracker_mu = Linear(d_hidden, d_model)
+        self.itracker_logsigma = Linear(d_hidden, d_model)
+
+    def _initialize_variables(self):
+        self.x_im = torch.zeros(self.batch, self.d_hidden)
+        self.u_im = torch.zeros(self.batch, self.d_model)
+        self.ikey_hidden = torch.zeros(self.batch, self.d_hidden)
+        self.itracker_hidden = torch.zeros(self.batch, self.d_hidden)
 
     def get_variables(self):
         return self.x_im, self.u_im, self.ikey_hidden, self.itracker_hidden
 
-    def forward(self, context_x, context_r):
+    def forward(self, x_re_t, r_re_t):
         """
-            context_x : context_real x
-            context_r : f_orderinv(context_x, context_y)
+            context_x : context_real x (shape: [batch, d_hidden])
+            context_r : "representation of context" = f_orderinv(context_x, context_y)
+              (shape: [batch, d_model])
         """
+        # get t-1 values
         x_im_prev, u_im_prev, ikey_hidden_prev, itracker_hidden_prev = self.get_variables()
-        ikey_input = torch.cat([x_im_prev, context_r], dim=-1)
-        ikey_hidden_t, _ = self.ikey_lstm(ikey_input, ikey_hidden_prev)
-        ikey_hidden_t = torch.relu(self.ikey_hidden_layer(ikey_hidden_t))
 
+        # imaginary key inference
+        ikey_input = torch.cat([x_im_prev, r_re_t], dim=-1)
+        ikey_hidden = self.ikey_lstm(ikey_input, ikey_hidden_prev)  # ikey_hidden_t: (h_t, c_t)
+        ikey_hidden_t = torch.relu(self.ikey_hidden_layer(ikey_hidden[0]))
+
+        # x_t ~ N(f_mu(h_t), f_sigma(h_t))
         ikey_mu = self.ikey_infer_mu(ikey_hidden_t)
         ikey_log_sigma = self.ikey_infer_logsigma(ikey_hidden_t)
         ikey_sigma = torch.exp(0.5 * ikey_log_sigma)
-        ikey_dist = torch.distributions.Normal(loc=ikey_mu, scale=ikey_sigma)
+        x_im_dist = torch.distributions.Normal(loc=ikey_mu, scale=ikey_sigma)
 
-        x_im_t = ikey_dist.sample()
-        self.x_im = x_im_t
+        # (x_im_t shape:[batch, d_hidden]: projection된 input으로 보자. mu, sigma layer에 반영)
+        x_im_t = x_im_dist.sample()
 
+        # imagination tracker
         itracker_input = torch.cat([x_im_t, u_im_prev], dim=-1)
-        itracker_hidden_t = self.itraker_lstm(itracker_input, itracker_hidden_prev)
+        itracker_hidden = self.itracker_lstm(itracker_input, itracker_hidden_prev)  # itracker_hidden: (h_t, c_t)
 
-        # query: target_x, key: context_x, value: representation
+        # query: x_im only (shape: [batch, d_hidden])
+        # key: x_im + x_re (shape: [batch, d_hidden])
+        # value: h_im + v_re (shape: [batch, d_model])
+
+        key_ = torch.cat([x_re_t, x_im_t], dim=0)
+        value_ = torch.cat([r_re_t, itracker_hidden[0]], dim=0)
+        query_ = itracker_hidden[0]
         for attn in self.itracker_cross_attentions:
-            itracker_hidden_t = attn(itracker_hidden_t, x_im_t)  # key / value / query
+            query_, _ = attn(key_, value_, query_)  # key / value / query
+
+        # x_t ~ N(f_mu(a_t), f_sigma(a_t))
+        itracker_mu = self.itracker_mu(query_)
+        itracker_log_sigma = self.itracker_logsigma(query_)
+        itracker_sigma = torch.exp(0.5 * itracker_log_sigma)
+        u_im_dist = torch.distributions.Normal(loc=itracker_mu, scale=itracker_sigma)
+
+        # (u_im_t shape:[batch, d_model]
+        u_im_t = u_im_dist.sample()
+
+        # set prev variables
+        self.x_im = x_im_t
+        self.u_im = u_im_t
+        self.ikey_hidden = ikey_hidden
+        self.itracker_hidden = itracker_hidden
+
+        return x_im_dist, u_im_dist, x_im_t, u_im_t
+
+
+class CommonLatentEncoder(nn.Module):
+    def __init__(self, d_x, d_y, d_hidden, d_model):
+        super(CommonLatentEncoder, self).__init__()
+        self.input_projection = Linear(d_x, d_y, d_hidden)
+        self.hidden_layer = nn.ModuleList([Linear(d_hidden, d_hidden) for _ in range(2)])
+        self.output_projection = Linear(d_hidden, d_model)
+
+    def forward(self, x_re_t, y_re_t):
+        input_re_t = torch.cat([x_re_t, y_re_t], dim=-1)
+        context = self.input_projection(input_re_t)
+        for h_layer in self.hidden_layer:
+            context = torch.relu(h_layer(context))
+
+        return self.output_projection(context)
+
+
+class GlobalLatentEncoder(nn.Module):
+    def __init__(self, d_hidden, d_model):
+        super(GlobalLatentEncoder, self).__init__()
+        self.hidden_layer = nn.ModuleList([Linear(d_hidden, d_hidden) for _ in range(2)])
+        self.output_projection = Linear(d_hidden, d_model)
+
+    def forward(self, context_re_t, context_im_t):
+
+        for h_layer in self.hidden_layer:
+            context_re_t = torch.relu(h_layer(context_re_t))
+
+        context_re_t = self.output_projection(context_re_t)
+        context_t = torch.cat([context_re_t, context_im_t], dim=0).mean(dim=0)
+        context_t =
+        pass
+
+
+class QueryDepLatentEncoder(nn.Module):
+    def __init__(self, d_hidden, d_model):
+        super(QueryDepLatentEncoder, self).__init__()
+        self.re_encoder = CommonLatentEncoder(d_x, d_y, d_hidden, d_model)
+
+    def forward(self, x_re_t, y_re_t):
 
 
 
+class ASNP(nn.Module):
+    def __init__(self, d_x, d_y, d_hidden, d_model):
+        super(ASNP, self).__init__()
+        self.common_latent_encoder = CommonLatentEncoder(d_x, d_y, d_hidden, d_model)
+        self.global_latent_encoder = GlobalLatentEncoder()
+        self.query_latent_encoder = QueryDepLatentEncoder()
+        self.decoder = Decoder()
+        self.imaginary_context = ImaginaryContext()
+
+    def forward(self, context, target_y):
+        (x_re_t, y_re_t), target_x = context
+        context_re_t = self.common_latent_encoder(x_re_t, y_re_t)
+
+        pass
 
 
 def adjust_learning_rate(optimizer, step_num, warmup_step=4000):
