@@ -184,6 +184,33 @@ class GPCurvesReader(object):
             num_context_points=num_context)
 
 
+def example_lstm():
+    lstm = nn.LSTM(3, 3)  # Input dim is 3, output dim is 3
+    inputs = [torch.randn(1, 3) for _ in range(5)]  # make a sequence of length 5
+
+    # initialize the hidden state.
+    hidden = (torch.randn(1, 1, 3),
+              torch.randn(1, 1, 3))
+    for i in inputs:
+        # Step through the sequence one element at a time.
+        # after each step, hidden contains the hidden state.
+        out, hidden = lstm(i.view(1, 1, -1), hidden)
+
+    # alternatively, we can do the entire sequence all at once.
+    # the first value returned by LSTM is all of the hidden states throughout
+    # the sequence. the second is just the most recent hidden state
+    # (compare the last slice of "out" with "hidden" below, they are the same)
+    # The reason for this is that:
+    # "out" will give you access to all hidden states in the sequence
+    # "hidden" will allow you to continue the sequence and backpropagate,
+    # by passing it as an argument  to the lstm at a later time
+    # Add the extra 2nd dimension
+    inputs = torch.cat(inputs).view(len(inputs), 1, -1)
+    hidden = (torch.randn(1, 1, 3), torch.randn(1, 1, 3))  # clean out hidden state
+    out, hidden = lstm(inputs, hidden)
+    print(out)
+    print(hidden)
+
 
 class Linear(nn.Module):
     """
@@ -206,6 +233,36 @@ class Linear(nn.Module):
 
     def forward(self, x):
         return self.linear_layer(x)
+
+
+class LSTMCell(nn.Module):
+    def __init__(self, input_dim, hidden_dim, batch_size):
+        super(LSTMCell, self).__init__()
+
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.batch_size = batch_size
+
+        # Define the LSTM layer
+        self.lstm_cell = nn.LSTMCell(self.input_dim, self.hidden_dim)
+
+    def init_hidden(self):
+        # This is what we'll initialise our hidden state as
+        return (torch.zeros(self.batch_size, self.hidden_dim),
+                torch.zeros(self.batch_size, self.hidden_dim))
+
+    def forward(self, input, hidden=None):
+        # Forward pass through LSTM layer
+        # input shape: [batch, input_size]
+        # shape of hidden: (a, b), where a and b both
+        # have shape (batch_size, hidden_dim).
+        if hidden is None:
+            hidden = self.init_hidden()
+
+        hidden = self.lstm_cell(input, hidden)
+        # hidden = self.lstm_cell(input.view(self.batch_size, -1), hidden)
+
+        return hidden # (h, c)
 
 
 class LatentEncoder(nn.Module):
@@ -490,13 +547,52 @@ class LatentModel(nn.Module):
         return kl_div
 
 
+
 class ImaginaryContext(nn.Module):
     def __init__(self):
         super(ImaginaryContext, self).__init__()
+        # key_inference
+        self.ikey_lstm = LSTMCell(d_key+d_model, d_hidden, batch_size)
+        self.ikey_hidden_layer = Linear(d_hidden, d_hidden, w_init='relu')
+        self.ikey_infer_mu = Linear(d_hidden, d_key)
+        self.ikey_infer_logsigma = Linear(d_hidden, d_key)
+
+        # imagination tracker
+        self.itraker_lstm = LSTMCell(d_key+d_value, d_hidden, batch_size)
+        self.itracker_cross_attentions = nn.ModuleList([Attention(d_hidden) for _ in range(2)])
+        self.itracker_hidden_layer = Linear(d_hidden, d_hidden, w_init='relu')
+        self.itracker_mu = Linear(d_hidden, d_value)
+        self.itracker_logsigma = Linear(d_hidden, d_value)
+
+    def get_variables(self):
+        return self.x_im, self.u_im, self.ikey_hidden, self.itracker_hidden
+
+    def forward(self, context_x, context_r):
+        """
+            context_x : context_real x
+            context_r : f_orderinv(context_x, context_y)
+        """
+        x_im_prev, u_im_prev, ikey_hidden_prev, itracker_hidden_prev = self.get_variables()
+        ikey_input = torch.cat([x_im_prev, context_r], dim=-1)
+        ikey_hidden_t, _ = self.ikey_lstm(ikey_input, ikey_hidden_prev)
+        ikey_hidden_t = torch.relu(self.ikey_hidden_layer(ikey_hidden_t))
+
+        ikey_mu = self.ikey_infer_mu(ikey_hidden_t)
+        ikey_log_sigma = self.ikey_infer_logsigma(ikey_hidden_t)
+        ikey_sigma = torch.exp(0.5 * ikey_log_sigma)
+        ikey_dist = torch.distributions.Normal(loc=ikey_mu, scale=ikey_sigma)
+
+        x_im_t = ikey_dist.sample()
+        self.x_im = x_im_t
+
+        itracker_input = torch.cat([x_im_t, u_im_prev], dim=-1)
+        itracker_hidden_t = self.itraker_lstm(itracker_input, itracker_hidden_prev)
+
+        # query: target_x, key: context_x, value: representation
+        for attn in self.itracker_cross_attentions:
+            itracker_hidden_t = attn(itracker_hidden_t, x_im_t)  # key / value / query
 
 
-    def forward(self):
-        pass
 
 
 
