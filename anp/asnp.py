@@ -1,4 +1,3 @@
-
 import torch
 import torch.nn as nn
 import torchvision
@@ -23,6 +22,7 @@ class configs:
 
     def DEFINE_string(self, attr_nm, value_, desc_):
         setattr(self, attr_nm, value_)
+
 
 flags = configs()
 FLAGS = flags
@@ -52,19 +52,8 @@ flags.DEFINE_integer('PLOT_AFTER', 1000, 'plot iteration')
 flags.DEFINE_integer('batch_size', 16, 'batch size')
 flags.DEFINE_string('log_folder', 'logs', 'log folder')
 
-dataset_train = GPCurvesReader(
-    batch_size=FLAGS.batch_size, max_num_context=FLAGS.MAX_CONTEXT_POINTS,
-    len_seq=FLAGS.LEN_SEQ, len_given=FLAGS.LEN_GIVEN,
-    len_gen=FLAGS.LEN_GEN,
-    l1_min=FLAGS.l1_min, l1_max=FLAGS.l1_max, l1_vel=FLAGS.l1_vel,
-    sigma_min=FLAGS.sigma_min, sigma_max=FLAGS.sigma_max,
-    sigma_vel=FLAGS.sigma_vel, temporal=True,
-    case=FLAGS.case)
 
-data_train = dataset_train.generate_temporal_curves(seed=None)
-
-
-def bmm(x: torch.Tensor, y:torch.Tensor):
+def bmm(x: torch.Tensor, y: torch.Tensor):
     # x shape: (B1, B2, ..., A, B)
     # y shape: (B1, B2, ..., B, C)
     # out shape: (B1, B2, ..., A, C)
@@ -83,11 +72,11 @@ def to_device(data: NPRegressionDescription, device='cuda:0'):
     target_y = [tgy.to(device) for tgy in data.target_y]
     query = ((context_x, context_y), target_x)
     return NPRegressionDescription(
-            query=query,
-            target_y=target_y,
-            num_total_points=[pt.to(device) for pt in data.num_total_points],
-            num_context_points=[pt.to(device) for pt in data.num_context_points],
-            hyperparams=[hp.to(device) for hp in data.hyperparams])
+        query=query,
+        target_y=target_y,
+        num_total_points=[pt.to(device) for pt in data.num_total_points],
+        num_context_points=[pt.to(device) for pt in data.num_context_points],
+        hyperparams=[hp.to(device) for hp in data.hyperparams])
 
 
 def example_lstm():
@@ -167,121 +156,7 @@ class LSTMCell(nn.Module):
         hidden = self.lstm_cell(input, hidden)
         # hidden = self.lstm_cell(input.view(self.batch_size, -1), hidden)
 
-        return hidden # (h, c)
-
-
-class LatentEncoder(nn.Module):
-    """
-    Latent Encoder [For prior, posterior]
-    """
-
-    def __init__(self, num_hidden, num_latent, input_dim=3):
-        super(LatentEncoder, self).__init__()
-        self.input_projection = Linear(input_dim, num_hidden)
-        self.self_attentions = nn.ModuleList([Attention(num_hidden) for _ in range(2)])
-        self.penultimate_layer = Linear(num_hidden, num_hidden, w_init='relu')
-        self.mu = Linear(num_hidden, num_latent)
-        self.log_sigma = Linear(num_hidden, num_latent)
-
-    def forward(self, x, y):
-        # concat location (x) and value (y)
-        encoder_input = torch.cat([x, y], dim=-1)
-
-        # project vector with dimension 3 --> num_hidden
-        encoder_input = self.input_projection(encoder_input)
-
-        # self attention layer
-        for attention in self.self_attentions:
-            encoder_input, _ = attention(encoder_input, encoder_input, encoder_input)
-
-        # mean
-        hidden = encoder_input.mean(dim=1)
-        hidden = torch.relu(self.penultimate_layer(hidden))
-
-        # get mu and sigma
-        mu = self.mu(hidden)
-        log_sigma = self.log_sigma(hidden)
-
-        # reparameterization trick
-        sigma = torch.exp(0.5 * log_sigma)
-        eps = torch.randn_like(sigma)
-        z = eps.mul(sigma).add_(mu)
-
-        # return distribution
-        # return mu, log_sigma, z
-        return torch.distributions.Normal(loc=mu, scale=sigma)
-
-
-class DeterministicEncoder(nn.Module):
-    """
-    Deterministic Encoder [r]
-    """
-
-    def __init__(self, num_hidden, input_dim=3):
-        super(DeterministicEncoder, self).__init__()
-        self.self_attentions = nn.ModuleList([Attention(num_hidden) for _ in range(2)])
-        self.cross_attentions = nn.ModuleList([Attention(num_hidden) for _ in range(2)])
-        self.input_projection = Linear(input_dim, num_hidden)
-        self.context_projection = Linear(1, num_hidden)
-        self.target_projection = Linear(1, num_hidden)
-
-    def forward(self, context_x, context_y, target_x):
-        # concat context location (x), context value (y)
-        encoder_input = torch.cat([context_x, context_y], dim=-1)
-
-        # project vector with dimension 3 --> num_hidden
-        encoder_input = self.input_projection(encoder_input)
-
-        # self attention layer
-        for attention in self.self_attentions:
-            encoder_input, _ = attention(encoder_input, encoder_input, encoder_input)
-
-        # query: target_x, key: context_x, value: representation
-        query = self.target_projection(target_x)
-        keys = self.context_projection(context_x)
-
-        # cross attention layer
-        for attention in self.cross_attentions:
-            query, _ = attention(keys, encoder_input, query)
-
-        return query
-
-
-class Decoder(nn.Module):
-    """
-    Decoder for generation
-    """
-
-    def __init__(self, num_hidden):
-        super(Decoder, self).__init__()
-        self.target_projection = Linear(1, num_hidden)
-        self.linears = nn.ModuleList([Linear(num_hidden * 3, num_hidden * 3, w_init='relu') for _ in range(3)])
-        self.final_projection = Linear(num_hidden * 3, 2)
-
-    def forward(self, r, z, target_x):
-        batch_size, num_targets, _ = target_x.size()
-        # project vector with dimension 2 --> num_hidden
-        target_x = self.target_projection(target_x)
-
-        # concat all vectors (r,z,target_x)
-        hidden = torch.cat([torch.cat([r, z], dim=-1), target_x], dim=-1)
-
-        # mlp layers
-        for linear in self.linears:
-            hidden = torch.relu(linear(hidden))
-
-        # get mu and sigma
-        y_pred = self.final_projection(hidden)
-
-        # Get the mean an the variance
-        mu, log_sigma = torch.chunk(y_pred, 2, dim=-1)
-
-        # Bound the variance
-        sigma = 0.1 + 0.9 * F.softplus(log_sigma)
-
-        dist = torch.distributions.Normal(loc=mu, scale=sigma)
-
-        return dist, mu, sigma
+        return hidden  # (h, c)
 
 
 class MultiheadAttention(nn.Module):
@@ -387,8 +262,8 @@ class LatentModel(nn.Module):
 
     def __init__(self, num_hidden, d_x=1, d_y=1):
         super(LatentModel, self).__init__()
-        self.latent_encoder = LatentEncoder(num_hidden, num_hidden, input_dim=d_x+d_y)
-        self.deterministic_encoder = DeterministicEncoder(num_hidden, input_dim=d_x+d_y)
+        self.latent_encoder = LatentEncoder(num_hidden, num_hidden, input_dim=d_x + d_y)
+        self.deterministic_encoder = DeterministicEncoder(num_hidden, input_dim=d_x + d_y)
         self.decoder = Decoder(num_hidden)
         self.BCELoss = nn.BCELoss()
 
@@ -411,7 +286,6 @@ class LatentModel(nn.Module):
         else:
             # z = prior
             z = prior.sample()
-
 
         z = z.unsqueeze(1).repeat(1, num_targets, 1)  # [B, T_target, H]
         r = self.deterministic_encoder(context_x, context_y, target_x)  # [B, T_target, H]
@@ -447,26 +321,26 @@ class LatentModel(nn.Module):
 
     def kl_div(self, prior_mu, prior_var, posterior_mu, posterior_var):
         kl_div = (torch.exp(posterior_var) + (posterior_mu - prior_mu) ** 2) / torch.exp(prior_var) - 1. + (
-                    prior_var - posterior_var)
+                prior_var - posterior_var)
         kl_div = 0.5 * kl_div.sum()
         return kl_div
 
 
 class ImaginaryContext(nn.Module):
-    def __init__(self, d_hidden, d_model):
+    def __init__(self, d_hidden, d_model, n_head=2):
         super(ImaginaryContext, self).__init__()
         self.d_hidden = d_hidden
         self.d_model = d_model
 
         # key_inference
-        self.ikey_lstm = LSTMCell(d_hidden+d_model, d_hidden)
+        self.ikey_lstm = LSTMCell(d_hidden + d_model, d_hidden)
         self.ikey_hidden_layer = Linear(d_hidden, d_hidden, w_init='relu')
         self.ikey_infer_mu = Linear(d_hidden, d_hidden)
         self.ikey_infer_logsigma = Linear(d_hidden, d_hidden)
 
         # imagination tracker
-        self.itracker_lstm = LSTMCell(d_hidden+d_model, d_model)
-        self.itracker_cross_attentions = nn.ModuleList([Attention(d_hidden) for _ in range(2)])
+        self.itracker_lstm = LSTMCell(d_hidden + d_model, d_model)
+        self.itracker_cross_attentions = nn.ModuleList([Attention(d_hidden, d_model, n_head) for _ in range(2)])
         self.itracker_hidden_layer = Linear(d_hidden, d_hidden, w_init='relu')
         self.itracker_mu = Linear(d_hidden, d_model)
         self.itracker_logsigma = Linear(d_hidden, d_model)
@@ -500,7 +374,7 @@ class ImaginaryContext(nn.Module):
 
         # get t-1 values
         if self.x_im is None:
-            self._initialize_variables(batch * num_contexts) # batch_lstm = batch * num_contexts
+            self._initialize_variables(batch * num_contexts)  # batch_lstm = batch * num_contexts
 
         x_im_prev, u_im_prev, ikey_hidden_prev, itracker_hidden_prev = self.get_variables()
 
@@ -569,42 +443,171 @@ class GlobalLatentEncoder(nn.Module):
     def __init__(self, d_hidden, d_model):
         super(GlobalLatentEncoder, self).__init__()
         self.hidden_layer = nn.ModuleList([Linear(d_hidden, d_hidden) for _ in range(2)])
+        self.input_projection = Linear(d_model, d_hidden)
         self.output_projection = Linear(d_hidden, d_model)
 
-    def forward(self, context_re_t, context_im_t):
+        self.mu = Linear(d_model, d_hidden)
+        self.log_sigma = Linear(d_model, d_hidden)
 
+    def forward(self, v_re_t, v_im_t):
+        v_re_t = self.input_projection(v_re_t)
         for h_layer in self.hidden_layer:
-            context_re_t = torch.relu(h_layer(context_re_t))
+            v_re_t = torch.relu(h_layer(v_re_t))
 
-        context_re_t = self.output_projection(context_re_t)
-        context_t = torch.cat([context_re_t, context_im_t], dim=0).mean(dim=0)
-        context_t =
-        pass
+        v_re_t = self.output_projection(v_re_t)
+        v_t = torch.cat([v_re_t, v_im_t], dim=1).mean(dim=1)
+        mu_ = self.mu(v_t)
+        log_sigma_ = self.log_sigma(v_t)
+
+        # reparameterization trick
+        sigma_ = torch.exp(0.5 * log_sigma_)
+        eps = torch.randn_like(sigma_)
+        z_t = eps.mul(sigma_).add_(mu_)
+
+        dist = torch.distributions.Normal(loc=mu_, scale=sigma_)
+        # z_t = dist.sample()
+
+        return dist, z_t
 
 
 class QueryDepLatentEncoder(nn.Module):
-    def __init__(self, d_hidden, d_model):
+    def __init__(self, d_hidden, d_model, n_head=2):
         super(QueryDepLatentEncoder, self).__init__()
-        self.re_encoder = CommonLatentEncoder(d_x, d_y, d_hidden, d_model)
+        self.hidden_layer = nn.ModuleList([Linear(d_hidden, d_hidden) for _ in range(2)])
+        self.input_projection = Linear(d_model, d_hidden)
+        self.output_projection = Linear(d_hidden, d_model)
 
-    def forward(self, x_re_t, y_re_t):
+        self.cross_attention = nn.ModuleList([Attention(d_hidden, d_model, n_head) for _ in range(2)])
 
+    def forward(self, context_re_t, context_im_t, target_x):
+        x_re_t, v_re_t = context_re_t
+        x_im_t, v_im_t = context_im_t
+
+        v_re_t = self.input_projection(v_re_t)
+        for h_layer in self.hidden_layer:
+            v_re_t = torch.relu(h_layer(v_re_t))
+
+        v_re_t = self.output_projection(v_re_t)
+
+        key_ = torch.cat([x_re_t, x_im_t], dim=1)  # shape: [batch, n_re + n_im, n_hidden]
+        value_ = torch.cat([v_re_t, v_im_t], dim=1)  # shape: [batch, n_re + n_im, n_model]
+        query_ = target_x  # shape: [batch, n_re, n_hidden]
+
+        for attn in self.itracker_cross_attentions:
+            query_, _ = attn(key_, value_, query_)  # key / value / query
+
+        return query_
+
+
+class Decoder(nn.Module):
+    """
+    Decoder for generation
+    """
+
+    def __init__(self, d_x, d_hidden):
+        super(Decoder, self).__init__()
+        self.target_projection = Linear(d_x, d_hidden)
+        self.linears = nn.ModuleList([Linear(d_hidden * 3, d_hidden * 3, w_init='relu') for _ in range(3)])
+        self.final_projection = Linear(d_hidden * 3, 2)
+
+    def forward(self, a, z, target_x):
+        batch_size, num_targets, _ = target_x.size()
+        # project vector with dimension 2 --> num_hidden
+        target_x = self.target_projection(target_x)
+
+        # concat all vectors (r,z,target_x)
+        hidden = torch.cat([a, z, target_x], dim=-1)
+
+        # mlp layers
+        for linear in self.linears:
+            hidden = torch.relu(linear(hidden))
+
+        # get mu and sigma
+        y_pred = self.final_projection(hidden)
+
+        # Get the mean an the variance
+        mu, log_sigma = torch.chunk(y_pred, 2, dim=-1)
+
+        # Bound the variance
+        sigma = 0.1 + 0.9 * F.softplus(log_sigma)
+
+        dist = torch.distributions.Normal(loc=mu, scale=sigma)
+
+        return dist, mu, sigma
 
 
 class ASNP(nn.Module):
-    def __init__(self, d_x, d_y, d_hidden, d_model):
+    def __init__(self, d_x, d_y, d_hidden, d_model, n_head=2):
         super(ASNP, self).__init__()
         self.common_latent_encoder = CommonLatentEncoder(d_x, d_y, d_hidden, d_model)
-        self.global_latent_encoder = GlobalLatentEncoder()
-        self.query_latent_encoder = QueryDepLatentEncoder()
-        self.decoder = Decoder()
-        self.imaginary_context = ImaginaryContext()
+        self.global_latent_encoder = GlobalLatentEncoder(d_hidden, d_model)
+        self.query_latent_encoder = QueryDepLatentEncoder(d_hidden, d_model, n_head)
+        self.decoder = Decoder(d_x, d_hidden)
+        self.imaginary_context = ImaginaryContext(d_hidden, d_model, n_head)
 
-    def forward(self, context, target_y):
-        (x_re_t, y_re_t), target_x = context
-        context_re_t = self.common_latent_encoder(x_re_t, y_re_t)
+    def reset_variables(self):
+        self.imaginary_context.reset_variables()
 
-        pass
+    def forward(self, context, target_y_seq=None):
+        self.reset_variables()
+
+        (context_x_seq, context_y_seq), target_x_seq = context
+
+        total_loss = torch.tensor(0)
+        total_logp = torch.tensor(0)
+        total_kl = torch.tensor(0)
+        for i in range(len(context_x_seq)):
+            context_x, context_y, target_x = context_x_seq[i], context_y_seq[i], target_x_seq[i]
+            num_targets = target_x.size(1)
+
+            if target_y is not None:
+                target_y = target_y_seq[i]
+            else:
+                target_y = None
+
+            x_re_t, v_re_t = self.common_latent_encoder(context_x, context_y)
+
+            # imaginary context update
+            x_im_dist, v_im_dist, x_im_t, v_im_t = self.imaginary_context(x_re_t, v_re_t)
+
+            # global latent encoder (prior)
+            z_dist_prior, z_t_prior = self.global_latent_encoder(v_re_t, v_im_t)
+
+            # encoding value for real context
+            if target_y is not None:
+                x_re_t_posterior, v_re_t_posterior = self.common_latent_encoder(target_x, target_y)
+
+                # imaginary context update
+                x_im_dist, v_im_dist, x_im_t, v_im_t = self.imaginary_context(x_re_t_posterior, v_re_t_posterior)
+
+                # global latent encoder (posterior)
+                z_dist_posterior, z_t = self.global_latent_encoder(v_re_t_posterior, v_im_t)
+            else:
+                z_t = z_t_prior
+
+            # query dependent latent encoder
+            context_re_t = (x_re_t, v_re_t)
+            context_im_t = (x_im_t, v_im_t)
+            a_t = self.query_latent_encoder(context_re_t, context_im_t, target_x)
+
+            # decode latent values and get target_y
+            target_dist, target_mu, target_sigma = self.decoder(a_t, z_t, target_x)
+
+            if target_y is not None:
+                log_p = target_dist.log_prob(target_y).squeeze()
+                kl = torch.distributions.kl_divergence(z_dist_posterior, z_dist_prior).sum(dim=-1, keepdims=True)
+                kl = kl.repeat([1, num_targets])
+                loss = -(log_p - kl / torch.tensor(num_targets).float()).mean()
+            else:
+                log_p = None
+                kl = None
+                loss = None
+
+            total_loss += loss
+            total_logp += log_p
+            total_kl += kl
+
+        return total_loss, total_logp, total_kl
 
 
 def adjust_learning_rate(optimizer, step_num, warmup_step=4000):
@@ -654,25 +657,40 @@ def plot_functions(ep, target_x, target_y, context_x, context_y, pred_y, std):
 
 
 def main2():
-    TRAINING_ITERATIONS = 100000 #@param {type:"number"}
-    MAX_CONTEXT_POINTS = 50 #@param {type:"number"}
-    PLOT_AFTER = 1000 #@param {type:"number"}
+    TRAINING_ITERATIONS = 100000  # @param {type:"number"}
+    MAX_CONTEXT_POINTS = 50  # @param {type:"number"}
+    PLOT_AFTER = 1000  # @param {type:"number"}
 
     # Train dataset
     dataset_train = GPCurvesReader(
-        batch_size=16, max_num_context=MAX_CONTEXT_POINTS)
+        batch_size=FLAGS.batch_size, max_num_context=FLAGS.MAX_CONTEXT_POINTS,
+        len_seq=FLAGS.LEN_SEQ, len_given=FLAGS.LEN_GIVEN,
+        len_gen=FLAGS.LEN_GEN,
+        l1_min=FLAGS.l1_min, l1_max=FLAGS.l1_max, l1_vel=FLAGS.l1_vel,
+        sigma_min=FLAGS.sigma_min, sigma_max=FLAGS.sigma_max,
+        sigma_vel=FLAGS.sigma_vel, temporal=True,
+        case=FLAGS.case)
+
+    data_train = dataset_train.generate_temporal_curves(seed=None)
 
     # Test dataset
     dataset_test = GPCurvesReader(
-        batch_size=1, max_num_context=MAX_CONTEXT_POINTS, testing=True)
+        batch_size=FLAGS.batch_size, max_num_context=FLAGS.MAX_CONTEXT_POINTS,
+        testing=True,
+        len_seq=FLAGS.LEN_SEQ, len_given=FLAGS.LEN_GIVEN,
+        len_gen=FLAGS.LEN_GEN,
+        l1_min=FLAGS.l1_min, l1_max=FLAGS.l1_max, l1_vel=FLAGS.l1_vel,
+        sigma_min=FLAGS.sigma_min, sigma_max=FLAGS.sigma_max,
+        sigma_vel=FLAGS.sigma_vel, temporal=True,
+        case=FLAGS.case)
 
+    data_test = dataset_test.generate_temporal_curves(seed=123)
 
     # Sizes of the layers of the MLPs for the encoders and decoder
     # The final output layer of the decoder outputs two values, one for the mean and
     # one for the variance of the prediction at the target location
 
-
-    model = LatentModel(128).cuda()
+    model = ASNP(d_x=1, d_y=1, d_hidden=128, d_model=128, n_head=4)
     model.train()
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
@@ -682,8 +700,8 @@ def main2():
         data_train = to_device(data_train, 'cuda:0')
         model.train()
         # Define the loss
-        query, target_y = data_train.query,  data_train.target_y
-        _, _, log_prob, _, loss = model(data_train.query,  data_train.target_y)
+        query, target_y = data_train.query, data_train.target_y
+        _, _, log_prob, _, loss = model(data_train.query, data_train.target_y)
 
         optimizer.zero_grad()
         loss.backward()
@@ -705,49 +723,7 @@ def main2():
             print('Iteration: {}, loss: {}'.format(it, np_ify(loss_value)))
 
             # Plot the prediction and the context
-            plot_functions(it, np_ify(target_x), np_ify(target_y), np_ify(context_x), np_ify(context_y), np_ify(pred_y), np_ify(std_y))
+            plot_functions(it, np_ify(target_x), np_ify(target_y), np_ify(context_x), np_ify(context_y), np_ify(pred_y),
+                           np_ify(std_y))
 
-
-
-def main():
-    train_dataset = torchvision.datasets.MNIST('./data', train=True, download=False, )
-
-    epochs = 200
-    model = LatentModel(128).cuda()
-    model.train()
-
-    optim = torch.optim.Adam(model.parameters(), lr=1e-4)
-    writer = SummaryWriter()
-    global_step = 0
-    for epoch in range(epochs):
-        dloader = DataLoader(train_dataset, batch_size=16, collate_fn=collate_fn, shuffle=True, num_workers=16)
-        pbar = tqdm(dloader)
-        for i, data in enumerate(pbar):
-            global_step += 1
-            adjust_learning_rate(optim, global_step)
-            context_x, context_y, target_x, target_y = data
-            context_x = context_x.cuda()
-            context_y = context_y.cuda()
-            target_x = target_x.cuda()
-            target_y = target_y.cuda()
-
-            # pass through the latent model
-            y_pred, kl, loss = model(context_x, context_y, target_x, target_y)
-
-            # Training step
-            optim.zero_grad()
-            loss.backward()
-            optim.step()
-
-            # Logging
-            writer.add_scalars('training_loss', {
-                'loss': loss,
-                'kl': kl.mean(),
-
-            }, global_step)
-
-        # save model by each epoch
-        # torch.save({'model': model.state_dict(),
-        #         'optimizer': optim.state_dict()},
-        #        os.path.join('./checkpoint', 'checkpoint_%d.pth.tar' % (epoch + 1)))
 
