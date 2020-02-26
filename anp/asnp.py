@@ -557,6 +557,8 @@ class ASNP(nn.Module):
         total_loss = torch.tensor(0)
         total_logp = torch.tensor(0)
         total_kl = torch.tensor(0)
+        mu_list = []
+        sigma_list = []
         for i in range(len(context_x_seq)):
             context_x, context_y, target_x = context_x_seq[i], context_y_seq[i], target_x_seq[i]
             num_targets = target_x.size(1)
@@ -607,8 +609,10 @@ class ASNP(nn.Module):
             total_loss += loss
             total_logp += log_p
             total_kl += kl
+            mu_list.append(target_mu)
+            sigma_list.append(target_sigma)
 
-        return total_loss, total_logp, total_kl
+        return total_loss, total_logp, total_kl, mu_list, sigma_list
 
 
 def adjust_learning_rate(optimizer, step_num, warmup_step=4000):
