@@ -1,3 +1,5 @@
+from collections import namedtuple
+import numpy as np
 import torch
 import torch.nn as nn
 import torchvision
@@ -12,7 +14,6 @@ import matplotlib.pyplot as plt
 from ts_torch.torch_util_mini import np_ify
 from anp.gp import NPRegressionDescription, GPCurvesReader
 
-from scipy import misc
 
 class configs:
     def DEFINE_integer(self, attr_nm, value_, desc_):
@@ -54,7 +55,37 @@ flags.DEFINE_integer('batch_size', 16, 'batch size')
 flags.DEFINE_string('log_folder', 'logs', 'log folder')
 
 
-def bmm(x: torch.Tensor, y: torch.Tensor):
+
+def done_decorator(f):
+    def decorated(*args, **kwargs):
+        print("{} ...ing".format(f.__name__))
+        result = f(*args, **kwargs)
+        print("{} ...done".format(f.__name__))
+        return result
+    return decorated
+
+
+def reordering(whole_query, target_y, pred_y, std_y, temporal=False):
+
+    (context_x, context_y), target_x = whole_query
+
+    if not temporal:
+        for i in range(len(context_x)):
+            context_x[i] = context_x[i][:,:,:-1]
+        target_x = np.array(target_x)[:,:,:,:-1]
+
+    context_x_list = context_x
+    context_y_list = context_y
+    target_x_list = target_x
+    target_y_list = target_y
+    pred_y_list = pred_y
+    std_y_list = std_y
+
+    return (target_x_list, target_y_list, context_x_list, context_y_list,
+            pred_y_list, std_y_list)
+
+
+def bmm(x: torch.Tensor, y:torch.Tensor):
     # x shape: (B1, B2, ..., A, B)
     # y shape: (B1, B2, ..., B, C)
     # out shape: (B1, B2, ..., A, C)
@@ -73,11 +104,11 @@ def to_device(data: NPRegressionDescription, device='cuda:0'):
     target_y = [tgy.to(device) for tgy in data.target_y]
     query = ((context_x, context_y), target_x)
     return NPRegressionDescription(
-        query=query,
-        target_y=target_y,
-        num_total_points=[pt.to(device) for pt in data.num_total_points],
-        num_context_points=[pt.to(device) for pt in data.num_context_points],
-        hyperparams=[hp.to(device) for hp in data.hyperparams])
+            query=query,
+            target_y=target_y,
+            num_total_points=[pt.to(device) for pt in data.num_total_points],
+            num_context_points=[pt.to(device) for pt in data.num_context_points],
+            hyperparams=[hp.to(device) for hp in data.hyperparams])
 
 
 def example_lstm():
@@ -141,23 +172,31 @@ class LSTMCell(nn.Module):
         # Define the LSTM layer
         self.lstm_cell = nn.LSTMCell(self.input_dim, self.hidden_dim)
 
-    def init_hidden(self, batch_size):
+    def init_hidden(self, batch_sizes:list):
         # This is what we'll initialise our hidden state as
-        return (torch.zeros(batch_size, self.hidden_dim),
-                torch.zeros(batch_size, self.hidden_dim))
+        return (torch.zeros(batch_sizes + [self.hidden_dim]),
+                torch.zeros(batch_sizes + [self.hidden_dim]))
 
     def forward(self, input, hidden=None):
         # Forward pass through LSTM layer
         # input shape: [batch, input_size]
         # shape of hidden: (a, b), where a and b both
         # have shape (batch_size, hidden_dim).
+
+        # input shape: (B1, B2, ..., A) -> (B1 * B2 * ..., A)
+        input_shape = list(input.shape)
+        input = input.reshape([-1, input_shape[-1]])
+
         if hidden is None:
-            hidden = self.init_hidden(input.shape[0])
+            h, c = self.init_hidden(input.shape[0])
+        else:
+            h = hidden[0].reshape([-1, self.hidden_dim])
+            c = hidden[1].reshape([-1, self.hidden_dim])
 
-        hidden = self.lstm_cell(input, hidden)
+        h, c = self.lstm_cell(input, (h, c))
         # hidden = self.lstm_cell(input.view(self.batch_size, -1), hidden)
-
-        return hidden  # (h, c)
+        hidden_shape = input_shape[:-1]+[-1]
+        return h.reshape(hidden_shape), c.reshape(hidden_shape)
 
 
 class MultiheadAttention(nn.Module):
@@ -263,8 +302,8 @@ class LatentModel(nn.Module):
 
     def __init__(self, num_hidden, d_x=1, d_y=1):
         super(LatentModel, self).__init__()
-        self.latent_encoder = LatentEncoder(num_hidden, num_hidden, input_dim=d_x + d_y)
-        self.deterministic_encoder = DeterministicEncoder(num_hidden, input_dim=d_x + d_y)
+        self.latent_encoder = LatentEncoder(num_hidden, num_hidden, input_dim=d_x+d_y)
+        self.deterministic_encoder = DeterministicEncoder(num_hidden, input_dim=d_x+d_y)
         self.decoder = Decoder(num_hidden)
         self.BCELoss = nn.BCELoss()
 
@@ -287,6 +326,7 @@ class LatentModel(nn.Module):
         else:
             # z = prior
             z = prior.sample()
+
 
         z = z.unsqueeze(1).repeat(1, num_targets, 1)  # [B, T_target, H]
         r = self.deterministic_encoder(context_x, context_y, target_x)  # [B, T_target, H]
@@ -322,65 +362,72 @@ class LatentModel(nn.Module):
 
     def kl_div(self, prior_mu, prior_var, posterior_mu, posterior_var):
         kl_div = (torch.exp(posterior_var) + (posterior_mu - prior_mu) ** 2) / torch.exp(prior_var) - 1. + (
-                prior_var - posterior_var)
+                    prior_var - posterior_var)
         kl_div = 0.5 * kl_div.sum()
         return kl_div
 
 
 class ImaginaryContext(nn.Module):
-    def __init__(self, d_hidden, d_model, n_head=2):
+    def __init__(self, d_hidden, d_model, n_head=2, k_slot=25):
         super(ImaginaryContext, self).__init__()
+        self.k_slot = k_slot    # number of imaginary context
         self.d_hidden = d_hidden
         self.d_model = d_model
 
         # key_inference
-        self.ikey_lstm = LSTMCell(d_hidden + d_model, d_hidden)
+        self.ikey_lstm = LSTMCell(d_hidden+d_model, d_hidden)
         self.ikey_hidden_layer = Linear(d_hidden, d_hidden, w_init='relu')
         self.ikey_infer_mu = Linear(d_hidden, d_hidden)
         self.ikey_infer_logsigma = Linear(d_hidden, d_hidden)
 
         # imagination tracker
-        self.itracker_lstm = LSTMCell(d_hidden + d_model, d_model)
+        self.itracker_lstm = LSTMCell(d_hidden+d_model, d_model)
         self.itracker_cross_attentions = nn.ModuleList([Attention(d_hidden, d_model, n_head) for _ in range(2)])
         self.itracker_hidden_layer = Linear(d_hidden, d_hidden, w_init='relu')
         self.itracker_mu = Linear(d_hidden, d_model)
         self.itracker_logsigma = Linear(d_hidden, d_model)
 
-        self.reset_variables()
+        self.variables = dict()
 
-    def reset_variables(self):
-        self.x_im = None
-        self.u_im = None
-        self.ikey_hidden = None
-        self.itracker_hidden = None
+    def reset_variables(self, type_):
+        self.variables[type_] = dict(x_im=None, v_im=None, ikey_hidden=None, itracker_hidden=None)
 
-    def _initialize_variables(self, batch_size):
-        self.x_im = torch.zeros(batch_size, self.d_hidden)
-        self.u_im = torch.zeros(batch_size, self.d_model)
-        self.ikey_hidden = self.ikey_lstm.init_hidden(batch_size)
-        self.itracker_hidden = self.itracker_lstm.init_hidden(batch_size)
+    def _initialize_variables(self, batch_size, type_):
+        self.variables[type_] = dict(
+            x_im=torch.zeros([batch_size, self.k_slot, self.d_hidden]),
+            v_im=torch.zeros([batch_size, self.k_slot, self.d_model]),
+            ikey_hidden=self.ikey_lstm.init_hidden([batch_size, self.k_slot]),
+            itracker_hidden=self.itracker_lstm.init_hidden([batch_size, self.k_slot])
+        )
 
-    def get_variables(self):
-        return self.x_im, self.u_im, self.ikey_hidden, self.itracker_hidden
 
-    def forward(self, x_re_t, r_re_t):
+    def get_variables(self, type_):
+        assert type_ in self.variables.keys(), 'should initialize variables first'
+
+        var_dict = self.variables[type_]
+        return var_dict['x_im'], var_dict['v_im'], var_dict['ikey_hidden'], var_dict['itracker_hidden']
+
+    def forward(self, x_re_t, v_re_t, type_='prior'):
         """
             context_x : context_real x (shape: [batch, num_contexts, d_hidden])
             context_r : "representation of context" = f_orderinv(context_x, context_y)
               (shape: [batch, num_contexts, d_model])
         """
         batch, num_contexts, _ = x_re_t.shape
-        x_re_t_lstm = x_re_t.reshape([-1, self.d_hidden])
-        r_re_t_lstm = r_re_t.reshape([-1, self.d_model])
 
         # get t-1 values
-        if self.x_im is None:
-            self._initialize_variables(batch * num_contexts)  # batch_lstm = batch * num_contexts
+        if self.variables[type_]['x_im'] is None:
+            self._initialize_variables(batch, type_)  # batch_lstm = batch * num_contexts
 
-        x_im_prev, u_im_prev, ikey_hidden_prev, itracker_hidden_prev = self.get_variables()
+        x_im_prev, u_im_prev, ikey_hidden_prev, itracker_hidden_prev = self.get_variables(type_)
 
         # imaginary key inference
-        ikey_input = torch.cat([x_im_prev, r_re_t_lstm], dim=-1)
+        if num_contexts > 0:
+            ikey_v_re_t = v_re_t.mean(dim=1, keepdim=True).repeat([1, self.k_slot, 1])
+        else:
+            ikey_v_re_t = torch.zeros(batch, self.k_slot, self.d_model)
+
+        ikey_input = torch.cat([x_im_prev, ikey_v_re_t], dim=-1)
         ikey_hidden = self.ikey_lstm(ikey_input, ikey_hidden_prev)  # ikey_hidden_t: (h_t, c_t)
         ikey_hidden_t = torch.relu(self.ikey_hidden_layer(ikey_hidden[0]))
 
@@ -400,9 +447,16 @@ class ImaginaryContext(nn.Module):
         # query: x_im only (shape: [batch_lstm, d_hidden] => [batch, n_context, d_hidden])
         # key: x_im + x_re (shape: [batch_lstm, d_hidden] => [batch, n_context*2, d_hidden])
         # value: h_im + v_re (shape: [batch_lstm, d_model] => [batch, n_context*2, d_model])
-        key_ = torch.cat([x_re_t_lstm, x_im_t], dim=0).reshape([batch, -1, self.d_hidden])
-        value_ = torch.cat([r_re_t_lstm, itracker_hidden[0]], dim=0).reshape([batch, -1, self.d_model])
-        query_ = x_im_t.reshape([batch, -1, self.d_hidden])
+
+        # if num_contexts > 0:
+        key_ = torch.cat([x_re_t, x_im_t], dim=1)
+        value_ = torch.cat([v_re_t, itracker_hidden[0]], dim=1)
+        query_ = x_im_t
+        # else:
+        #     key_ = x_im_t
+        #     value_ = v_re_t
+        #     query_ = x_im_t
+
         for attn in self.itracker_cross_attentions:
             query_, _ = attn(key_, value_, query_)  # key / value / query
 
@@ -410,18 +464,18 @@ class ImaginaryContext(nn.Module):
         itracker_mu = self.itracker_mu(query_)
         itracker_log_sigma = self.itracker_logsigma(query_)
         itracker_sigma = torch.exp(0.5 * itracker_log_sigma)
-        u_im_dist = torch.distributions.Normal(loc=itracker_mu, scale=itracker_sigma)
+        v_im_dist = torch.distributions.Normal(loc=itracker_mu, scale=itracker_sigma)
 
         # (u_im_t shape:[batch, d_model]
-        u_im_t = u_im_dist.sample()
+        v_im_t = v_im_dist.sample()
 
         # set prev variables
-        self.x_im = x_im_t
-        self.u_im = u_im_t
-        self.ikey_hidden = ikey_hidden
-        self.itracker_hidden = itracker_hidden
+        self.variables[type_]['x_im'] = x_im_t
+        self.variables[type_]['u_im'] = v_im_t
+        self.variables[type_]['ikey_hidden'] = ikey_hidden
+        self.variables[type_]['itracker_hidden'] = itracker_hidden
 
-        return x_im_dist, u_im_dist, x_im_t, u_im_t
+        return x_im_dist, v_im_dist, x_im_t, v_im_t
 
 
 class CommonLatentEncoder(nn.Module):
@@ -451,6 +505,7 @@ class GlobalLatentEncoder(nn.Module):
         self.log_sigma = Linear(d_model, d_hidden)
 
     def forward(self, v_re_t, v_im_t):
+
         v_re_t = self.input_projection(v_re_t)
         for h_layer in self.hidden_layer:
             v_re_t = torch.relu(h_layer(v_re_t))
@@ -472,12 +527,12 @@ class GlobalLatentEncoder(nn.Module):
 
 
 class QueryDepLatentEncoder(nn.Module):
-    def __init__(self, d_hidden, d_model, n_head=2):
+    def __init__(self, d_x, d_hidden, d_model, n_head=2):
         super(QueryDepLatentEncoder, self).__init__()
         self.hidden_layer = nn.ModuleList([Linear(d_hidden, d_hidden) for _ in range(2)])
         self.input_projection = Linear(d_model, d_hidden)
         self.output_projection = Linear(d_hidden, d_model)
-
+        self.target_projection = Linear(d_x, d_hidden)
         self.cross_attention = nn.ModuleList([Attention(d_hidden, d_model, n_head) for _ in range(2)])
 
     def forward(self, context_re_t, context_im_t, target_x):
@@ -490,11 +545,11 @@ class QueryDepLatentEncoder(nn.Module):
 
         v_re_t = self.output_projection(v_re_t)
 
-        key_ = torch.cat([x_re_t, x_im_t], dim=1)  # shape: [batch, n_re + n_im, n_hidden]
-        value_ = torch.cat([v_re_t, v_im_t], dim=1)  # shape: [batch, n_re + n_im, n_model]
-        query_ = target_x  # shape: [batch, n_re, n_hidden]
+        key_ = torch.cat([x_re_t, x_im_t], dim=1)       # shape: [batch, n_re + n_im, n_hidden]
+        value_ = torch.cat([v_re_t, v_im_t], dim=1)     # shape: [batch, n_re + n_im, n_model]
+        query_ = self.target_projection(target_x)   # shape: [batch, n_re, n_hidden]
 
-        for attn in self.itracker_cross_attentions:
+        for attn in self.cross_attention:
             query_, _ = attn(key_, value_, query_)  # key / value / query
 
         return query_
@@ -504,20 +559,19 @@ class Decoder(nn.Module):
     """
     Decoder for generation
     """
-
     def __init__(self, d_x, d_hidden):
         super(Decoder, self).__init__()
         self.target_projection = Linear(d_x, d_hidden)
         self.linears = nn.ModuleList([Linear(d_hidden * 3, d_hidden * 3, w_init='relu') for _ in range(3)])
         self.final_projection = Linear(d_hidden * 3, 2)
 
-    def forward(self, a, z, target_x):
+    def forward(self, a_t, z_t, target_x):
         batch_size, num_targets, _ = target_x.size()
         # project vector with dimension 2 --> num_hidden
         target_x = self.target_projection(target_x)
 
         # concat all vectors (r,z,target_x)
-        hidden = torch.cat([a, z, target_x], dim=-1)
+        hidden = torch.cat([a_t, z_t, target_x], dim=-1)
 
         # mlp layers
         for linear in self.linears:
@@ -542,51 +596,53 @@ class ASNP(nn.Module):
         super(ASNP, self).__init__()
         self.common_latent_encoder = CommonLatentEncoder(d_x, d_y, d_hidden, d_model)
         self.global_latent_encoder = GlobalLatentEncoder(d_hidden, d_model)
-        self.query_latent_encoder = QueryDepLatentEncoder(d_hidden, d_model, n_head)
+        self.query_latent_encoder = QueryDepLatentEncoder(d_x, d_hidden, d_model, n_head)
         self.decoder = Decoder(d_x, d_hidden)
         self.imaginary_context = ImaginaryContext(d_hidden, d_model, n_head)
 
     def reset_variables(self):
-        self.imaginary_context.reset_variables()
+        self.imaginary_context.reset_variables('prior')
+        self.imaginary_context.reset_variables('posterior')
 
-    def forward(self, context, target_y_seq=None):
-        self.reset_variables()
-
+    def forward(self, context, target_y_list=None):
+        # i, context, target_y_list = 0, query, target_y
         (context_x_seq, context_y_seq), target_x_seq = context
 
-        total_loss = torch.tensor(0)
-        total_logp = torch.tensor(0)
-        total_kl = torch.tensor(0)
-        mu_list = []
-        sigma_list = []
+        self.reset_variables()
+
+        total_loss = torch.tensor(0.)
+        mu_list, sigma_list = [], []
+        log_p_list, kl_list = [], []
+        log_p_seen, log_p_unseen = [], []
+        log_p_wo_con, log_p_w_con = 0, 0
+        mse_list, mse_wo_con, mse_w_con = [], 0, 0
+        cnt_wo, cnt_w = torch.tensor(0.0), torch.tensor(0.0)
+
         for i in range(len(context_x_seq)):
             context_x, context_y, target_x = context_x_seq[i], context_y_seq[i], target_x_seq[i]
             num_targets = target_x.size(1)
 
-            if target_y is not None:
-                target_y = target_y_seq[i]
-            else:
-                target_y = None
-
             x_re_t, v_re_t = self.common_latent_encoder(context_x, context_y)
 
             # imaginary context update
-            x_im_dist, v_im_dist, x_im_t, v_im_t = self.imaginary_context(x_re_t, v_re_t)
+            x_im_dist, v_im_dist, x_im_t, v_im_t = self.imaginary_context(x_re_t, v_re_t, 'prior')
 
             # global latent encoder (prior)
             z_dist_prior, z_t_prior = self.global_latent_encoder(v_re_t, v_im_t)
 
             # encoding value for real context
-            if target_y is not None:
-                x_re_t_posterior, v_re_t_posterior = self.common_latent_encoder(target_x, target_y)
+            if target_y_list is not None:
+                x_re_t_posterior, v_re_t_posterior = self.common_latent_encoder(target_x, target_y_list[i])
 
                 # imaginary context update
-                x_im_dist, v_im_dist, x_im_t, v_im_t = self.imaginary_context(x_re_t_posterior, v_re_t_posterior)
+                x_im_dist, v_im_dist, x_im_t, v_im_t = self.imaginary_context(x_re_t_posterior, v_re_t_posterior, 'posterior')
 
                 # global latent encoder (posterior)
                 z_dist_posterior, z_t = self.global_latent_encoder(v_re_t_posterior, v_im_t)
             else:
                 z_t = z_t_prior
+
+            z_t = z_t.unsqueeze(1).repeat(1, num_targets, 1)  # [B, T_target, H]
 
             # query dependent latent encoder
             context_re_t = (x_re_t, v_re_t)
@@ -595,24 +651,21 @@ class ASNP(nn.Module):
 
             # decode latent values and get target_y
             target_dist, target_mu, target_sigma = self.decoder(a_t, z_t, target_x)
+            mu_list.append(target_mu)
+            sigma_list.append(target_sigma)
 
-            if target_y is not None:
-                log_p = target_dist.log_prob(target_y).squeeze()
+            if target_y_list is not None:
+                log_p = target_dist.log_prob(target_y_list[i]).squeeze()
                 kl = torch.distributions.kl_divergence(z_dist_posterior, z_dist_prior).sum(dim=-1, keepdims=True)
                 kl = kl.repeat([1, num_targets])
                 loss = -(log_p - kl / torch.tensor(num_targets).float()).mean()
+                total_loss += loss
             else:
                 log_p = None
                 kl = None
                 loss = None
 
-            total_loss += loss
-            total_logp += log_p
-            total_kl += kl
-            mu_list.append(target_mu)
-            sigma_list.append(target_sigma)
-
-        return total_loss, total_logp, total_kl, mu_list, sigma_list
+        return total_loss, mu_list, sigma_list
 
 
 def adjust_learning_rate(optimizer, step_num, warmup_step=4000):
@@ -661,8 +714,7 @@ def plot_functions(ep, target_x, target_y, context_x, context_y, pred_y, std):
     plt.close(fig)
 
 
-def plot_functions_1d(len_seq, len_given, len_gen, log_dir, plot_data,
-                   hyperparams, h_x_list=None):
+def plot_functions_1d(ep, len_seq, len_gen, plot_data, h_x_list=None):
     """Plots the predicted mean and variance and the context points.
         Args:
         target_x: An array of shape [B,num_targets,1] that contains the
@@ -713,17 +765,19 @@ def plot_functions_1d(len_seq, len_given, len_gen, log_dir, plot_data,
         plt.grid('off')
         ax = plt.gca()
 
-    plt.savefig(os.path.join(log_dir,'img.png'))
+    plt.savefig('./anp/out/test_{}.png'.format(ep))
+    # fig.savefig('./anp/out/test_{}.png'.format(ep))
     plt.close()
-    image = misc.imread(os.path.join(log_dir,'img.png'),mode='RGB')
+    # image = misc.imread('./anp/out/test_{}.png'.format(ep), mode='RGB')
+    #
+    # return image
 
-    return image
 
 
 def main2():
-    TRAINING_ITERATIONS = 100000  # @param {type:"number"}
-    MAX_CONTEXT_POINTS = 50  # @param {type:"number"}
-    PLOT_AFTER = 1000  # @param {type:"number"}
+    TRAINING_ITERATIONS = 100000 #@param {type:"number"}
+    MAX_CONTEXT_POINTS = 50 #@param {type:"number"}
+    PLOT_AFTER = 1000 #@param {type:"number"}
 
     # Train dataset
     dataset_train = GPCurvesReader(
@@ -735,7 +789,6 @@ def main2():
         sigma_vel=FLAGS.sigma_vel, temporal=True,
         case=FLAGS.case)
 
-    data_train = dataset_train.generate_temporal_curves(seed=None)
 
     # Test dataset
     dataset_test = GPCurvesReader(
@@ -748,11 +801,14 @@ def main2():
         sigma_vel=FLAGS.sigma_vel, temporal=True,
         case=FLAGS.case)
 
-    data_test = dataset_test.generate_temporal_curves(seed=123)
+    # data_train = dataset_train.generate_temporal_curves(seed=None)
+    # data_test = dataset_test.generate_temporal_curves(seed=123)
+
 
     # Sizes of the layers of the MLPs for the encoders and decoder
     # The final output layer of the decoder outputs two values, one for the mean and
     # one for the variance of the prediction at the target location
+
 
     model = ASNP(d_x=1, d_y=1, d_hidden=128, d_model=128, n_head=4)
     model.train()
@@ -760,12 +816,12 @@ def main2():
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     for it in range(TRAINING_ITERATIONS):
 
-        data_train = dataset_train.generate_curves()
-        data_train = to_device(data_train, 'cuda:0')
+        data_train = dataset_train.generate_temporal_curves(seed=None)
+        # data_train = to_device(data_train, 'cuda:0')
         model.train()
         # Define the loss
-        query, target_y = data_train.query, data_train.target_y
-        _, _, log_prob, _, loss = model(data_train.query, data_train.target_y)
+        query, target_y = data_train.query,  data_train.target_y
+        loss,  mu_list, sigma_list = model(query,  target_y)
 
         optimizer.zero_grad()
         loss.backward()
@@ -773,21 +829,26 @@ def main2():
 
         # Plot the predictions in `PLOT_AFTER` intervals
         if it % PLOT_AFTER == 0:
-            data_test = dataset_test.generate_curves()
-            data_test = to_device(data_test, 'cuda:0')
+            data_test = dataset_test.generate_temporal_curves(seed=123)
+            # data_test = dataset_test.generate_curves()
+            # data_test = to_device(data_test, 'cuda:0')
             model.eval()
             with torch.set_grad_enabled(False):
-                _, _, log_prob, _, loss = model(data_train.query, data_train.target_y)
+                loss, _, _ = model(data_test.query, data_test.target_y)
 
                 # Get the predicted mean and variance at the target points for the testing set
-                mu, sigma, _, _, _ = model(data_test.query)
-            loss_value, pred_y, std_y, target_y, whole_query = loss, mu, sigma, data_test.target_y, data_test.query
+                _, mu_list, sigma_list = model(data_test.query)
+            loss_value, pred_y, std_y, target_y, whole_query = loss, mu_list, sigma_list, data_test.target_y, data_test.query
 
-            (context_x, context_y), target_x = whole_query
-            print('Iteration: {}, loss: {}'.format(it, np_ify(loss_value)))
+            plot_data = reordering(whole_query, target_y, pred_y, std_y, temporal=True)
+            if FLAGS.dataset == 'gp':
+                plot_functions_1d(it, FLAGS.LEN_SEQ, FLAGS.LEN_GEN, plot_data)
 
-            # Plot the prediction and the context
-            plot_functions(it, np_ify(target_x), np_ify(target_y), np_ify(context_x), np_ify(context_y), np_ify(pred_y),
-                           np_ify(std_y))
+
+            # (context_x, context_y), target_x = whole_query
+            # print('Iteration: {}, loss: {}'.format(it, np_ify(loss_value)))
+            #
+            # # Plot the prediction and the context
+            # plot_functions(it, np_ify(target_x), np_ify(target_y), np_ify(context_x), np_ify(context_y), np_ify(pred_y), np_ify(std_y))
 
 

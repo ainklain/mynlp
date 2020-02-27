@@ -71,6 +71,7 @@ class DeterministicEncoder(object):
 
     return hidden
 
+
 class LatentEncoder(object):
   """The Latent Encoder."""
 
