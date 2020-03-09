@@ -283,7 +283,7 @@ def run():
 
 
 def example2():
-    model_predictor_list = ['nmy', 'nmsize']
+    model_predictor_list = ['nmir', 'nmy', 'nmsize', 'pos_20', 'nmstd']
     features_structure = {'regression': {'logp_base': {'logp': [0],
                                                        'logy': [20, 60, 120, 250],
                                                        'std': [20, 60, 120],
@@ -320,7 +320,7 @@ def example():
 
 
 def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure, country='kr'):
-    # i=2; country='us'; use_macro = False; use_swa=False; model_predictor_list, features_structure=example2()
+    # i=5; country='kr'; use_macro = False; use_swa=False; model_predictor_list, features_structure=example2()
     # use_swa = True
     configs = Config(use_macro=use_macro, use_swa=use_swa)
 
@@ -333,9 +333,9 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
     configs.n_heads = 8
     # configs.f_name ='testtesttes_04'
     if use_swa:
-        configs.f_name = '{}_{}_swa_traintest_00{}'.format(country, k_days, i)
+        configs.f_name = '{}_{}_swa_mar_00{}'.format(country, k_days, i)
     else:
-        configs.f_name = '{}_{}_nswa_traintest_00{}'.format(country, k_days, i)
+        configs.f_name = '{}_{}_nswa_mar_00{}'.format(country, k_days, i)
 
     configs.early_stopping_count = 50
     configs.learning_rate = 5e-4
@@ -402,10 +402,10 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
             print('something wrong')
             break
 
-    # recent_month_end = '2020-01-31'
-    # dataloader_t = ds.dataloader_t(recent_month_end, force_calc=True)
-    # x = performer.extract_portfolio(model, dataloader_t, rate_=configs.app_rate)
-    # x.to_csv('./out/{}/result_{}.csv'.format(configs.f_name, ds.base_idx))
+    recent_month_end = '2020-02-29'
+    dataloader_t = ds.dataloader_t(recent_month_end, force_calc=True)
+    x = performer.extract_portfolio(model, dataloader_t, rate_=configs.app_rate)
+    x.to_csv('./out/{}/result_{}.csv'.format(configs.f_name, ds.base_idx))
 
 
 def etc():
