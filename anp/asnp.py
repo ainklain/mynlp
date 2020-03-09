@@ -13,7 +13,7 @@ import os
 import matplotlib.pyplot as plt
 from ts_torch.torch_util_mini import np_ify
 from anp.gp import NPRegressionDescription, GPCurvesReader
-
+from anp.financial_data import ContextSet, TimeSeries
 
 class configs:
     def DEFINE_integer(self, attr_nm, value_, desc_):
@@ -780,26 +780,31 @@ def main2():
     PLOT_AFTER = 1000 #@param {type:"number"}
 
     # Train dataset
-    dataset_train = GPCurvesReader(
-        batch_size=FLAGS.batch_size, max_num_context=FLAGS.MAX_CONTEXT_POINTS,
-        len_seq=FLAGS.LEN_SEQ, len_given=FLAGS.LEN_GIVEN,
-        len_gen=FLAGS.LEN_GEN,
-        l1_min=FLAGS.l1_min, l1_max=FLAGS.l1_max, l1_vel=FLAGS.l1_vel,
-        sigma_min=FLAGS.sigma_min, sigma_max=FLAGS.sigma_max,
-        sigma_vel=FLAGS.sigma_vel, temporal=True,
-        case=FLAGS.case)
+    dataset = TimeSeries(batch_size=FLAGS.batch_size,
+                               max_num_context=100)
+    base_y = dataset.get_timeseries('mkt_rf')
+    dataset.generate_set(base_y)
 
-
-    # Test dataset
-    dataset_test = GPCurvesReader(
-        batch_size=FLAGS.batch_size, max_num_context=FLAGS.MAX_CONTEXT_POINTS,
-        testing=True,
-        len_seq=FLAGS.LEN_SEQ, len_given=FLAGS.LEN_GIVEN,
-        len_gen=FLAGS.LEN_GEN,
-        l1_min=FLAGS.l1_min, l1_max=FLAGS.l1_max, l1_vel=FLAGS.l1_vel,
-        sigma_min=FLAGS.sigma_min, sigma_max=FLAGS.sigma_max,
-        sigma_vel=FLAGS.sigma_vel, temporal=True,
-        case=FLAGS.case)
+    # dataset_train = GPCurvesReader(
+    #     batch_size=FLAGS.batch_size, max_num_context=FLAGS.MAX_CONTEXT_POINTS,
+    #     len_seq=FLAGS.LEN_SEQ, len_given=FLAGS.LEN_GIVEN,
+    #     len_gen=FLAGS.LEN_GEN,
+    #     l1_min=FLAGS.l1_min, l1_max=FLAGS.l1_max, l1_vel=FLAGS.l1_vel,
+    #     sigma_min=FLAGS.sigma_min, sigma_max=FLAGS.sigma_max,
+    #     sigma_vel=FLAGS.sigma_vel, temporal=True,
+    #     case=FLAGS.case)
+    #
+    #
+    # # Test dataset
+    # dataset_test = GPCurvesReader(
+    #     batch_size=FLAGS.batch_size, max_num_context=FLAGS.MAX_CONTEXT_POINTS,
+    #     testing=True,
+    #     len_seq=FLAGS.LEN_SEQ, len_given=FLAGS.LEN_GIVEN,
+    #     len_gen=FLAGS.LEN_GEN,
+    #     l1_min=FLAGS.l1_min, l1_max=FLAGS.l1_max, l1_vel=FLAGS.l1_vel,
+    #     sigma_min=FLAGS.sigma_min, sigma_max=FLAGS.sigma_max,
+    #     sigma_vel=FLAGS.sigma_vel, temporal=True,
+    #     case=FLAGS.case)
 
     # data_train = dataset_train.generate_temporal_curves(seed=None)
     # data_test = dataset_test.generate_temporal_curves(seed=123)
@@ -814,9 +819,11 @@ def main2():
     model.train()
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    it = 0
     for it in range(TRAINING_ITERATIONS):
 
-        data_train = dataset_train.generate_temporal_curves(seed=None)
+        # data_train = dataset_train.generate_temporal_curves(seed=None)
+        data_train = dataset.generate(50, seq_len=FLAGS.LEN_SEQ, is_train=True)
         # data_train = to_device(data_train, 'cuda:0')
         model.train()
         # Define the loss
@@ -829,7 +836,8 @@ def main2():
 
         # Plot the predictions in `PLOT_AFTER` intervals
         if it % PLOT_AFTER == 0:
-            data_test = dataset_test.generate_temporal_curves(seed=123)
+            # data_test = dataset_test.generate_temporal_curves(seed=123)
+            data_test = dataset.generate(50, seq_len=FLAGS.LEN_SEQ, is_train=False)
             # data_test = dataset_test.generate_curves()
             # data_test = to_device(data_test, 'cuda:0')
             model.eval()
