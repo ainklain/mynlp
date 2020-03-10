@@ -5,7 +5,6 @@ from matplotlib import pyplot as plt
 import numpy as np
 import torch
 
-
 ContextSet = collections.namedtuple(
     "ContextSet",
     ("query", "target_y", "num_total_points", "num_context_points",
@@ -27,6 +26,8 @@ class TimeSeries:
         self.max_num_context = max_num_context
         self.window_length = window_length
         self.predict_length = predict_length
+        self.x_dim = 1
+        self.y_dim = 1
 
     def get_timeseries(self, ts_nm='mkt_rf'):
         data = pd.read_csv('./data/data_for_metarl.csv', index_col=0)
@@ -38,28 +39,30 @@ class TimeSeries:
         base_logp = np.log(1 + base_y).cumsum() - np.log(1 + base_y.iloc[0])
 
         context_set = []
-
-        context_x = torch.from_numpy(np.arange(1 + self.window_length)[::-1] / self.window_length * (-1)).float()
-        target_x = torch.from_numpy(np.arange(1 + self.predict_length)[1:] / self.predict_length).float()
+        target_x = (torch.arange(1 + self.window_length + self.predict_length).float() / self.window_length - 1).reshape([-1, self.x_dim])
+        context_x = target_x[:(1+self.window_length)]
         for t in range(self.window_length, len(base_y), 20):
-            context_t = torch.from_numpy(base_logp.iloc[(t-self.window_length):(t+1)].to_numpy(np.float32))
+            context_t = torch.from_numpy(base_logp.iloc[(t - self.window_length):(t + 1)].to_numpy(np.float32)).reshape([-1, self.y_dim])
             mu = context_t.mean()
             sig = context_t.std()
             context_y = (context_t - mu) / sig
             if t + self.predict_length < len(base_y):
-                target_y = (torch.from_numpy(base_logp.iloc[(t+1):(t+self.predict_length+1)].to_numpy(np.float32)) - mu) / sig
+                target_y = (torch.from_numpy(
+                    base_logp.iloc[(t - self.window_length):(t + self.predict_length + 1)].to_numpy(np.float32)) - mu) / sig
+                target_y = target_y.reshape([-1, self.y_dim])
             else:
                 target_y = None
 
             context_set.append(ContextSet(query=((context_x, context_y), target_x),
                                           target_y=target_y,
-                                          num_total_points=len(context_x) + len(target_x),
+                                          num_total_points=len(target_x),
                                           num_context_points=len(context_x),
                                           hyperparams={'context_mu': mu, 'context_sig': sig}))
 
         self.context_set = context_set
 
     def generate(self, base_i, seq_len=10, is_train=True):
+        # base_i = 50; seq_len = 10; is_train=True; t=0
         assert base_i > seq_len
         if is_train:
             ctx_i = np.random.randint(seq_len, base_i)
@@ -71,15 +74,26 @@ class TimeSeries:
         ctx_x_list, ctx_y_list = [], []
         tgt_x_list, tgt_y_list = [], []
         hp_list = []
-        ctx_selected = self.context_set[(ctx_i-seq_len+1):(ctx_i+1)]
+        ctx_selected = self.context_set[(ctx_i - seq_len + 1):(ctx_i + 1)]
+
+        c_x_batch = torch.zeros(self.batch_size, num_context, self.x_dim)
+        c_y_batch = torch.zeros(self.batch_size, num_context, self.y_dim)
+        t_x_batch = torch.zeros(self.batch_size, num_context + self.predict_length, self.x_dim)
+        t_y_batch = torch.zeros(self.batch_size, num_context + self.predict_length, self.y_dim)
         for t in range(seq_len):
             ((c_x, c_y), t_x), t_y, len_total, len_ctx, hyperparams = ctx_selected[t]
 
-            idx = np.random.choice(np.arange(len_ctx), num_context, replace=False)
-            ctx_x_list.append(c_x[idx])
-            ctx_y_list.append(c_y[idx])
-            tgt_x_list.append(t_x)
-            tgt_y_list.append(t_y)
+            for i in range(self.batch_size):
+                idx = np.sort(np.random.choice(np.arange(len_ctx), num_context, replace=False))
+                c_x_batch[i] = c_x[idx]
+                c_y_batch[i] = c_y[idx]
+                t_x_batch[i] = torch.cat([t_x[idx], t_x[-self.predict_length:]], axis=0)
+                t_y_batch[i] = torch.cat([t_y[idx], t_y[-self.predict_length:]], axis=0)
+
+            ctx_x_list.append(c_x_batch)
+            ctx_y_list.append(c_y_batch)
+            tgt_x_list.append(t_x_batch)
+            tgt_y_list.append(t_y_batch)
             hp_list.append(hyperparams)
 
         return ContextSet(query=((ctx_x_list, ctx_y_list), tgt_x_list),

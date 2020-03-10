@@ -15,6 +15,8 @@ from ts_torch.torch_util_mini import np_ify
 from anp.gp import NPRegressionDescription, GPCurvesReader
 from anp.financial_data import ContextSet, TimeSeries
 
+device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+
 class configs:
     def DEFINE_integer(self, attr_nm, value_, desc_):
         setattr(self, attr_nm, value_)
@@ -400,14 +402,18 @@ class ImaginaryContext(nn.Module):
             itracker_hidden=self.itracker_lstm.init_hidden([batch_size, self.k_slot])
         )
 
-
-    def get_variables(self, type_):
+    def get_variables(self, type_, device='cpu'):
         assert type_ in self.variables.keys(), 'should initialize variables first'
 
         var_dict = self.variables[type_]
+        for key in var_dict.keys():
+            if isinstance(var_dict[key], tuple):
+                var_dict[key] = (var_dict[key][0].to(device), var_dict[key][1].to(device))
+            else:
+                var_dict[key] = var_dict[key].to(device)
         return var_dict['x_im'], var_dict['v_im'], var_dict['ikey_hidden'], var_dict['itracker_hidden']
 
-    def forward(self, x_re_t, v_re_t, type_='prior'):
+    def forward(self, x_re_t, v_re_t, type_='prior', device='cpu'):
         """
             context_x : context_real x (shape: [batch, num_contexts, d_hidden])
             context_r : "representation of context" = f_orderinv(context_x, context_y)
@@ -419,7 +425,7 @@ class ImaginaryContext(nn.Module):
         if self.variables[type_]['x_im'] is None:
             self._initialize_variables(batch, type_)  # batch_lstm = batch * num_contexts
 
-        x_im_prev, u_im_prev, ikey_hidden_prev, itracker_hidden_prev = self.get_variables(type_)
+        x_im_prev, u_im_prev, ikey_hidden_prev, itracker_hidden_prev = self.get_variables(type_, device)
 
         # imaginary key inference
         if num_contexts > 0:
@@ -610,7 +616,7 @@ class ASNP(nn.Module):
 
         self.reset_variables()
 
-        total_loss = torch.tensor(0.)
+        total_loss = torch.tensor(0.).to(device)
         mu_list, sigma_list = [], []
         log_p_list, kl_list = [], []
         log_p_seen, log_p_unseen = [], []
@@ -619,23 +625,24 @@ class ASNP(nn.Module):
         cnt_wo, cnt_w = torch.tensor(0.0), torch.tensor(0.0)
 
         for i in range(len(context_x_seq)):
-            context_x, context_y, target_x = context_x_seq[i], context_y_seq[i], target_x_seq[i]
+            context_x, context_y, target_x = context_x_seq[i].to(device), context_y_seq[i].to(device), target_x_seq[i].to(device)
             num_targets = target_x.size(1)
 
             x_re_t, v_re_t = self.common_latent_encoder(context_x, context_y)
 
             # imaginary context update
-            x_im_dist, v_im_dist, x_im_t, v_im_t = self.imaginary_context(x_re_t, v_re_t, 'prior')
+            x_im_dist, v_im_dist, x_im_t, v_im_t = self.imaginary_context(x_re_t, v_re_t, 'prior', device)
 
             # global latent encoder (prior)
             z_dist_prior, z_t_prior = self.global_latent_encoder(v_re_t, v_im_t)
 
             # encoding value for real context
             if target_y_list is not None:
-                x_re_t_posterior, v_re_t_posterior = self.common_latent_encoder(target_x, target_y_list[i])
+                target_y = target_y_list[i].to(device)
+                x_re_t_posterior, v_re_t_posterior = self.common_latent_encoder(target_x, target_y)
 
                 # imaginary context update
-                x_im_dist, v_im_dist, x_im_t, v_im_t = self.imaginary_context(x_re_t_posterior, v_re_t_posterior, 'posterior')
+                x_im_dist, v_im_dist, x_im_t, v_im_t = self.imaginary_context(x_re_t_posterior, v_re_t_posterior, 'posterior', device)
 
                 # global latent encoder (posterior)
                 z_dist_posterior, z_t = self.global_latent_encoder(v_re_t_posterior, v_im_t)
@@ -655,7 +662,7 @@ class ASNP(nn.Module):
             sigma_list.append(target_sigma)
 
             if target_y_list is not None:
-                log_p = target_dist.log_prob(target_y_list[i]).squeeze()
+                log_p = target_dist.log_prob(target_y).squeeze()
                 kl = torch.distributions.kl_divergence(z_dist_posterior, z_dist_prior).sum(dim=-1, keepdims=True)
                 kl = kl.repeat([1, num_targets])
                 loss = -(log_p - kl / torch.tensor(num_targets).float()).mean()
@@ -773,15 +780,58 @@ def plot_functions_1d(ep, len_seq, len_gen, plot_data, h_x_list=None):
     # return image
 
 
+def plot_functions_(ep, len_seq, plot_data, h_x_list=None):
+    """Plots the predicted mean and variance and the context points.
+        Args:
+        target_x: An array of shape [B,num_targets,1] that contains the
+            x values of the target points.
+        target_y: An array of shape [B,num_targets,1] that contains the
+            y values of the target points.
+        context_x: An array of shape [B,num_contexts,1] that contains
+            the x values of the context points.
+        context_y: An array of shape [B,num_contexts,1] that contains
+            the y values of the context points.
+        pred_y: An array of shape [B,num_targets,1] that contains the
+            predicted means of the y values at the target points in target_x.
+        std: An array of shape [B,num_targets,1] that contains the
+            predicted std dev of the y values at the target points in target_x.
+    """
+    target_x_list, target_y_list, context_x_list, context_y_list, pred_y_list, std_list = plot_data
+    target_x, target_y, context_x, context_y, pred_y, std = np_ify(target_x_list[-1]), np_ify(target_y_list[-1]), np_ify(context_x_list[-1]), np_ify(context_y_list[-1]), np_ify(pred_y_list[-1]), np_ify(std_list[-1])
+    fig = plt.figure()
+    # Plot everything
+    plt.plot(target_x[0], pred_y[0], 'b', linewidth=2)
+    plt.plot(target_x[0], target_y[0], 'k:', linewidth=2)
+    plt.plot(context_x[0], context_y[0], 'ko', markersize=5)
+    plt.fill_between(
+        target_x[0, :, 0],
+        pred_y[0, :, 0] - std[0, :, 0],
+        pred_y[0, :, 0] + std[0, :, 0],
+        alpha=0.2,
+        facecolor='#65c9f7',
+        interpolate=True)
+
+    # Make the plot pretty
+    # plt.yticks([-2, 0, 2], fontsize=16)
+    # plt.xticks([-2, 0, 2], fontsize=16)
+    # plt.ylim([-2, 2])
+    plt.grid('off')
+    ax = plt.gca()
+    fig.savefig('./anp/out/test_{}.png'.format(ep))
+    plt.close(fig)
+
+
 
 def main2():
+
+
     TRAINING_ITERATIONS = 100000 #@param {type:"number"}
     MAX_CONTEXT_POINTS = 50 #@param {type:"number"}
-    PLOT_AFTER = 1000 #@param {type:"number"}
+    PLOT_AFTER = 100 #@param {type:"number"}
 
     # Train dataset
     dataset = TimeSeries(batch_size=FLAGS.batch_size,
-                               max_num_context=100)
+                               max_num_context=MAX_CONTEXT_POINTS)
     base_y = dataset.get_timeseries('mkt_rf')
     dataset.generate_set(base_y)
 
@@ -815,7 +865,7 @@ def main2():
     # one for the variance of the prediction at the target location
 
 
-    model = ASNP(d_x=1, d_y=1, d_hidden=128, d_model=128, n_head=4)
+    model = ASNP(d_x=1, d_y=1, d_hidden=128, d_model=128, n_head=4).to(device)
     model.train()
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
@@ -827,7 +877,7 @@ def main2():
         # data_train = to_device(data_train, 'cuda:0')
         model.train()
         # Define the loss
-        query, target_y = data_train.query,  data_train.target_y
+        query, target_y = data_train.query, data_train.target_y
         loss,  mu_list, sigma_list = model(query,  target_y)
 
         optimizer.zero_grad()
@@ -850,11 +900,12 @@ def main2():
 
             plot_data = reordering(whole_query, target_y, pred_y, std_y, temporal=True)
             if FLAGS.dataset == 'gp':
-                plot_functions_1d(it, FLAGS.LEN_SEQ, FLAGS.LEN_GEN, plot_data)
+                # plot_functions_1d(it, FLAGS.LEN_SEQ, FLAGS.LEN_GEN, plot_data)
+                plot_functions_(it, FLAGS.LEN_SEQ, plot_data)
 
 
             # (context_x, context_y), target_x = whole_query
-            # print('Iteration: {}, loss: {}'.format(it, np_ify(loss_value)))
+            print('Iteration: {}, loss: {}'.format(it, np_ify(loss_value)))
             #
             # # Plot the prediction and the context
             # plot_functions(it, np_ify(target_x), np_ify(target_y), np_ify(context_x), np_ify(context_y), np_ify(pred_y), np_ify(std_y))
