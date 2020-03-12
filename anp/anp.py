@@ -3,12 +3,13 @@ import torch.nn as nn
 from torch.nn import functional as F
 import collections
 import math
-from tqdm import tqdm
-from tensorboardX import SummaryWriter
+# from tqdm import tqdm
+# from tensorboardX import SummaryWriter
 from torch.utils.data import DataLoader
 import os
 import matplotlib.pyplot as plt
 from ts_torch.torch_util_mini import np_ify
+from anp.financial_data import ContextSet, TimeSeries
 
 
 
@@ -449,7 +450,6 @@ class LatentModel(nn.Module):
             # z = prior
             z = prior.sample()
 
-
         z = z.unsqueeze(1).repeat(1, num_targets, 1)  # [B, T_target, H]
         r = self.deterministic_encoder(context_x, context_y, target_x)  # [B, T_target, H]
 
@@ -518,7 +518,7 @@ def plot_functions(ep, target_x, target_y, context_x, context_y, pred_y, std):
     # Plot everything
     plt.plot(target_x[0], pred_y[0], 'b', linewidth=2)
     plt.plot(target_x[0], target_y[0], 'k:', linewidth=2)
-    plt.plot(context_x[0], context_y[0], 'ko', markersize=10)
+    plt.plot(context_x[0], context_y[0], 'ko', markersize=5)
     plt.fill_between(
         target_x[0, :, 0],
         pred_y[0, :, 0] - std[0, :, 0],
@@ -528,9 +528,9 @@ def plot_functions(ep, target_x, target_y, context_x, context_y, pred_y, std):
         interpolate=True)
 
     # Make the plot pretty
-    plt.yticks([-2, 0, 2], fontsize=16)
-    plt.xticks([-2, 0, 2], fontsize=16)
-    plt.ylim([-2, 2])
+    # plt.yticks([-2, 0, 2], fontsize=16)
+    # plt.xticks([-2, 0, 2], fontsize=16)
+    # plt.ylim([-2, 2])
     plt.grid('off')
     ax = plt.gca()
     fig.savefig('./anp/out/test_{}.png'.format(ep))
@@ -538,17 +538,22 @@ def plot_functions(ep, target_x, target_y, context_x, context_y, pred_y, std):
 
 
 def main2():
-    TRAINING_ITERATIONS = 100000 #@param {type:"number"}
+    TRAINING_ITERATIONS = 10000 #@param {type:"number"}
     MAX_CONTEXT_POINTS = 50 #@param {type:"number"}
     PLOT_AFTER = 1000 #@param {type:"number"}
+    batch_size = 16
+    base_i = 100
+    dataset = TimeSeries(batch_size=batch_size, max_num_context=MAX_CONTEXT_POINTS, predict_length=120)
+    base_y = dataset.get_timeseries('usdkrw')
+    dataset.generate_set(base_y)
 
-    # Train dataset
-    dataset_train = GPCurvesReader(
-        batch_size=16, max_num_context=MAX_CONTEXT_POINTS)
-
-    # Test dataset
-    dataset_test = GPCurvesReader(
-        batch_size=1, max_num_context=MAX_CONTEXT_POINTS, testing=True)
+    # # Train dataset
+    # dataset_train = GPCurvesReader(
+    #     batch_size=16, max_num_context=MAX_CONTEXT_POINTS)
+    #
+    # # Test dataset
+    # dataset_test = GPCurvesReader(
+    #     batch_size=1, max_num_context=MAX_CONTEXT_POINTS, testing=True)
 
 
     # Sizes of the layers of the MLPs for the encoders and decoder
@@ -556,18 +561,21 @@ def main2():
     # one for the variance of the prediction at the target location
 
 
-    model = LatentModel(128).cuda()
+    model = LatentModel(128) #.cuda()
     model.train()
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     for it in range(TRAINING_ITERATIONS):
-
-        data_train = dataset_train.generate_curves()
-        data_train = to_device(data_train, 'cuda:0')
+        data_train = dataset.generate(base_i, seq_len=1, is_train=True)
+        # data_train = dataset_train.generate_curves()
+        # data_train = to_device(data_train, 'cuda:0')
         model.train()
         # Define the loss
-        query, target_y = data_train.query,  data_train.target_y
-        _, _, log_prob, _, loss = model(data_train.query,  data_train.target_y)
+        ((c_x, c_y), t_x), t_y = data_train.query,  data_train.target_y
+        train_query = ((c_x[0], c_y[0]), t_x[0])
+        train_target_y = t_y[0]
+        _, _, log_prob, _, loss = model(train_query, train_target_y)
+        # _, _, log_prob, _, loss = model(data_train.query,  data_train.target_y)
 
         optimizer.zero_grad()
         loss.backward()
@@ -575,70 +583,36 @@ def main2():
 
         # Plot the predictions in `PLOT_AFTER` intervals
         if it % PLOT_AFTER == 0:
-            data_test = dataset_test.generate_curves()
-            data_test = to_device(data_test, 'cuda:0')
-            model.eval()
-            with torch.set_grad_enabled(False):
-                _, _, log_prob, _, loss = model(data_train.query, data_train.target_y)
+            for ii, date_i in enumerate([base_i - 20, base_i, base_i + 20]):
+                data_test = dataset.generate(date_i, seq_len=1, is_train=False)
+                # data_test = dataset_test.generate_curves()
+                # data_test = to_device(data_test, 'cuda:0')
+                model.eval()
+                with torch.set_grad_enabled(False):
+                    ((c_x, c_y), t_x), t_y = data_test.query,  data_test.target_y
+                    test_query = ((c_x[0], c_y[0]), t_x[0])
+                    test_target_y = t_y[0]
+                    _, _, log_prob, _, loss = model(test_query, test_target_y)
+                    # _, _, log_prob, _, loss = model(data_train.query, data_train.target_y)
 
-                # Get the predicted mean and variance at the target points for the testing set
-                mu, sigma, _, _, _ = model(data_test.query)
-            loss_value, pred_y, std_y, target_y, whole_query = loss, mu, sigma, data_test.target_y, data_test.query
+                    # Get the predicted mean and variance at the target points for the testing set
+                    mu, sigma, _, _, _ = model(test_query)
+                    # mu, sigma, _, _, _ = model(data_test.query)
+                loss_value, pred_y, std_y, target_y, whole_query = loss, mu, sigma, test_target_y, test_query
 
-            (context_x, context_y), target_x = whole_query
-            print('Iteration: {}, loss: {}'.format(it, np_ify(loss_value)))
+                (context_x, context_y), target_x = whole_query
+                print('Iteration: {}, loss: {}'.format(it, np_ify(loss_value)))
 
-            # Plot the prediction and the context
-            plot_functions(it, np_ify(target_x), np_ify(target_y), np_ify(context_x), np_ify(context_y), np_ify(pred_y), np_ify(std_y))
-
-
-
-
-
-
-
-
-
-    # Set up the optimizer and train step
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
-
-    data_train = dataset_train.generate_curves()
-    data_test = dataset_test.generate_curves()
-    data_train = to_device(data_train, 'cuda:0')
-    data_test = to_device(data_test, 'cuda:0')
-    # Train and plot
-    for it in range(TRAINING_ITERATIONS):
-
-        model.train()
+                # Plot the prediction and the context
+                plot_functions(it + ii, np_ify(target_x), np_ify(target_y), np_ify(context_x), np_ify(context_y), np_ify(pred_y), np_ify(std_y))
 
 
-        # Define the loss
-        _, _, log_prob, _, loss = model(data_train.query, data_train.num_total_points,
-                                        data_train.target_y)
 
-        # # Get the predicted mean and variance at the target points for the testing set
-        # mu, sigma, _, _, _ = model(data_test.query, data_test.num_total_points)
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
 
-        # Plot the predictions in `PLOT_AFTER` intervals
-        if it % PLOT_AFTER == 0:
-            model.eval()
-            with torch.set_grad_enabled(False):
-                _, _, log_prob, _, loss = model(data_train.query, data_train.num_total_points,
-                                                data_train.target_y)
 
-                # Get the predicted mean and variance at the target points for the testing set
-                mu, sigma, _, _, _ = model(data_test.query, data_test.num_total_points)
-            loss_value, pred_y, std_y, target_y, whole_query = loss, mu, sigma, data_test.target_y, data_test.query
 
-            (context_x, context_y), target_x = whole_query
-            print('Iteration: {}, loss: {}'.format(it, np_ify(loss_value)))
 
-            # Plot the prediction and the context
-            plot_functions(it, np_ify(target_x), np_ify(target_y), np_ify(context_x), np_ify(context_y), np_ify(pred_y), np_ify(std_y))
 
 
 

@@ -15,8 +15,8 @@ from ts_torch.torch_util_mini import np_ify
 from anp.gp import NPRegressionDescription, GPCurvesReader
 from anp.financial_data import ContextSet, TimeSeries
 
-device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-
+# device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+device = 'cpu'
 class configs:
     def DEFINE_integer(self, attr_nm, value_, desc_):
         setattr(self, attr_nm, value_)
@@ -55,7 +55,6 @@ flags.DEFINE_integer('TRAINING_ITERATIONS', 1000000, 'training iteration')
 flags.DEFINE_integer('PLOT_AFTER', 1000, 'plot iteration')
 flags.DEFINE_integer('batch_size', 16, 'batch size')
 flags.DEFINE_string('log_folder', 'logs', 'log folder')
-
 
 
 def done_decorator(f):
@@ -780,7 +779,7 @@ def plot_functions_1d(ep, len_seq, len_gen, plot_data, h_x_list=None):
     # return image
 
 
-def plot_functions_(ep, len_seq, plot_data, h_x_list=None):
+def plot_functions_(ep, plot_data, plot_seq_num=-1):
     """Plots the predicted mean and variance and the context points.
         Args:
         target_x: An array of shape [B,num_targets,1] that contains the
@@ -796,8 +795,11 @@ def plot_functions_(ep, len_seq, plot_data, h_x_list=None):
         std: An array of shape [B,num_targets,1] that contains the
             predicted std dev of the y values at the target points in target_x.
     """
-    target_x_list, target_y_list, context_x_list, context_y_list, pred_y_list, std_list = plot_data
-    target_x, target_y, context_x, context_y, pred_y, std = np_ify(target_x_list[-1]), np_ify(target_y_list[-1]), np_ify(context_x_list[-1]), np_ify(context_y_list[-1]), np_ify(pred_y_list[-1]), np_ify(std_list[-1])
+    t_x_list, t_y_list, c_x_list, c_y_list, pred_y_list, std_list = plot_data
+    target_x, target_y = np_ify(t_x_list[plot_seq_num]), np_ify(t_y_list[plot_seq_num])
+    context_x, context_y = np_ify(c_x_list[plot_seq_num]), np_ify(c_y_list[plot_seq_num])
+    pred_y, std = np_ify(pred_y_list[plot_seq_num]), np_ify(std_list[plot_seq_num])
+
     fig = plt.figure()
     # Plot everything
     plt.plot(target_x[0], pred_y[0], 'b', linewidth=2)
@@ -821,17 +823,13 @@ def plot_functions_(ep, len_seq, plot_data, h_x_list=None):
     plt.close(fig)
 
 
-
-def main2():
-
-
-    TRAINING_ITERATIONS = 100000 #@param {type:"number"}
-    MAX_CONTEXT_POINTS = 50 #@param {type:"number"}
-    PLOT_AFTER = 100 #@param {type:"number"}
+def main3():
+    TRAINING_ITERATIONS = 5000 #@param {type:"number"}
+    MAX_CONTEXT_POINTS = 250 #@param {type:"number"}
+    PLOT_AFTER = 500 #@param {type:"number"}
 
     # Train dataset
-    dataset = TimeSeries(batch_size=FLAGS.batch_size,
-                               max_num_context=MAX_CONTEXT_POINTS)
+    dataset = TimeSeries(batch_size=FLAGS.batch_size, max_num_context=MAX_CONTEXT_POINTS, predict_length=120)
     base_y = dataset.get_timeseries('mkt_rf')
     dataset.generate_set(base_y)
 
@@ -864,11 +862,10 @@ def main2():
     # The final output layer of the decoder outputs two values, one for the mean and
     # one for the variance of the prediction at the target location
 
-
     model = ASNP(d_x=1, d_y=1, d_hidden=128, d_model=128, n_head=4).to(device)
     model.train()
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=5e-4)
     it = 0
     for it in range(TRAINING_ITERATIONS):
 
@@ -887,7 +884,89 @@ def main2():
         # Plot the predictions in `PLOT_AFTER` intervals
         if it % PLOT_AFTER == 0:
             # data_test = dataset_test.generate_temporal_curves(seed=123)
-            data_test = dataset.generate(50, seq_len=FLAGS.LEN_SEQ, is_train=False)
+            for ii, date_i in enumerate([30, 50, 70]):
+                data_test = dataset.generate(date_i, seq_len=FLAGS.LEN_SEQ, is_train=False)
+                # data_test = dataset_test.generate_curves()
+                # data_test = to_device(data_test, 'cuda:0')
+                model.eval()
+                with torch.set_grad_enabled(False):
+                    loss, _, _ = model(data_test.query, data_test.target_y)
+
+                    # Get the predicted mean and variance at the target points for the testing set
+                    _, mu_list, sigma_list = model(data_test.query)
+                loss_value, pred_y, std_y, target_y, whole_query = loss, mu_list, sigma_list, data_test.target_y, data_test.query
+
+                plot_data = reordering(whole_query, target_y, pred_y, std_y, temporal=True)
+                if FLAGS.dataset == 'gp':
+                    # plot_functions_1d(it, FLAGS.LEN_SEQ, FLAGS.LEN_GEN, plot_data)
+                    plot_functions_(it + ii, plot_data, plot_seq_num=-1)
+
+                # (context_x, context_y), target_x = whole_query
+                print('Iteration: {} [date_i: {}], loss: {}'.format(it, date_i, np_ify(loss_value)))
+            #
+            # # Plot the prediction and the context
+            # plot_functions(it, np_ify(target_x), np_ify(target_y), np_ify(context_x), np_ify(context_y), np_ify(pred_y), np_ify(std_y))
+
+
+def main2():
+    TRAINING_ITERATIONS = 100000 #@param {type:"number"}
+    MAX_CONTEXT_POINTS = 250 #@param {type:"number"}
+    PLOT_AFTER = 500 #@param {type:"number"}
+
+    # Train dataset
+    # dataset = TimeSeries(batch_size=FLAGS.batch_size, max_num_context=MAX_CONTEXT_POINTS)
+    # base_y = dataset.get_timeseries('mkt_rf')
+    # dataset.generate_set(base_y)
+
+    dataset_train = GPCurvesReader(
+        batch_size=FLAGS.batch_size, max_num_context=FLAGS.MAX_CONTEXT_POINTS,
+        len_seq=FLAGS.LEN_SEQ, len_given=FLAGS.LEN_GIVEN,
+        len_gen=FLAGS.LEN_GEN,
+        l1_min=FLAGS.l1_min, l1_max=FLAGS.l1_max, l1_vel=FLAGS.l1_vel,
+        sigma_min=FLAGS.sigma_min, sigma_max=FLAGS.sigma_max,
+        sigma_vel=FLAGS.sigma_vel, temporal=True,
+        case=FLAGS.case)
+
+    # Test dataset
+    dataset_test = GPCurvesReader(
+        batch_size=FLAGS.batch_size, max_num_context=FLAGS.MAX_CONTEXT_POINTS,
+        testing=True,
+        len_seq=FLAGS.LEN_SEQ, len_given=FLAGS.LEN_GIVEN,
+        len_gen=FLAGS.LEN_GEN,
+        l1_min=FLAGS.l1_min, l1_max=FLAGS.l1_max, l1_vel=FLAGS.l1_vel,
+        sigma_min=FLAGS.sigma_min, sigma_max=FLAGS.sigma_max,
+        sigma_vel=FLAGS.sigma_vel, temporal=True,
+        case=FLAGS.case)
+
+    # data_train = dataset_train.generate_temporal_curves(seed=None)
+    # data_test = dataset_test.generate_temporal_curves(seed=123)
+
+    # Sizes of the layers of the MLPs for the encoders and decoder
+    # The final output layer of the decoder outputs two values, one for the mean and
+    # one for the variance of the prediction at the target location
+
+    model = ASNP(d_x=1, d_y=1, d_hidden=128, d_model=128, n_head=4).to(device)
+    model.train()
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=5e-4)
+    it = 0
+    for it in range(TRAINING_ITERATIONS):
+        data_train = dataset_train.generate_temporal_curves(seed=None)
+        # data_train = dataset.generate(50, seq_len=FLAGS.LEN_SEQ, is_train=True)
+        # data_train = to_device(data_train, 'cuda:0')
+        model.train()
+        # Define the loss
+        query, target_y = data_train.query, data_train.target_y
+        loss,  mu_list, sigma_list = model(query,  target_y)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # Plot the predictions in `PLOT_AFTER` intervals
+        if it % PLOT_AFTER == 0:
+            data_test = dataset_test.generate_temporal_curves(seed=123)
+            # data_test = dataset.generate(50, seq_len=FLAGS.LEN_SEQ, is_train=False)
             # data_test = dataset_test.generate_curves()
             # data_test = to_device(data_test, 'cuda:0')
             model.eval()
@@ -901,7 +980,10 @@ def main2():
             plot_data = reordering(whole_query, target_y, pred_y, std_y, temporal=True)
             if FLAGS.dataset == 'gp':
                 # plot_functions_1d(it, FLAGS.LEN_SEQ, FLAGS.LEN_GEN, plot_data)
-                plot_functions_(it, FLAGS.LEN_SEQ, plot_data)
+                plot_functions_(it, plot_data, plot_seq_num=0)
+                plot_functions_(it + 5, plot_data, plot_seq_num=5)
+                plot_functions_(it + 10, plot_data, plot_seq_num=10)
+                plot_functions_(it + 20, plot_data, plot_seq_num=-1)
 
 
             # (context_x, context_y), target_x = whole_query

@@ -14,7 +14,7 @@ ContextSet = collections.namedtuple(
 class TimeSeries:
     def __init__(self
                  , batch_size
-                 , max_num_context
+                 , max_num_context=250
                  , window_length=250
                  , predict_length=20):
         """
@@ -45,10 +45,13 @@ class TimeSeries:
             context_t = torch.from_numpy(base_logp.iloc[(t - self.window_length):(t + 1)].to_numpy(np.float32)).reshape([-1, self.y_dim])
             mu = context_t.mean()
             sig = context_t.std()
-            context_y = (context_t - mu) / sig
+            context_y = context_t
+            # context_y = (context_t - mu) / sig
             if t + self.predict_length < len(base_y):
-                target_y = (torch.from_numpy(
-                    base_logp.iloc[(t - self.window_length):(t + self.predict_length + 1)].to_numpy(np.float32)) - mu) / sig
+                target_y = torch.from_numpy(
+                    base_logp.iloc[(t - self.window_length):(t + self.predict_length + 1)].to_numpy(np.float32))
+                # target_y = (torch.from_numpy(
+                #     base_logp.iloc[(t - self.window_length):(t + self.predict_length + 1)].to_numpy(np.float32)) - mu) / sig
                 target_y = target_y.reshape([-1, self.y_dim])
             else:
                 target_y = None
@@ -63,32 +66,52 @@ class TimeSeries:
 
     def generate(self, base_i, seq_len=10, is_train=True):
         # base_i = 50; seq_len = 10; is_train=True; t=0
-        assert base_i > seq_len
+        assert base_i >= seq_len + self.predict_length // 20  # lookahead 방지
         if is_train:
-            ctx_i = np.random.randint(seq_len, base_i)
+            ctx_i = np.random.randint(seq_len, base_i - self.predict_length // 20)
+            batch_size = self.batch_size
+            num_context = 100
         else:
             ctx_i = base_i
-
-        num_context = self.max_num_context
+            batch_size = 1
+            num_context = self.max_num_context
 
         ctx_x_list, ctx_y_list = [], []
         tgt_x_list, tgt_y_list = [], []
         hp_list = []
         ctx_selected = self.context_set[(ctx_i - seq_len + 1):(ctx_i + 1)]
 
-        c_x_batch = torch.zeros(self.batch_size, num_context, self.x_dim)
-        c_y_batch = torch.zeros(self.batch_size, num_context, self.y_dim)
-        t_x_batch = torch.zeros(self.batch_size, num_context + self.predict_length, self.x_dim)
-        t_y_batch = torch.zeros(self.batch_size, num_context + self.predict_length, self.y_dim)
+
+        c_x_batch = torch.zeros(batch_size, num_context, self.x_dim)
+        c_y_batch = torch.zeros(batch_size, num_context, self.y_dim)
+        t_x_batch = torch.zeros(batch_size, num_context + self.predict_length, self.x_dim)
+        t_y_batch = torch.zeros(batch_size, num_context + self.predict_length, self.y_dim)
+
         for t in range(seq_len):
             ((c_x, c_y), t_x), t_y, len_total, len_ctx, hyperparams = ctx_selected[t]
+            if t == 0:
+                mu, sig = hyperparams['context_mu'], hyperparams['context_sig']
 
-            for i in range(self.batch_size):
-                idx = np.sort(np.random.choice(np.arange(len_ctx), num_context, replace=False))
-                c_x_batch[i] = c_x[idx]
-                c_y_batch[i] = c_y[idx]
-                t_x_batch[i] = torch.cat([t_x[idx], t_x[-self.predict_length:]], axis=0)
-                t_y_batch[i] = torch.cat([t_y[idx], t_y[-self.predict_length:]], axis=0)
+            # 0번째 moment로 normalize (process dynamics 기억)
+            c_y = (c_y - mu) / sig
+            if t_y is not None:
+                t_y = (t_y - mu) / sig
+            else:
+                t_y_batch = None
+
+            for i in range(batch_size):
+                c_idx = np.sort(np.random.choice(np.arange(len_ctx), num_context, replace=False))
+                t_idx = np.concatenate([c_idx, np.arange(len_ctx, len_total)])
+
+                np.random.shuffle(c_idx)
+                c_x_batch[i] = c_x[c_idx]
+                c_y_batch[i] = c_y[c_idx]
+                if is_train:
+                    np.random.shuffle(t_idx)
+
+                t_x_batch[i] = t_x[t_idx]
+                if t_y_batch is not None:
+                    t_y_batch[i] = t_y[t_idx]
 
             ctx_x_list.append(c_x_batch)
             ctx_y_list.append(c_y_batch)
