@@ -824,10 +824,11 @@ def plot_functions_(ep, plot_data, plot_seq_num=-1):
 
 
 def main3():
-    TRAINING_ITERATIONS = 5000 #@param {type:"number"}
+    TRAINING_ITERATIONS = 500000 #@param {type:"number"}
     MAX_CONTEXT_POINTS = 250 #@param {type:"number"}
     PLOT_AFTER = 500 #@param {type:"number"}
 
+    base_i = 100
     # Train dataset
     dataset = TimeSeries(batch_size=FLAGS.batch_size, max_num_context=MAX_CONTEXT_POINTS, predict_length=120)
     base_y = dataset.get_timeseries('mkt_rf')
@@ -870,7 +871,7 @@ def main3():
     for it in range(TRAINING_ITERATIONS):
 
         # data_train = dataset_train.generate_temporal_curves(seed=None)
-        data_train = dataset.generate(50, seq_len=FLAGS.LEN_SEQ, is_train=True)
+        data_train = dataset.generate(base_i, seq_len=FLAGS.LEN_SEQ, is_train=True)
         # data_train = to_device(data_train, 'cuda:0')
         model.train()
         # Define the loss
@@ -884,7 +885,7 @@ def main3():
         # Plot the predictions in `PLOT_AFTER` intervals
         if it % PLOT_AFTER == 0:
             # data_test = dataset_test.generate_temporal_curves(seed=123)
-            for ii, date_i in enumerate([30, 50, 70]):
+            for ii, date_i in enumerate([base_i - 20, base_i, base_i + 20]):
                 data_test = dataset.generate(date_i, seq_len=FLAGS.LEN_SEQ, is_train=False)
                 # data_test = dataset_test.generate_curves()
                 # data_test = to_device(data_test, 'cuda:0')
