@@ -239,10 +239,10 @@ class LatentContext(nn.Module):
         hidden = encoder_input.mean(dim=1)
         hidden = torch.relu(self.penultimate_layer(hidden))
 
-        mu = self.mu(hidden)
-        log_sigma = self.log_sigma(hidden)
-        sigma = torch.exp(0.5 * log_sigma)
-        global_dist = torch.distributions.Normal(loc=mu, scale=sigma)
+        global_mu = self.mu(hidden)
+        global_log_sigma = self.log_sigma(hidden)
+        global_sigma = torch.exp(0.5 * global_log_sigma)
+        # global_dist = torch.distributions.Normal(loc=mu, scale=sigma)
 
         # # reparameterization trick
         # sigma = torch.exp(0.5 * log_sigma)
@@ -254,11 +254,11 @@ class LatentContext(nn.Module):
         local_mu = self.local_mu(local_hidden)
         local_log_sigma = self.local_log_sigma(local_hidden)
         local_sigma = torch.exp(0.5 * local_log_sigma)
-        local_dist = torch.distributions.Normal(loc=local_mu, scale=local_sigma)
+        # local_dist = torch.distributions.Normal(loc=local_mu, scale=local_sigma)
 
         # return distribution
         # return mu, log_sigma, z
-        return global_dist, local_dist
+        return global_mu, global_sigma, local_mu, local_sigma
 
 
 class LatentEncoder(nn.Module):
@@ -273,9 +273,10 @@ class LatentEncoder(nn.Module):
     def forward(self, context_x, context_y, target_x):
         num_targets = target_x.size(1)
 
-        global_dist, local_dist = self.latent_context(context_x, context_y)
+        global_mu, global_sigma, local_mu, local_sigma = self.latent_context(context_x, context_y)
         # local
-        local_z = local_dist.sample()
+        local_eps = torch.randn_like(local_sigma)
+        local_z = local_eps.mul(local_sigma).add_(local_mu)
 
         query = self.target_projection(target_x)
         keys = self.context_projection(context_x)
@@ -285,7 +286,8 @@ class LatentEncoder(nn.Module):
             query, _ = attention(keys, local_z, query)
 
         # global
-        global_z = global_dist.sample()
+        global_eps = torch.randn_like(global_sigma)
+        global_z = global_eps.mul(global_sigma).add_(global_mu)
         global_z = global_z.unsqueeze(1).repeat(1, num_targets, 1)  # [B, T_target, H]
 
         c_latent = torch.cat([query, global_z], dim=-1)
@@ -487,14 +489,12 @@ class LatentModel(nn.Module):
         num_targets = target_x.size(1)
 
         # prior_mu, prior_var, prior = self.latent_encoder(context_x, context_y)
-
-        global_prior, local_prior = self.latent_encoder.latent_context(context_x, context_y)
         # For training
-        if target_y is not None:
-            # posterior_mu, posterior_var, posterior = self.latent_encoder(target_x, target_y)
-            # z = posterior
-            global_posterior, local_posterior = self.latent_encoder.latent_context(target_x, target_y)
-            # z = posterior.sample()
+        # if target_y is not None:
+        #     # posterior_mu, posterior_var, posterior = self.latent_encoder(target_x, target_y)
+        #     # z = posterior
+        #     global_posterior, local_posterior = self.latent_encoder.latent_context(target_x, target_y)
+        #     # z = posterior.sample()
 
         # For Generation
         # else:
@@ -512,12 +512,36 @@ class LatentModel(nn.Module):
         if target_y is not None:
             log_p = dist.log_prob(target_y).squeeze()
 
+            prior_g_mu, prior_g_sigma, prior_l_mu, prior_l_sigma = self.latent_encoder.latent_context(context_x, context_y)
+            posterior_g_mu, posterior_g_sigma, posterior_l_mu, posterior_l_sigma = self.latent_encoder.latent_context(target_x, target_y)
+
+            # global
+            global_posterior = torch.distributions.Normal(loc=posterior_g_mu, scale=posterior_g_sigma)
+            global_prior = torch.distributions.Normal(loc=prior_g_mu, scale=prior_g_sigma)
             global_kl = torch.distributions.kl_divergence(global_posterior, global_prior).sum(dim=-1, keepdims=True)
             global_kl = global_kl.repeat([1, num_targets])
 
-            for i in range()
-            local_kl = torch.distributions.kl_divergence(local_posterior, local_prior).sum(dim=-1, keepdims=True)
-            loss = - (log_p - kl / torch.tensor(num_targets).float()).mean()
+            # local
+            posterior_l_mu = posterior_l_mu.mean(dim=1)
+            posterior_l_sigma = posterior_l_sigma.mean(dim=1)
+            local_posterior = torch.distributions.Normal(loc=posterior_l_mu, scale=posterior_l_sigma)
+
+            n_context = context_x.shape[1]
+            for i in range(n_context):
+                local_prior = torch.distributions.Normal(loc=prior_l_mu[:, i, :], scale=prior_l_sigma[:, i, :])
+
+                local_kl_temp = torch.distributions.kl_divergence(local_posterior, local_prior).sum(dim=-1, keepdims=True)
+                local_kl_temp = local_kl_temp.repeat([1, num_targets])
+
+                if i == 0:
+                    local_kl = local_kl_temp
+                else:
+                    local_kl += local_kl_temp
+
+            loss = - (log_p - global_kl / torch.tensor(num_targets).float() - local_kl / torch.tensor(num_targets).float()).mean()
+
+            # local_kl = torch.distributions.kl_divergence(local_posterior, local_prior).sum(dim=-1, keepdims=True)
+            # loss = - (log_p - kl / torch.tensor(num_targets).float()).mean()
 
             # # get log probability
             # bce_loss = self.BCELoss(torch.sigmoid(mu), target_y)
@@ -531,10 +555,11 @@ class LatentModel(nn.Module):
         # For Generation
         else:
             log_p = None
-            kl = None
+            global_kl = None
+            local_kl = None
             loss = None
 
-        return mu, sigma, log_p, kl, loss
+        return mu, sigma, log_p, global_kl, local_kl, loss
 
     def kl_div(self, prior_mu, prior_var, posterior_mu, posterior_var):
         kl_div = (torch.exp(posterior_var) + (posterior_mu - prior_mu) ** 2) / torch.exp(prior_var) - 1. + (
@@ -626,7 +651,7 @@ def main2():
         ((c_x, c_y), t_x), t_y = data_train.query,  data_train.target_y
         train_query = ((c_x[0], c_y[0]), t_x[0])
         train_target_y = t_y[0]
-        _, _, log_prob, _, loss = model(train_query, train_target_y)
+        _, _, log_prob, _, _, loss = model(train_query, train_target_y)
         # _, _, log_prob, _, loss = model(data_train.query,  data_train.target_y)
 
         optimizer.zero_grad()
@@ -644,11 +669,11 @@ def main2():
                     ((c_x, c_y), t_x), t_y = data_test.query,  data_test.target_y
                     test_query = ((c_x[0], c_y[0]), t_x[0])
                     test_target_y = t_y[0]
-                    _, _, log_prob, _, loss = model(test_query, test_target_y)
+                    _, _, log_prob, _, _, loss = model(test_query, test_target_y)
                     # _, _, log_prob, _, loss = model(data_train.query, data_train.target_y)
 
                     # Get the predicted mean and variance at the target points for the testing set
-                    mu, sigma, _, _, _ = model(test_query)
+                    mu, sigma, _, _, _, _ = model(test_query)
                     # mu, sigma, _, _, _ = model(data_test.query)
                 loss_value, pred_y, std_y, target_y, whole_query = loss, mu, sigma, test_target_y, test_query
 
@@ -674,11 +699,11 @@ def main2():
                     ((c_x, c_y), t_x), t_y = data_test.query,  data_test.target_y
                     test_query = ((c_x[0], c_y[0]), t_x[0])
                     test_target_y = t_y[0]
-                    _, _, log_prob, _, loss = model(test_query, test_target_y)
+                    _, _, log_prob, _, _, loss = model(test_query, test_target_y)
                     # _, _, log_prob, _, loss = model(data_train.query, data_train.target_y)
 
                     # Get the predicted mean and variance at the target points for the testing set
-                    mu, sigma, _, _, _ = model(test_query)
+                    mu, sigma, _, _, _, _ = model(test_query)
                     # mu, sigma, _, _, _ = model(data_test.query)
                 loss_value, pred_y, std_y, target_y, whole_query = loss, mu, sigma, test_target_y, test_query
 
