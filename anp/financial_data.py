@@ -28,6 +28,7 @@ class TimeSeries:
         self.predict_length = predict_length
         self.x_dim = 1
         self.y_dim = 1
+        self.context_set = None
 
     def get_timeseries(self, ts_nm='mkt_rf'):
         data = pd.read_csv('./data/data_for_metarl.csv', index_col=0)
@@ -64,6 +65,10 @@ class TimeSeries:
 
         self.context_set = context_set
 
+    @property
+    def max_len(self):
+        return len(self.context_set) if self.context_set is not None else 0
+
     def generate(self, base_i, seq_len=10, is_train=True):
         # base_i = 50; seq_len = 10; is_train=True; t=0
         assert base_i >= seq_len + self.predict_length // 20  # lookahead 방지
@@ -76,11 +81,12 @@ class TimeSeries:
             batch_size = 1
             num_context = self.max_num_context
 
+        assert ctx_i < len(self.context_set)
+
         ctx_x_list, ctx_y_list = [], []
         tgt_x_list, tgt_y_list = [], []
         hp_list = []
         ctx_selected = self.context_set[(ctx_i - seq_len + 1):(ctx_i + 1)]
-
 
         c_x_batch = torch.zeros(batch_size, num_context, self.x_dim)
         c_y_batch = torch.zeros(batch_size, num_context, self.y_dim)

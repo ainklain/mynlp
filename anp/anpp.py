@@ -615,7 +615,7 @@ def plot_functions(ep, target_x, target_y, context_x, context_y, pred_y, std):
 
 
 def main2():
-    TRAINING_ITERATIONS = 10000 #@param {type:"number"}
+    TRAINING_ITERATIONS = 100000 #@param {type:"number"}
     MAX_CONTEXT_POINTS = 250 #@param {type:"number"}
     PLOT_AFTER = 1000 #@param {type:"number"}
     batch_size = 16
@@ -683,13 +683,8 @@ def main2():
                 # Plot the prediction and the context
                 plot_functions(it + ii, np_ify(target_x), np_ify(target_y), np_ify(context_x), np_ify(context_y), np_ify(pred_y), np_ify(std_y))
 
-
-
-
-
-
         # Plot the predictions in `PLOT_AFTER` intervals
-        if it % 10000 == 0:
+        if it > 0 and it % 10000 == 0:
             for ii in range(-base_i, dataset.max_len - base_i - 1):
                 data_test = dataset.generate(date_i + ii, seq_len=1, is_train=False)
                 # data_test = dataset_test.generate_curves()

@@ -4,6 +4,7 @@ import os
 
 class Config:
     def __init__(self, use_maml=False, use_macro=False, use_swa=False):
+        self.num_workers = 4
         # time series parameter
         self.train_set_length = 2500    # previous 10 years data
         self.retrain_days = 250         # re-train every year
@@ -17,8 +18,8 @@ class Config:
         self.trainset_rate = 0.8
         self.cost_rate = 0.003
 
-        self.train_batch_size = 256
-        self.eval_batch_size = 256
+        self.train_batch_size = 32
+        self.eval_batch_size = 32
         self.train_steps = 100
         self.eval_steps = 100
         self.save_steps = 100
@@ -139,7 +140,6 @@ class Config:
             self.train_batch_size = 256
             self.eval_batch_size = 256
             self.min_size_port = 100
-
 
     def log_filename(self, name_='log'):
         return os.path.join(os.getcwd(), self.data_out_path, self.f_name, f'{name_}.log')
@@ -308,6 +308,13 @@ class Config:
             return_str += "{}: {}\n".format(key, self.__dict__[key])
 
         return return_str
+
+    def load(self):
+        file_path = os.path.join(os.getcwd(), self.data_out_path, self.f_name, 'config.txt')
+        if os.path.exists(file_path):
+            f = open(file_path, 'r')
+
+
 
     def generate_name(self):
         return "M{}_K{}_COST{}_BS{}_LR{}_BM{}_UT{}".format(self.m_days, self.k_days, self.cost_rate,

@@ -887,6 +887,7 @@ class TSModel(Base):
         ret = self.forward(features)
         return ret[0]
 
+    # @profile
     def forward_with_loss(self, features, labels_mtl, return_attn=False):
         # features = {'input': torch.zeros(2, 25, 23), 'output': torch.zeros(2, 1, 23)}
         device = features['input'].device

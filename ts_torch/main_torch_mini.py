@@ -1,6 +1,7 @@
 
-
 import os
+# import sys
+# sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 
 # ## TORCH TEST
 import torch
@@ -15,6 +16,8 @@ from ts_torch.data_process_torch_mini import DataScheduler, Noise
 from ts_torch.config_torch_mini import Config
 from ts_torch.performance_torch_mini import Performance
 from ts_torch import torch_util_mini as tu
+
+
 
 
 def run3():
@@ -283,7 +286,10 @@ def run():
 
 
 def example2():
-    model_predictor_list = ['nmir', 'nmy', 'nmsize', 'pos_20', 'nmstd']
+    # model_predictor_list = ['nmy', 'nmsize']
+    model_predictor_list = ['nmy', 'pos_20', 'nmstd']
+
+    # model_predictor_list = ['nmir', 'nmy', 'nmsize', 'pos_20', 'nmstd']
     features_structure = {'regression': {'logp_base': {'logp': [0],
                                                        'logy': [20, 60, 120, 250],
                                                        'std': [20, 60, 120],
@@ -320,7 +326,7 @@ def example():
 
 
 def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure, country='kr'):
-    # i=5; country='kr'; use_macro = False; use_swa=False; model_predictor_list, features_structure=example2()
+    # i=4; country='kr'; use_macro = False; use_swa=False; model_predictor_list, features_structure=example2()
     # use_swa = True
     configs = Config(use_macro=use_macro, use_swa=use_swa)
 
@@ -333,11 +339,15 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
     configs.n_heads = 8
     # configs.f_name ='testtesttes_04'
     if use_swa:
-        configs.f_name = '{}_{}_swa_mar_00{}'.format(country, k_days, i)
+        configs.f_name = '{}_{}_swa_profile_test_00{}'.format(country, k_days, i)
     else:
-        configs.f_name = '{}_{}_nswa_mar_00{}'.format(country, k_days, i)
+        configs.f_name = '{}_{}_nswa_profile_test_00{}'.format(country, k_days, i)
+    if configs.use_maml:
+        num_epochs = 100
+    else:
+        num_epochs = 5
 
-    configs.early_stopping_count = 50
+    configs.early_stopping_count = 1
     configs.learning_rate = 5e-4
     configs.update_comment = 'single pred per task'
     config_str = configs.export()
@@ -346,7 +356,8 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
     features_cls = FeatureNew(configs)
     ds = DataScheduler(configs, features_cls)
     ds.set_idx(8250)
-    ds.test_end_idx = min(ds.test_end_idx + 250, ds.data_generator.max_length - ds.configs.k_days - 1)
+    # ds.test_end_idx = min(ds.test_end_idx + 250, ds.data_generator.max_length - ds.configs.k_days - 1)
+    ds.test_end_idx = min(ds.test_end_idx + 250, ds.data_generator.max_length - 1)
 
     os.makedirs(os.path.join(ds.data_out_path), exist_ok=True)
     with open(os.path.join(ds.data_out_path, 'config.txt'), 'w') as f:
@@ -376,20 +387,24 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
     ds.load(model, optimizer)
 
     # ds.train_maml(model, optimizer, performer, num_epochs=50, early_stopping_count=configs.early_stopping_count)
-
+    i_profile = 0
     while True:
+        if i_profile == 1:
+            break
+
+        i_profile = 1
         # model = TSModel(configs, features_cls, weight_scheme=configs.weight_scheme)
         # optimizer = optim.Adam(model.parameters(), lr=configs.learning_rate)
         ds.save(0, model, optimizer)
         if configs.use_maml:
-            ds.train_maml(model, optimizer, performer, num_epochs=100)
+            ds.train_maml(model, optimizer, performer, num_epochs=num_epochs)
         else:
             if configs.use_swa:
-                ds.train_swa(model, model_swa, optimizer, scheduler, performer, num_epochs=1000)
+                ds.train_swa(model, model_swa, optimizer, scheduler, performer, num_epochs=num_epochs)
             else:
-                ds.train(model, optimizer, scheduler, performer, num_epochs=1000)
+                ds.train(model, optimizer, scheduler, performer, num_epochs=num_epochs)
 
-        # recent_month_end = '2019-12-31'
+        # recent_month_end = '2020-03-31'
         # dataloader_t = ds.dataloader_t(recent_month_end, force_calc=True)
         # x = performer.extract_portfolio(model, dataloader_t, rate_=configs.app_rate)
         # x.to_csv('./out/{}/result_{}.csv'.format(configs.f_name, ds.base_idx))
@@ -402,10 +417,16 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
             print('something wrong')
             break
 
-    recent_month_end = '2020-02-29'
+    recent_month_end = '2020-03-31'
     dataloader_t = ds.dataloader_t(recent_month_end, force_calc=True)
     x = performer.extract_portfolio(model, dataloader_t, rate_=configs.app_rate)
-    x.to_csv('./out/{}/result_{}.csv'.format(configs.f_name, ds.base_idx))
+    x.to_csv('./out/{}/result_{}.csv'.format(configs.f_name, recent_month_end))
+
+
+# if __name__ == '__main__':
+#     model_predictor_list, features_structure = example2()
+#
+#     run_weekend(i=5, use_macro=False, use_swa=False, model_predictor_list=model_predictor_list, features_structure=features_structure, country='kr')
 
 
 def etc():
