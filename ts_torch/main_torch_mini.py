@@ -385,7 +385,7 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
         # optimizer = optim.SGD(model.parameters(), lr=configs.learning_rate)
 
     ds.load(model, optimizer)
-
+    model.to(tu.device)
     # ds.train_maml(model, optimizer, performer, num_epochs=50, early_stopping_count=configs.early_stopping_count)
     i_profile = 0
     while True:

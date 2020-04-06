@@ -4,7 +4,7 @@ import os
 
 class Config:
     def __init__(self, use_maml=False, use_macro=False, use_swa=False):
-        self.num_workers = 4
+        self.num_workers = 0
         # time series parameter
         self.train_set_length = 2500    # previous 10 years data
         self.retrain_days = 250         # re-train every year
@@ -41,7 +41,7 @@ class Config:
         # self.set_features_info(self.k_days)
 
         self.shuffle_seek = 1000
-        self.d_model = 128
+        self.d_model = 64
         self.n_heads = 8
         self.n_layers = 6
         # self.model_hidden_size = 128
@@ -137,8 +137,8 @@ class Config:
             self.eval_batch_size = 512
             self.min_size_port = 30
         elif self.data_type == 'kr_stock':
-            self.train_batch_size = 128
-            self.eval_batch_size = 128
+            self.train_batch_size = 2048
+            self.eval_batch_size = 2048
             self.min_size_port = 100
 
     def log_filename(self, name_='log'):

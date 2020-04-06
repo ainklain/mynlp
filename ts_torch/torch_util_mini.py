@@ -27,3 +27,18 @@ def np_ify(tensor_or_other):
         return get_numpy(tensor_or_other)
     else:
         return tensor_or_other
+
+
+def to_device(device, list_to_device):
+    assert isinstance(list_to_device, list)
+
+    for i, value_ in enumerate(list_to_device):
+        if isinstance(value_, dict):
+            for key in value_.keys():
+                value_[key] = value_[key].to(device)
+        elif isinstance(value_, torch.Tensor):
+            list_to_device[i] = value_.to(device)
+        else:
+            raise NotImplementedError
+
+    return list_to_device

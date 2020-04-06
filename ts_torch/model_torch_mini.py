@@ -187,45 +187,66 @@ class LayerNormalization(Base):
 
 
 class PosEncoding(Base):
-    def __init__(self, max_seq_len, d_word_vec):
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
         super(PosEncoding, self).__init__()
-        pos_enc = np.array(
-            [[pos / np.power(10000, 2.0 * (j // 2) / d_word_vec) for j in range(d_word_vec)]
-            for pos in range(max_seq_len)])
-        pos_enc[:, 0::2] = np.sin(pos_enc[:, 0::2])
-        pos_enc[:, 1::2] = np.cos(pos_enc[:, 1::2])
-        pad_row = np.zeros([1, d_word_vec])
-        pos_enc = np.concatenate([pad_row, pos_enc]).astype(np.float32)
+        self.dropout = nn.Dropout(p=dropout)
 
-        # additional single row for PAD idx
-        self.pos_enc = nn.Embedding(max_seq_len + 1, d_word_vec)
-        # fix positional encoding: exclude weight from grad computation
-        self.pos_enc.weight = nn.Parameter(torch.from_numpy(pos_enc), requires_grad=False)
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0) #.transpose(0, 1)
+        self.register_buffer('pe', pe)
 
-    def forward(self, input_len):
-        max_len = torch.max(input_len)
-        tensor = torch.cuda.LongTensor if input_len.is_cuda else torch.LongTensor
-        # print("is cuda:{}".format(input_len.is_cuda))
-        # input_pos = torch.LongTensor([list(range(1, input_len+1))])
-        input_pos = tensor([list(range(1, int(len)+1)) + [0]*int(max_len-len) for len in input_len])
-        if input_len.is_cuda:
-            self.pos_enc.cuda()
+    @profile
+    def forward(self, x):
+        # x shape: [batch, len, d_model]
+        x = x + self.pe[:, x.size(1), :]
+        return self.dropout(x)
 
-        return self.pos_enc(input_pos)
 
-    # def compute_graph(self, input_len, weights_list):
-    #     self.debug(weights_list)
-    #
-    #     max_len = torch.max(input_len)
-    #     tensor = torch.cuda.LongTensor if input_len.is_cuda else torch.LongTensor
-    #     # print("is cuda:{}".format(input_len.is_cuda))
-    #     # input_pos = torch.LongTensor([list(range(1, input_len+1))])
-    #     input_pos = tensor([list(range(1, int(len)+1)) + [0]*int(max_len-len) for len in input_len])
-    #
-    #     return F.embedding(input_pos, weight=weights_list[0])
+# class PosEncoding(Base):
+#     def __init__(self, d_word_vec, max_len):
+#         super(PosEncoding, self).__init__()
+#         pos_enc = np.array(
+#             [[pos / np.power(10000, 2.0 * (j // 2) / d_word_vec) for j in range(d_word_vec)]
+#             for pos in range(max_len)])
+#         pos_enc[:, 0::2] = np.sin(pos_enc[:, 0::2])
+#         pos_enc[:, 1::2] = np.cos(pos_enc[:, 1::2])
+#         pad_row = np.zeros([1, d_word_vec])
+#         pos_enc = np.concatenate([pad_row, pos_enc]).astype(np.float32)
+#
+#         # additional single row for PAD idx
+#         self.pos_enc = nn.Embedding(max_len + 1, d_word_vec, sparse=True)
+#         # fix positional encoding: exclude weight from grad computation
+#         self.pos_enc.weight = nn.Parameter(torch.from_numpy(pos_enc), requires_grad=False)
+#
+#     def forward(self, input_len):
+#         max_len = torch.max(input_len)
+#         tensor = torch.cuda.LongTensor if input_len.is_cuda else torch.LongTensor
+#         # print("is cuda:{}".format(input_len.is_cuda))
+#         # input_pos = torch.LongTensor([list(range(1, input_len+1))])
+#         input_pos = tensor([list(range(1, int(len)+1)) + [0]*int(max_len-len) for len in input_len])
+#         if input_len.is_cuda:
+#             self.pos_enc.cuda()
+#
+#         return self.pos_enc(input_pos)
+#
+#     # def compute_graph(self, input_len, weights_list):
+#     #     self.debug(weights_list)
+#     #
+#     #     max_len = torch.max(input_len)
+#     #     tensor = torch.cuda.LongTensor if input_len.is_cuda else torch.LongTensor
+#     #     # print("is cuda:{}".format(input_len.is_cuda))
+#     #     # input_pos = torch.LongTensor([list(range(1, input_len+1))])
+#     #     input_pos = tensor([list(range(1, int(len)+1)) + [0]*int(max_len-len) for len in input_len])
+#     #
+#     #     return F.embedding(input_pos, weight=weights_list[0])
 
 
 # ####################### Sublayers ##########################
+
 class _MultiHeadAttention(Base):
     def __init__(self, d_k, d_v, d_model, n_heads, dropout):
         super(_MultiHeadAttention, self).__init__()
@@ -618,16 +639,18 @@ class Encoder(Base):
         # n_layers, d_k, d_v, d_model, d_ff, n_heads, max_seq_len, dropout, weighted = configs.n_layers, configs.d_k, configs.d_v, configs.d_model, configs.d_ff, configs.n_heads, configs.max_input_seq_len, configs.dropout, configs.weighted_model
         super(Encoder, self).__init__()
         self.d_model = d_model
-        self.pos_emb = PosEncoding(max_seq_len * 10, d_model)  # TODO: *10 fix
-        self.dropout_emb = nn.Dropout(dropout)
+        self.pos_emb = PosEncoding(d_model, dropout=dropout, max_len=max_seq_len * 2)  # TODO: *10 fix
+        # self.dropout_emb = nn.Dropout(dropout)
         self.layer_type = EncoderLayer if not weighted else WeightedEncoderLayer
         self.layers = nn.ModuleList(
             [self.layer_type(d_k, d_v, d_model, d_ff, n_heads, dropout) for _ in range(n_layers)])
 
+    @profile
     def forward(self, enc_inputs, enc_inputs_len, return_attn=False):
         # enc_outputs = self.src_emb(enc_inputs)
-        enc_outputs = enc_inputs + self.pos_emb(enc_inputs_len)  # Adding positional encoding TODO: note
-        enc_outputs = self.dropout_emb(enc_outputs)
+        enc_outputs = self.pos_emb(enc_inputs)  # Adding positional encoding TODO: note
+        # enc_outputs = enc_inputs + self.pos_emb(enc_inputs_len)  # Adding positional encoding TODO: note
+        # enc_outputs = self.dropout_emb(enc_outputs)
 
         enc_self_attn_mask = get_attn_pad_mask(enc_inputs, enc_inputs)
         enc_self_attns = []
@@ -663,16 +686,19 @@ class Decoder(Base):
         super(Decoder, self).__init__()
         self.d_model = d_model
         # self.tgt_emb = nn.Embedding(tgt_vocab_size, d_model, padding_idx=data_utils.PAD, )
-        self.pos_emb = PosEncoding(max_seq_len * 10, d_model)  # TODO: *10 fix
-        self.dropout_emb = nn.Dropout(dropout)
+        self.pos_emb = PosEncoding(d_model, dropout=dropout, max_len=max_seq_len * 2)  # TODO: *10 fix
+        # self.dropout_emb = nn.Dropout(dropout)
         self.layer_type = DecoderLayer if not weighted else WeightedDecoderLayer
         self.layers = nn.ModuleList(
             [self.layer_type(d_k, d_v, d_model, d_ff, n_heads, dropout) for _ in range(n_layers)])
 
+    @profile
     def forward(self, dec_inputs, dec_inputs_len, enc_inputs, enc_outputs, return_attn=False):
         # dec_outputs = self.tgt_emb(dec_inputs)
-        dec_outputs = dec_inputs + self.pos_emb(dec_inputs_len)  # Adding positional encoding # TODO: note
-        dec_outputs = self.dropout_emb(dec_outputs)
+        dec_outputs = self.pos_emb(dec_inputs)  # Adding positional encoding TODO: note
+
+        # dec_outputs = dec_inputs + self.pos_emb(dec_inputs_len)  # Adding positional encoding # TODO: note
+        # dec_outputs = self.dropout_emb(dec_outputs)
 
         dec_self_attn_pad_mask = get_attn_pad_mask(dec_inputs, dec_inputs)
         dec_self_attn_subsequent_mask = get_attn_subsequent_mask(dec_inputs)
@@ -834,7 +860,7 @@ class TSModel(Base):
     def forward(self, features, return_attn=False):
         # features = {'input': torch.zeros(2, 25, 23), 'output': torch.zeros(2, 1, 23)}
         device = features['input'].device
-        self.to(device)
+        # self.to(device)
 
         enc_in = self.conv_embedding(features['input'])
         dec_in = self.conv_embedding(features['output'])
@@ -887,7 +913,7 @@ class TSModel(Base):
         ret = self.forward(features)
         return ret[0]
 
-    # @profile
+    @profile
     def forward_with_loss(self, features, labels_mtl, return_attn=False):
         # features = {'input': torch.zeros(2, 25, 23), 'output': torch.zeros(2, 1, 23)}
         device = features['input'].device
