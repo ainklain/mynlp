@@ -18,8 +18,8 @@ class Config:
         self.trainset_rate = 0.8
         self.cost_rate = 0.003
 
-        self.train_batch_size = 32
-        self.eval_batch_size = 32
+        # self.train_batch_size = 4096
+        # self.eval_batch_size = 4096
         self.train_steps = 100
         self.eval_steps = 100
         self.save_steps = 100
@@ -43,7 +43,7 @@ class Config:
         self.shuffle_seek = 1000
         self.d_model = 128
         self.n_heads = 8
-        self.n_layers = 2
+        self.n_layers = 6
         # self.model_hidden_size = 128
         # self.model_hidden_size = self.embedding_size    # self.set_features_info 에서 재설정
         self.d_ff = self.d_model
@@ -137,8 +137,8 @@ class Config:
             self.eval_batch_size = 512
             self.min_size_port = 30
         elif self.data_type == 'kr_stock':
-            self.train_batch_size = 256
-            self.eval_batch_size = 256
+            self.train_batch_size = 128
+            self.eval_batch_size = 128
             self.min_size_port = 100
 
     def log_filename(self, name_='log'):

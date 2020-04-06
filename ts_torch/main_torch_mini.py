@@ -326,7 +326,7 @@ def example():
 
 
 def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure, country='kr'):
-    # i=4; country='kr'; use_macro = False; use_swa=False; model_predictor_list, features_structure=example2()
+    # i=10; country='kr'; use_macro = False; use_swa=False; model_predictor_list, features_structure=example2()
     # use_swa = True
     configs = Config(use_macro=use_macro, use_swa=use_swa)
 

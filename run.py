@@ -5,7 +5,7 @@ from ts_torch import main_torch_mini
 
 def main():
     model_predictor_list, features_structure = main_torch_mini.example2()
-    main_torch_mini.run_weekend(i=5, use_macro=False, use_swa=False, model_predictor_list=model_predictor_list,
+    main_torch_mini.run_weekend(i=10, use_macro=False, use_swa=False, model_predictor_list=model_predictor_list,
                                 features_structure=features_structure, country='kr')
 
 

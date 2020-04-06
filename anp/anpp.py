@@ -470,7 +470,6 @@ class Attention(nn.Module):
         return result, attns
 
 
-
 class LatentModel(nn.Module):
     """
     Latent Model (Attentive Neural Process)

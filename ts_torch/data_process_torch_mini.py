@@ -775,7 +775,11 @@ class DataScheduler:
 
                 break
 
-            train_loss = self.step_epoch(ep, model, optimizer, scheduler=scheduler, is_train=True)
+            with torch.autograd.profiler.profile() as prof:
+                train_loss = self.step_epoch(ep, model, optimizer, scheduler=scheduler, is_train=True)
+
+            print(prof.key_averages().table(sort_by="self_cpu_time_total"))
+
             if train_loss is False:
                 return False
 
@@ -909,42 +913,46 @@ class DataScheduler:
             bn_update(dataloader, model)
         total_loss = 0
         i = 0
-        for features, labels, add_infos in dataloader:
-            #  features, labels, add_infos = next(iter(dataloader))
-            features, labels, add_infos = to_device(tu.device, [features, labels, add_infos])
-            with torch.set_grad_enabled(is_train):
-                features_with_noise = {'input': features['input'], 'output': features['output']}
-                labels_with_noise = labels
-                if is_train:
-                    if self.configs.adversarial_training is True:
-                        labels_mtl_noise = self.labels_torch(features_list, labels_with_noise, add_infos)
-                        features_with_noise = Noise.adversarial_noise(features_with_noise, labels_mtl_noise, model)
-                    else:
-                        # add random noise for features
-                        features_with_noise['input'] = Noise.random_noise(features_with_noise['input'], p=0.5)
-                        features_with_noise['input'] = Noise.random_mask(features_with_noise['input'], p=0.9, mask_p=0.2)
 
-                        # add random noise for labels
-                        labels_with_noise = Noise.random_noise(labels, p=0.2)
-                        labels_with_noise = Noise.random_flip(labels_with_noise, p=0.1, flip_p=0.2)
+        with torch.autograd.profiler.profile(use_cuda=True) as prof:
+            for features, labels, add_infos in dataloader:
+                #  features, labels, add_infos = next(iter(dataloader))
+                features, labels, add_infos = to_device(tu.device, [features, labels, add_infos])
+                with torch.set_grad_enabled(is_train):
+                    features_with_noise = {'input': features['input'], 'output': features['output']}
+                    labels_with_noise = labels
+                    if is_train:
+                        if self.configs.adversarial_training is True:
+                            labels_mtl_noise = self.labels_torch(features_list, labels_with_noise, add_infos)
+                            features_with_noise = Noise.adversarial_noise(features_with_noise, labels_mtl_noise, model)
+                        else:
+                            # add random noise for features
+                            features_with_noise['input'] = Noise.random_noise(features_with_noise['input'], p=0.5)
+                            features_with_noise['input'] = Noise.random_mask(features_with_noise['input'], p=0.9, mask_p=0.2)
 
-                labels_mtl = self.labels_torch(features_list, labels_with_noise, add_infos)
-                # pred, _, _, _ = model.forward(features_with_noise, labels_mtl)
-                pred, loss_each = model.forward_with_loss(features_with_noise, labels_mtl)
+                            # add random noise for labels
+                            labels_with_noise = Noise.random_noise(labels, p=0.2)
+                            labels_with_noise = Noise.random_flip(labels_with_noise, p=0.1, flip_p=0.2)
 
-                losses = 0
-                for key in loss_each.keys():
-                    losses += loss_each[key].mean()
+                    labels_mtl = self.labels_torch(features_list, labels_with_noise, add_infos)
+                    # pred, _, _, _ = model.forward(features_with_noise, labels_mtl)
+                    pred, loss_each = model.forward_with_loss(features_with_noise, labels_mtl)
 
-                if is_train:
-                    optimizer.zero_grad()
-                    losses.backward()
-                    optimizer.step()
+                    losses = 0
+                    for key in loss_each.keys():
+                        losses += loss_each[key].mean()
 
-                total_loss += losses
-                if i % 10 == 0:
-                    self.logger.debug("i:%d loss:%f total_loss:%f", i, float(tu.np_ify(losses)), float(tu.np_ify(total_loss)))
-                i += 1
+                    if is_train:
+                        optimizer.zero_grad()
+                        losses.backward()
+                        optimizer.step()
+
+                    total_loss += losses
+                    if i % 10 == 0:
+                        self.logger.debug("i:%d loss:%f total_loss:%f", i, float(tu.np_ify(losses)), float(tu.np_ify(total_loss)))
+                    i += 1
+
+        print(prof.key_averages().table(sort_by="self_cpu_time_total"))
 
         total_loss = tu.np_ify(total_loss) / i
         if is_train:
