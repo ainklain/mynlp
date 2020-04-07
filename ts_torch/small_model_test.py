@@ -1,13 +1,4 @@
 
-import builtins
-
-try:
-    builtins.profile
-except AttributeError:
-    # No line profiler, provide a pass-through version
-    def profile(func): return func
-    builtins.profile = profile
-
 
 import numpy as np
 import os
@@ -20,6 +11,7 @@ from ts_torch.data_process_torch_mini import DataScheduler, Noise
 from ts_torch.model_torch_mini import TSModel
 from ts_torch.performance_torch_mini import Performance
 from ts_torch import torch_util_mini as tu
+
 
 
 def example2():
@@ -64,52 +56,56 @@ def to_device(device, list_to_device):
     return list_to_device
 
 
-def run():
-    i = 10;
-    country = 'kr';
-    model_predictor_list, features_structure = example2()
-    # use_swa = True
-    configs = Config(use_macro=False, use_swa=False)
 
-    k_days = 20;
-    pred = model_predictor_list[0];
-    # country = 'kr';
-    configs.set_datatype(country + '_stock')
-    configs.sampling_days = k_days
-    configs.set_kdays(k_days, pred=pred, model_predictor_list=model_predictor_list,
-                      features_structure=features_structure)
-    configs.n_heads = 8
-    configs.f_name = '{}_{}_nswa_profile_test_00{}'.format(country, k_days, i)
-    num_epochs = 5
+i = 15
+country = 'kr';
+model_predictor_list, features_structure = example2()
+# use_swa = True
+configs = Config(use_macro=False, use_swa=False)
 
-    configs.early_stopping_count = 1
-    configs.learning_rate = 5e-4
-    configs.update_comment = 'single pred per task'
-    config_str = configs.export()
+k_days = 20;
+pred = model_predictor_list[0];
+# country = 'kr';
+configs.set_datatype(country + '_stock')
+configs.sampling_days = k_days
+configs.set_kdays(k_days, pred=pred, model_predictor_list=model_predictor_list,
+                  features_structure=features_structure)
+configs.n_heads = 8
+configs.f_name = '{}_{}_nswa_profile_test_00{}'.format(country, k_days, i)
+num_epochs = 1
 
-    features_cls = FeatureNew(configs)
-    ds = DataScheduler(configs, features_cls)
-    ds.set_idx(8250)
-    # ds.test_end_idx = min(ds.test_end_idx + 250, ds.data_generator.max_length - ds.configs.k_days - 1)
-    ds.test_end_idx = min(ds.test_end_idx + 250, ds.data_generator.max_length - 1)
+configs.early_stopping_count = 1
+configs.learning_rate = 5e-4
+configs.update_comment = 'single pred per task'
+config_str = configs.export()
 
-    os.makedirs(os.path.join(ds.data_out_path), exist_ok=True)
+features_cls = FeatureNew(configs)
+ds = DataScheduler(configs, features_cls)
+ds.set_idx(8250)
+# ds.test_end_idx = min(ds.test_end_idx + 250, ds.data_generator.max_length - ds.configs.k_days - 1)
+ds.test_end_idx = min(ds.test_end_idx + 250, ds.data_generator.max_length - 1)
 
-    model = TSModel(configs, features_cls, weight_scheme=configs.weight_scheme)
+os.makedirs(os.path.join(ds.data_out_path), exist_ok=True)
 
-    performer = Performance(configs)
-    optimizer = optim.Adam(model.parameters(), lr=configs.learning_rate)
-    scheduler = None
+model = TSModel(configs, features_cls, weight_scheme=configs.weight_scheme)
 
+performer = Performance(configs)
+optimizer = optim.Adam(model.parameters(), lr=configs.learning_rate)
+scheduler = None
+model.to(tu.device)
+
+
+def train_test():
     # train test
     ds.train(model, optimizer, scheduler, performer, num_epochs=num_epochs)
 
+
+def ds_test():
     # ds test
-    early_stopping_count = ds.configs.early_stopping_count
     ep = 0
     train_loss = ds.step_epoch(ep, model, optimizer, scheduler=scheduler, is_train=True)
 
-
+def model_test():
     # model test
     mode = 'train'
     model.train()
@@ -137,3 +133,9 @@ def run():
         optimizer.step()
 
         total_loss += losses
+
+
+def plot_test():
+    ep = 0
+    # performance
+    ds.test_plot(performer, model, ep, is_monthly=True, is_insample=True)

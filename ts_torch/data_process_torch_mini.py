@@ -12,6 +12,20 @@ import numpy as np
 import os
 
 
+# # #### profiler start ####
+import builtins
+
+try:
+    builtins.profile
+except AttributeError:
+    # No line profiler, provide a pass-through version
+    def profile(func): return func
+    builtins.profile = profile
+# # #### profiler end ####
+
+
+
+
 # SWA start
 def adjust_learning_rate(optimizer, lr):
     for param_group in optimizer.param_groups:
@@ -776,10 +790,10 @@ class DataScheduler:
 
                 break
 
-            with torch.autograd.profiler.profile() as prof:
-                train_loss = self.step_epoch(ep, model, optimizer, scheduler=scheduler, is_train=True)
+            # with torch.autograd.profiler.profile() as prof:
+            train_loss = self.step_epoch(ep, model, optimizer, scheduler=scheduler, is_train=True)
 
-            print(prof.key_averages().table(sort_by="self_cpu_time_total"))
+            # print(prof.key_averages().table(sort_by="self_cpu_time_total"))
 
             if train_loss is False:
                 return False
@@ -915,56 +929,56 @@ class DataScheduler:
         total_loss = 0
         i = 0
 
-        with torch.autograd.profiler.profile(use_cuda=True) as prof:
-            for features, labels, add_infos in dataloader:
-                #  features, labels, add_infos = next(iter(dataloader))
-                # nvtx.range_push('batch start')
-                # nvtx.range_push('copy to device')
-                features, labels, add_infos = to_device(tu.device, [features, labels, add_infos])
-                # nvtx.range_pop()
-                with torch.set_grad_enabled(is_train):
-                    # nvtx.range_push('add noise')
-                    features_with_noise = {'input': features['input'], 'output': features['output']}
-                    labels_with_noise = labels
-                    if is_train:
-                        if self.configs.adversarial_training is True:
-                            labels_mtl_noise = self.labels_torch(features_list, labels_with_noise, add_infos)
-                            features_with_noise = Noise.adversarial_noise(features_with_noise, labels_mtl_noise, model)
-                        else:
-                            # add random noise for features
-                            features_with_noise['input'] = Noise.random_noise(features_with_noise['input'], p=0.5)
-                            features_with_noise['input'] = Noise.random_mask(features_with_noise['input'], p=0.9, mask_p=0.2)
+        # with torch.autograd.profiler.profile(use_cuda=True) as prof:
+        for features, labels, add_infos in dataloader:
+            #  features, labels, add_infos = next(iter(dataloader))
+            # nvtx.range_push('batch start')
+            # nvtx.range_push('copy to device')
+            features, labels, add_infos = to_device(tu.device, [features, labels, add_infos])
+            # nvtx.range_pop()
+            with torch.set_grad_enabled(is_train):
+                # nvtx.range_push('add noise')
+                features_with_noise = {'input': features['input'], 'output': features['output']}
+                labels_with_noise = labels
+                if is_train:
+                    if self.configs.adversarial_training is True:
+                        labels_mtl_noise = self.labels_torch(features_list, labels_with_noise, add_infos)
+                        features_with_noise = Noise.adversarial_noise(features_with_noise, labels_mtl_noise, model)
+                    else:
+                        # add random noise for features
+                        features_with_noise['input'] = Noise.random_noise(features_with_noise['input'], p=0.5)
+                        features_with_noise['input'] = Noise.random_mask(features_with_noise['input'], p=0.9, mask_p=0.2)
 
-                            # add random noise for labels
-                            labels_with_noise = Noise.random_noise(labels, p=0.2)
-                            labels_with_noise = Noise.random_flip(labels_with_noise, p=0.1, flip_p=0.2)
-                    # nvtx.range_pop()
-
-                    labels_mtl = self.labels_torch(features_list, labels_with_noise, add_infos)
-                    # pred, _, _, _ = model.forward(features_with_noise, labels_mtl)
-                    # nvtx.range_push('forward pass')
-                    pred, loss_each = model.forward_with_loss(features_with_noise, labels_mtl)
-
-                    losses = 0
-                    for key in loss_each.keys():
-                        losses += loss_each[key].mean()
-                    # nvtx.range_pop()
-
-                    if is_train:
-                        # nvtx.range_push('backward pass')
-                        optimizer.zero_grad()
-                        losses.backward()
-                        optimizer.step()
-                        # nvtx.range_pop()
-
-                    total_loss += losses
-                    if i % 10 == 0:
-                        self.logger.debug("i:%d loss:%f total_loss:%f", i, float(tu.np_ify(losses)), float(tu.np_ify(total_loss)))
-                    i += 1
-
+                        # add random noise for labels
+                        labels_with_noise = Noise.random_noise(labels, p=0.2)
+                        labels_with_noise = Noise.random_flip(labels_with_noise, p=0.1, flip_p=0.2)
                 # nvtx.range_pop()
 
-        print(prof.key_averages().table(sort_by="self_cpu_time_total"))
+                labels_mtl = self.labels_torch(features_list, labels_with_noise, add_infos)
+                # pred, _, _, _ = model.forward(features_with_noise, labels_mtl)
+                # nvtx.range_push('forward pass')
+                pred, loss_each = model.forward_with_loss(features_with_noise, labels_mtl)
+
+                losses = 0
+                for key in loss_each.keys():
+                    losses += loss_each[key].mean()
+                # nvtx.range_pop()
+
+                if is_train:
+                    # nvtx.range_push('backward pass')
+                    optimizer.zero_grad()
+                    losses.backward()
+                    optimizer.step()
+                    # nvtx.range_pop()
+
+                total_loss += losses
+                if i % 10 == 0:
+                    self.logger.debug("i:%d loss:%f total_loss:%f", i, float(tu.np_ify(losses)), float(tu.np_ify(total_loss)))
+                i += 1
+
+                # nvtx.range_pop()
+
+        # print(prof.key_averages().table(sort_by="self_cpu_time_total"))
 
         total_loss = tu.np_ify(total_loss) / i
         if is_train:

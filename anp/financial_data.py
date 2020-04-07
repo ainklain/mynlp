@@ -4,11 +4,43 @@ from pandas.core.series import Series
 from matplotlib import pyplot as plt
 import numpy as np
 import torch
+from ts_torch import torch_util_mini as tu
 
-ContextSet = collections.namedtuple(
-    "ContextSet",
-    ("query", "target_y", "num_total_points", "num_context_points",
-     "hyperparams"))
+# # #### profiler start ####
+import builtins
+
+try:
+    builtins.profile
+except AttributeError:
+    # No line profiler, provide a pass-through version
+    def profile(func): return func
+    builtins.profile = profile
+# # #### profiler end ####
+
+
+# ContextSet = collections.namedtuple(
+#     "ContextSet",
+#     ("query", "target_y", "num_total_points", "num_context_points",
+#      "hyperparams"))
+
+
+class ContextSet:
+    def __init__(self, query, target_y, num_total_points, num_context_points, hyperparams=None):
+        self.query = query
+        self.target_y = target_y
+        self.num_total_points = num_total_points
+        self.num_context_points = num_context_points
+        self.hyperparams = hyperparams
+
+    def to(self, device):
+        ((context_x, context_y), target_x) = self.query
+        self.query = ((tu.to_device(device, context_x), tu.to_device(device, context_y)), tu.to_device(device, target_x))
+        self.target_y = tu.to_device(device, self.target_y)
+        self.hyperparams = tu.to_device(device, self.hyperparams)
+
+    @property
+    def data(self):
+        return (self.query, self.target_y, self.num_total_points, self.num_context_points, self.hyperparams)
 
 
 class TimeSeries:
@@ -35,7 +67,8 @@ class TimeSeries:
         base_y = data[ts_nm]
         return base_y
 
-    def generate_set(self, base_y: Series):
+    @profile
+    def prepare_entire_dataset(self, base_y: Series):
 
         base_logp = np.log(1 + base_y).cumsum() - np.log(1 + base_y.iloc[0])
 
@@ -69,6 +102,7 @@ class TimeSeries:
     def max_len(self):
         return len(self.context_set) if self.context_set is not None else 0
 
+    # @profile
     def generate(self, base_i, seq_len=10, is_train=True):
         # base_i = 50; seq_len = 10; is_train=True; t=0
         assert base_i >= seq_len + self.predict_length // 20  # lookahead 방지
@@ -94,7 +128,7 @@ class TimeSeries:
         t_y_batch = torch.zeros(batch_size, num_context + self.predict_length, self.y_dim)
 
         for t in range(seq_len):
-            ((c_x, c_y), t_x), t_y, len_total, len_ctx, hyperparams = ctx_selected[t]
+            ((c_x, c_y), t_x), t_y, len_total, len_ctx, hyperparams = ctx_selected[t].data
             if t == 0:
                 mu, sig = hyperparams['context_mu'], hyperparams['context_sig']
 

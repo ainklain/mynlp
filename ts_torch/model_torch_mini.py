@@ -11,9 +11,19 @@ from torch import nn
 from torch.nn import functional as F, init
 from torch.autograd import Variable
 
-
 # from tensorflow.keras import Model
 # from tensorflow.keras.layers import Dense, Dropout, Embedding
+
+# # #### profiler start ####
+import builtins
+
+try:
+    builtins.profile
+except AttributeError:
+    # No line profiler, provide a pass-through version
+    def profile(func): return func
+    builtins.profile = profile
+# # #### profiler end ####
 
 
 # ####################### Module ##########################
@@ -199,7 +209,7 @@ class PosEncoding(Base):
         pe = pe.unsqueeze(0) #.transpose(0, 1)
         self.register_buffer('pe', pe)
 
-    @profile
+    # @profile
     def forward(self, x):
         # x shape: [batch, len, d_model]
         x = x + self.pe[:, x.size(1), :]
@@ -645,7 +655,7 @@ class Encoder(Base):
         self.layers = nn.ModuleList(
             [self.layer_type(d_k, d_v, d_model, d_ff, n_heads, dropout) for _ in range(n_layers)])
 
-    @profile
+    # @profile
     def forward(self, enc_inputs, enc_inputs_len, return_attn=False):
         # enc_outputs = self.src_emb(enc_inputs)
         enc_outputs = self.pos_emb(enc_inputs)  # Adding positional encoding TODO: note
@@ -692,7 +702,7 @@ class Decoder(Base):
         self.layers = nn.ModuleList(
             [self.layer_type(d_k, d_v, d_model, d_ff, n_heads, dropout) for _ in range(n_layers)])
 
-    @profile
+    # @profile
     def forward(self, dec_inputs, dec_inputs_len, enc_inputs, enc_outputs, return_attn=False):
         # dec_outputs = self.tgt_emb(dec_inputs)
         dec_outputs = self.pos_emb(dec_inputs)  # Adding positional encoding TODO: note
@@ -913,7 +923,7 @@ class TSModel(Base):
         ret = self.forward(features)
         return ret[0]
 
-    @profile
+    # @profile
     def forward_with_loss(self, features, labels_mtl, return_attn=False):
         # features = {'input': torch.zeros(2, 25, 23), 'output': torch.zeros(2, 1, 23)}
         device = features['input'].device

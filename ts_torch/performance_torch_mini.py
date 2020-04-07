@@ -7,6 +7,19 @@ from matplotlib import pyplot as plt, cm
 
 from ts_torch import torch_util_mini as tu
 
+
+# # #### profiler start ####
+import builtins
+
+try:
+    builtins.profile
+except AttributeError:
+    # No line profiler, provide a pass-through version
+    def profile(func): return func
+    builtins.profile = profile
+# # #### profiler end ####
+
+
 def weight_scale(score, method='L_60', mc=None):
     method = method.lower()
     m_args = method.split('_')
@@ -205,6 +218,7 @@ class Performance:
 
         return result_t
 
+    @profile
     def predict_plot_mtl(self, model, dataloader_set, save_dir
                          , file_nm='test.png'
                          , ylog=False
@@ -1012,6 +1026,7 @@ class Performance:
                 # print("figure saved. (dir: {})".format(save_file_name))
                 plt.close(fig)
 
+    @profile
     def predict_plot_monthly(self, model, dataloader_set, save_dir
                              , file_nm='test.png'
                              , ylog=False
@@ -1087,7 +1102,7 @@ class Performance:
 
             assets = np.array(add_info['asset_list'])
 
-            result_t = add_info['univ'].set_index('infocode').loc[assets]
+            result_t = add_info['univ'].set_index('infocode').reindex(assets)
             result_t.wgt[result_t.wgt.isna()] = 0.
             result_t['wgt'] = result_t['wgt'] / np.sum(result_t['wgt'])
 

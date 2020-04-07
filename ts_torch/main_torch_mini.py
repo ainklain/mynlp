@@ -18,8 +18,6 @@ from ts_torch.performance_torch_mini import Performance
 from ts_torch import torch_util_mini as tu
 
 
-
-
 def run3():
     use_macro, use_swa = False, False
     country = 'kr'
@@ -311,6 +309,7 @@ def example2():
 
     return model_predictor_list, features_structure
 
+
 def example():
     model_predictor_list = ['nmlogy','nmir','nmsize','nmstd', 'pos_20']
     features_structure = {'regression': {'logp_base': {'logp': [0], 'nmy':[20], 'logy': [20], 'nmlogy': [20], 'nmstd': [20], 'nmir': [20]},
@@ -345,13 +344,12 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
     if configs.use_maml:
         num_epochs = 100
     else:
-        num_epochs = 5
+        num_epochs = 100
 
-    configs.early_stopping_count = 1
+    configs.early_stopping_count = 50
     configs.learning_rate = 5e-4
     configs.update_comment = 'single pred per task'
     config_str = configs.export()
-
 
     features_cls = FeatureNew(configs)
     ds = DataScheduler(configs, features_cls)

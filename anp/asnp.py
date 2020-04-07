@@ -11,12 +11,23 @@ import math
 from torch.utils.data import DataLoader
 import os
 import matplotlib.pyplot as plt
-from ts_torch.torch_util_mini import np_ify
+from ts_torch import torch_util_mini as tu
 from anp.gp import NPRegressionDescription, GPCurvesReader
 from anp.financial_data import ContextSet, TimeSeries
 
-# device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-device = 'cpu'
+
+# # #### profiler start ####
+import builtins
+
+try:
+    builtins.profile
+except AttributeError:
+    # No line profiler, provide a pass-through version
+    def profile(func): return func
+    builtins.profile = profile
+# # #### profiler end ####
+
+
 class configs:
     def DEFINE_integer(self, attr_nm, value_, desc_):
         setattr(self, attr_nm, value_)
@@ -95,49 +106,6 @@ def bmm(x: torch.Tensor, y:torch.Tensor):
     out_shape = list(x.shape[:-1]) + list(y.shape[-1:])
     out = torch.bmm(x.view(-1, x.shape[-2], x.shape[-1]), y.view(-1, y.shape[-2], y.shape[-1]))
     return out.reshape(out_shape)
-
-
-def to_device(data: NPRegressionDescription, device='cuda:0'):
-    ((context_x, context_y), target_x) = data.query
-    context_x = [ctx.to(device) for ctx in context_x]
-    context_y = [cty.to(device) for cty in context_y]
-    target_x = [tgx.to(device) for tgx in target_x]
-    target_y = [tgy.to(device) for tgy in data.target_y]
-    query = ((context_x, context_y), target_x)
-    return NPRegressionDescription(
-            query=query,
-            target_y=target_y,
-            num_total_points=[pt.to(device) for pt in data.num_total_points],
-            num_context_points=[pt.to(device) for pt in data.num_context_points],
-            hyperparams=[hp.to(device) for hp in data.hyperparams])
-
-
-def example_lstm():
-    lstm = nn.LSTM(3, 3)  # Input dim is 3, output dim is 3
-    inputs = [torch.randn(1, 3) for _ in range(5)]  # make a sequence of length 5
-
-    # initialize the hidden state.
-    hidden = (torch.randn(1, 1, 3),
-              torch.randn(1, 1, 3))
-    for i in inputs:
-        # Step through the sequence one element at a time.
-        # after each step, hidden contains the hidden state.
-        out, hidden = lstm(i.view(1, 1, -1), hidden)
-
-    # alternatively, we can do the entire sequence all at once.
-    # the first value returned by LSTM is all of the hidden states throughout
-    # the sequence. the second is just the most recent hidden state
-    # (compare the last slice of "out" with "hidden" below, they are the same)
-    # The reason for this is that:
-    # "out" will give you access to all hidden states in the sequence
-    # "hidden" will allow you to continue the sequence and backpropagate,
-    # by passing it as an argument  to the lstm at a later time
-    # Add the extra 2nd dimension
-    inputs = torch.cat(inputs).view(len(inputs), 1, -1)
-    hidden = (torch.randn(1, 1, 3), torch.randn(1, 1, 3))  # clean out hidden state
-    out, hidden = lstm(inputs, hidden)
-    print(out)
-    print(hidden)
 
 
 class Linear(nn.Module):
@@ -615,7 +583,7 @@ class ASNP(nn.Module):
 
         self.reset_variables()
 
-        total_loss = torch.tensor(0.).to(device)
+        total_loss = torch.tensor(0.).to(tu.device)
         mu_list, sigma_list = [], []
         log_p_list, kl_list = [], []
         log_p_seen, log_p_unseen = [], []
@@ -624,24 +592,24 @@ class ASNP(nn.Module):
         cnt_wo, cnt_w = torch.tensor(0.0), torch.tensor(0.0)
 
         for i in range(len(context_x_seq)):
-            context_x, context_y, target_x = context_x_seq[i].to(device), context_y_seq[i].to(device), target_x_seq[i].to(device)
+            context_x, context_y, target_x = context_x_seq[i].to(tu.device), context_y_seq[i].to(tu.device), target_x_seq[i].to(tu.device)
             num_targets = target_x.size(1)
 
             x_re_t, v_re_t = self.common_latent_encoder(context_x, context_y)
 
             # imaginary context update
-            x_im_dist, v_im_dist, x_im_t, v_im_t = self.imaginary_context(x_re_t, v_re_t, 'prior', device)
+            x_im_dist, v_im_dist, x_im_t, v_im_t = self.imaginary_context(x_re_t, v_re_t, 'prior', tu.device)
 
             # global latent encoder (prior)
             z_dist_prior, z_t_prior = self.global_latent_encoder(v_re_t, v_im_t)
 
             # encoding value for real context
             if target_y_list is not None:
-                target_y = target_y_list[i].to(device)
+                target_y = target_y_list[i].to(tu.device)
                 x_re_t_posterior, v_re_t_posterior = self.common_latent_encoder(target_x, target_y)
 
                 # imaginary context update
-                x_im_dist, v_im_dist, x_im_t, v_im_t = self.imaginary_context(x_re_t_posterior, v_re_t_posterior, 'posterior', device)
+                x_im_dist, v_im_dist, x_im_t, v_im_t = self.imaginary_context(x_re_t_posterior, v_re_t_posterior, 'posterior', tu.device)
 
                 # global latent encoder (posterior)
                 z_dist_posterior, z_t = self.global_latent_encoder(v_re_t_posterior, v_im_t)
@@ -796,9 +764,9 @@ def plot_functions_(ep, plot_data, plot_seq_num=-1):
             predicted std dev of the y values at the target points in target_x.
     """
     t_x_list, t_y_list, c_x_list, c_y_list, pred_y_list, std_list = plot_data
-    target_x, target_y = np_ify(t_x_list[plot_seq_num]), np_ify(t_y_list[plot_seq_num])
-    context_x, context_y = np_ify(c_x_list[plot_seq_num]), np_ify(c_y_list[plot_seq_num])
-    pred_y, std = np_ify(pred_y_list[plot_seq_num]), np_ify(std_list[plot_seq_num])
+    target_x, target_y = tu.np_ify(t_x_list[plot_seq_num]), tu.np_ify(t_y_list[plot_seq_num])
+    context_x, context_y = tu.np_ify(c_x_list[plot_seq_num]), tu.np_ify(c_y_list[plot_seq_num])
+    pred_y, std = tu.np_ify(pred_y_list[plot_seq_num]), tu.np_ify(std_list[plot_seq_num])
 
     fig = plt.figure()
     # Plot everything
@@ -863,7 +831,7 @@ def main3():
     # The final output layer of the decoder outputs two values, one for the mean and
     # one for the variance of the prediction at the target location
 
-    model = ASNP(d_x=1, d_y=1, d_hidden=128, d_model=128, n_head=4).to(device)
+    model = ASNP(d_x=1, d_y=1, d_hidden=128, d_model=128, n_head=4).to(tu.device)
     model.train()
 
     optimizer = torch.optim.Adam(model.parameters(), lr=5e-4)
@@ -903,10 +871,10 @@ def main3():
                     plot_functions_(it + ii, plot_data, plot_seq_num=-1)
 
                 # (context_x, context_y), target_x = whole_query
-                print('Iteration: {} [date_i: {}], loss: {}'.format(it, date_i, np_ify(loss_value)))
+                print('Iteration: {} [date_i: {}], loss: {}'.format(it, date_i, tu.np_ify(loss_value)))
             #
             # # Plot the prediction and the context
-            # plot_functions(it, np_ify(target_x), np_ify(target_y), np_ify(context_x), np_ify(context_y), np_ify(pred_y), np_ify(std_y))
+            # plot_functions(it, tu.np_ify(target_x), tu.np_ify(target_y), tu.np_ify(context_x), tu.np_ify(context_y), tu.np_ify(pred_y), tu.np_ify(std_y))
 
 
 def main2():
@@ -988,9 +956,9 @@ def main2():
 
 
             # (context_x, context_y), target_x = whole_query
-            print('Iteration: {}, loss: {}'.format(it, np_ify(loss_value)))
+            print('Iteration: {}, loss: {}'.format(it, tu.np_ify(loss_value)))
             #
             # # Plot the prediction and the context
-            # plot_functions(it, np_ify(target_x), np_ify(target_y), np_ify(context_x), np_ify(context_y), np_ify(pred_y), np_ify(std_y))
+            # plot_functions(it, tu.np_ify(target_x), tu.np_ify(target_y), tu.np_ify(context_x), tu.np_ify(context_y), tu.np_ify(pred_y), tu.np_ify(std_y))
 
 

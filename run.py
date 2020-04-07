@@ -1,25 +1,38 @@
 
-import builtins
+import sys
 import cProfile
 import pstats
 import torch
 from ts_torch import main_torch_mini
 import torch.multiprocessing as mp
-from anp import anpp
+from anp.anpp import main2 as main_anpp
+from anp.asnp import main3 as main_asnp
+from ts_torch.small_model_test import train_test, ds_test, model_test, plot_test
 
 
-try:
-    builtins.profile
-except AttributeError:
-    # No line profiler, provide a pass-through version
-    def profile(func): return func
-    builtins.profile = profile
+def main(mode=10):
+    if mode == 0:
+        model_predictor_list, features_structure = main_torch_mini.example2()
+        main_torch_mini.run_weekend(i=20, use_macro=False, use_swa=False, model_predictor_list=model_predictor_list,
+                                    features_structure=features_structure, country='kr')
 
+    elif mode == 1:
+        train_test()
 
-def main():
-    model_predictor_list, features_structure = main_torch_mini.example2()
-    main_torch_mini.run_weekend(i=12, use_macro=False, use_swa=False, model_predictor_list=model_predictor_list,
-                                features_structure=features_structure, country='kr')
+    elif mode == 2:
+        ds_test()
+
+    elif mode == 3:
+        model_test()
+    elif mode == 4:
+        plot_test()
+    elif mode == 10:
+        main_anpp()
+    elif mode == 11:
+        main_asnp()
+    else:
+        print("0: run / 1: train / 2: ds / 3: model / 4: plot / 10: anpp / 11: ansp")
+
 
 
 def main2(model):
@@ -107,7 +120,8 @@ def main2(model):
 
 
 if __name__ == '__main__':
-    main()
+    mode = int(sys.argv[1])
+    main(mode)
     # prof = cProfile.Profile()
     # prof.runctx("main_torch_mini.run_weekend(i=4, use_macro=False, use_swa=False, model_predictor_list=model_predictor_list, features_structure=features_structure, country='kr')", globals(), locals())
     #
