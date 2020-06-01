@@ -776,6 +776,7 @@ class DataScheduler:
                 stop_count += 1
             else:
                 model.save_to_optim()
+                self.save(ep, model, optimizer, main_model=False)
                 min_eval_loss = eval_loss
                 stop_count = 0
 
@@ -1292,8 +1293,15 @@ class DataScheduler:
             # sqlm.set_db_name('passive')
             # sqlm.db_insert(df_infos[['start_d', 'base_d', 'infocode', 'score']], table_nm, fast_executemany=True)
 
-    def save(self, ep, model, optimizer):
-        save_path = os.path.join(self.data_out_path, "saved_model.pt")
+    def save(self, ep, model, optimizer, main_model=True):
+        if main_model is True:
+            save_path = self.data_out_path
+        else:
+            save_path = os.path.join(self.data_out_path, str(self.base_idx))
+
+        os.makedirs(save_path, exist_ok=True)
+        save_path = os.path.join(save_path, 'saved_model.pt')
+
         torch.save({
             'ep': ep,
             'model_state_dict': model.optim_state_dict,
@@ -1302,8 +1310,12 @@ class DataScheduler:
 
         self.logger.info("[load] Model Saved. %s", save_path)
 
-    def load(self, model, optimizer):
-        load_path = os.path.join(self.data_out_path, "saved_model.pt")
+    def load(self, model, optimizer, main_model=True):
+        if main_model is True:
+            load_path = os.path.join(self.data_out_path, 'saved_model.pt')
+        else:
+            load_path = os.path.join(self.data_out_path, self.base_idx, 'saved_model.pt')
+
         if not os.path.exists(load_path):
             return False
 
@@ -1418,6 +1430,7 @@ class PrepareDataFromDB:
         """
         self.sqlm.set_db_name('qinv')
         df = self.sqlm.db_read(sql_)
+        print('universe:\n{}'.format(df.tail()))
         df.to_csv('./data/equityuniverse.csv', index=False)
 
     @done_decorator
@@ -1449,6 +1462,7 @@ class PrepareDataFromDB:
         """.format(country, top_npercent)
         self.sqlm.set_db_name('qinv')
         df = self.sqlm.db_read(sql_)
+        print('close_y:\n{}'.format(df.tail()))
         df.to_csv('./data/{}_close_y_{}.csv'.format(country, top_npercent), index=False)
 
     @done_decorator
@@ -1469,6 +1483,7 @@ class PrepareDataFromDB:
             order by m.work_d, a.wgt desc""".format(univ_nm)
         self.sqlm.set_db_name('passive')
         df = self.sqlm.db_read(sql_)
+        print('kr_factor_wgt:\n{}'.format(df.tail()))
         df.to_csv('./data/kr_factor_wgt.csv', index=False)
 
         df.ix[:, ['work_m', 'infocode']].to_csv('./data/kr_univ_monthly.csv', index=False)
@@ -1491,6 +1506,7 @@ class PrepareDataFromDB:
             order by eval_m"""
         self.sqlm.set_db_name('qdb')
         df = self.sqlm.db_read(sql_)
+        print('date:\n{}'.format(df.tail()))
         df.to_csv('./data/date.csv', index=False)
 
     @done_decorator
@@ -1510,6 +1526,7 @@ class PrepareDataFromDB:
             order by eval_d, infocode"""
         self.sqlm.set_db_name('qdb')
         df = self.sqlm.db_read(sql_)
+        print('kr_ivol:\n{}'.format(df.tail()))
         df.to_csv('./data/kr_ivol.csv', index=False)
 
     @done_decorator
@@ -1560,6 +1577,7 @@ class PrepareDataFromDB:
         """.format(country)
         self.sqlm.set_db_name('qinv')
         df = self.sqlm.db_read(sql_)
+        print('mktcap_daily:\n{}'.format(df.tail()))
         df.to_csv('./data/{}_mktcap_daily.csv'.format(country), index=False)
 
     @done_decorator
@@ -1588,6 +1606,7 @@ class PrepareDataFromDB:
             order by b.date_"""
         self.sqlm.set_db_name('qdb')
         df = self.sqlm.db_read(sql_)
+        print('macro_daily:\n{}'.format(df.tail()))
         df.to_csv('./data/{}_macro_daily.csv'.format(country), index=False)
 
 
@@ -1651,6 +1670,9 @@ class DataGeneratorDynamic:
         self.df_pivoted_all = data_df[['date_', 'infocode', 'cum_y']].pivot(index='date_', columns='infocode')
         self.df_pivoted_all.columns = self.df_pivoted_all.columns.droplevel(0).to_numpy(dtype=np.int32)
 
+        print("date_:\n{}".format(self.date_[-5:]))
+        print("df_pivoted:\n{}".format(self.df_pivoted_all.tail()))
+
     def set_marketdata(self, market_path, **add_path):
         self.size_df = pd.read_csv(market_path)
         self.size_df.columns = ['eval_d', 'infocode', 'turnover', 'mktcap', 'size_port']
@@ -1661,6 +1683,8 @@ class DataGeneratorDynamic:
             self.size_df = pd.merge(self.size_df, add_data[key], on=['eval_d', 'infocode'])
 
         self.size_df = self.size_df.loc[self.size_df.eval_d >= min(self.date_), :]  # TODO: 임시 (date_보다 이른 데이터 제거)
+
+        print("size_df:\n{}".format(self.size_df.tail()))
 
     def _additional_data(self, **add_path):
         add_data = dict()
@@ -1701,6 +1725,8 @@ class DataGeneratorDynamic:
         self.univ = univ_w_size.loc[:, ['eval_m', 'infocode', 'gicode', 'mktcap', 'wgt']]
         self.univ.columns = ['eval_m', 'infocode', 'gicode', 'mktcap', 'wgt']
 
+        print("univ:\n{}".format(self.univ.tail()))
+
     def set_macrodata(self, macro_path):
         assert hasattr(self, 'date_'), '[set_macrodata] run set_return_and_date first'
         df = pd.read_csv(macro_path).set_index('date_')
@@ -1712,6 +1738,8 @@ class DataGeneratorDynamic:
         data_df = pd.merge(pd.DataFrame({'eval_d': self.date_}), df, how='left', left_on='eval_d', right_on='date_')
         data_df = data_df.set_index('eval_d').ffill()
         self.macro_df = data_df
+
+        print("macro_df:\n{}".format(self.macro_df.tail()))
 
     def sample_data(self, date_i, configs, debug=True):
         if self.initialize is False:

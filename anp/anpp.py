@@ -1,3 +1,6 @@
+
+
+from datetime import datetime, timedelta
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -324,16 +327,13 @@ class Attention(nn.Module):
 
 
 class LatentModel(nn.Module):
-    """
-    Latent Model (Attentive Neural Process)
-    """
-
     def __init__(self, num_hidden, d_x=1, d_y=1):
         super(LatentModel, self).__init__()
         self.latent_encoder = LatentEncoder(num_hidden, num_hidden, input_dim=d_x+d_y)
         self.deterministic_encoder = DeterministicEncoder(num_hidden, input_dim=d_x+d_y)
         self.decoder = Decoder(num_hidden)
         self.BCELoss = nn.BCELoss()
+        self.optim_state_dict = self.state_dict()
 
     @profile
     def forward(self, query, target_y=None):
@@ -341,19 +341,6 @@ class LatentModel(nn.Module):
         (context_x, context_y), target_x = query
         num_targets = target_x.size(1)
 
-        # prior_mu, prior_var, prior = self.latent_encoder(context_x, context_y)
-        # For training
-        # if target_y is not None:
-        #     # posterior_mu, posterior_var, posterior = self.latent_encoder(target_x, target_y)
-        #     # z = posterior
-        #     global_posterior, local_posterior = self.latent_encoder.latent_context(target_x, target_y)
-        #     # z = posterior.sample()
-
-        # For Generation
-        # else:
-        #     global_prior, local_prior = self.latent_encoder.latent_context(context_x, context_y)
-            # z = prior
-            # z = prior.sample()
         n_context = context_x.shape[1]
         c, z = self.latent_encoder(context_x, context_y, target_x)
         r = self.deterministic_encoder(context_x, context_y, target_x)  # [B, T_target, H]
@@ -385,36 +372,7 @@ class LatentModel(nn.Module):
             local_kl = torch.distributions.kl_divergence(local_posterior, local_prior).sum(dim=[1, 2])
             local_kl = local_kl.unsqueeze(1).repeat([1, num_targets])
 
-            # # # local
-            # posterior_l_mu = posterior_l_mu.mean(dim=1)
-            # posterior_l_sigma = posterior_l_sigma.mean(dim=1)
-            # local_posterior = torch.distributions.Normal(loc=posterior_l_mu, scale=posterior_l_sigma)
-            #
-            # n_context = context_x.shape[1]
-            # for i in range(n_context):
-            #     local_prior = torch.distributions.Normal(loc=prior_l_mu[:, i, :], scale=prior_l_sigma[:, i, :])
-            #
-            #     local_kl_temp = torch.distributions.kl_divergence(local_posterior, local_prior).sum(dim=-1, keepdims=True)
-            #     local_kl_temp = local_kl_temp.repeat([1, num_targets])
-            #
-            #     if i == 0:
-            #         local_kl = local_kl_temp
-            #     else:
-            #         local_kl += local_kl_temp
-
             loss = - (log_p - global_kl / torch.tensor(num_targets).float() - local_kl / torch.tensor(num_targets).float()).mean()
-
-            # local_kl = torch.distributions.kl_divergence(local_posterior, local_prior).sum(dim=-1, keepdims=True)
-            # loss = - (log_p - kl / torch.tensor(num_targets).float()).mean()
-
-            # # get log probability
-            # bce_loss = self.BCELoss(torch.sigmoid(mu), target_y)
-            #
-            # # get KL divergence between prior and posterior
-            # kl = self.kl_div(prior_mu, prior_var, posterior_mu, posterior_var)
-            #
-            # # maximize prob and minimize KL divergence
-            # loss = bce_loss + kl
 
         # For Generation
         else:
@@ -425,11 +383,11 @@ class LatentModel(nn.Module):
 
         return mu, sigma, log_p, global_kl, local_kl, loss
 
-    def kl_div(self, prior_mu, prior_var, posterior_mu, posterior_var):
-        kl_div = (torch.exp(posterior_var) + (posterior_mu - prior_mu) ** 2) / torch.exp(prior_var) - 1. + (
-                    prior_var - posterior_var)
-        kl_div = 0.5 * kl_div.sum()
-        return kl_div
+    def save_to_optim(self):
+        self.optim_state_dict = self.state_dict()
+
+    def load_from_optim(self):
+        self.load_state_dict(self.optim_state_dict)
 
 
 def adjust_learning_rate(optimizer, step_num, warmup_step=4000):
@@ -475,7 +433,11 @@ def plot_functions(path, ep, target_x, target_y, context_x, context_y, pred_y, s
     # plt.ylim([-2, 2])
     plt.grid('off')
     ax = plt.gca()
-    fig.savefig(os.path.join(path, 'test_{}.png'.format(ep)))
+    file_path = os.path.join(path, 'test_{}.png'.format(ep))
+    if not os.path.exists(file_path):
+        fig.savefig(os.path.join(path, 'test_{}.png'.format(ep)))
+    else:
+        fig.savefig(os.path.join(path, 'test_{}_1.png'.format(ep)))
     plt.close(fig)
 
 
@@ -506,6 +468,171 @@ def load_model(path, model, optimizer):
     return checkpoint['ep']
 
 
+class Configs:
+    def __init__(self, ts_nm):
+        # data setting
+        self.ts_nm = ts_nm
+        self.max_context_points = 100
+        self.batch_size = 128
+        self.predict_length = 60
+        self.seq_len = 1    # anpp: 1 / asnp: >= 1
+
+        # train setting
+        self.train_iter = 1000
+        self.eval_iter = 1
+        self.plot_after = 1000
+        self.max_epoch = 100
+
+        # model setting
+        self.num_hidden = 64
+        self.learning_rate = 1e-3
+
+        # output setting
+        self._base_out_path = './anp/out/anpp/'
+        self.set_ts_nm(self.ts_nm)
+
+    def get_folder_nm(self, date_=None, nickname=''):
+        if date_ is None:
+            date_ = datetime.today().strftime('%Y%m%d')
+
+        return '{}_{}_{}'.format(date_, self.ts_nm, nickname)
+
+    def make_path(self, out_folder):
+        self.out_path = os.path.join(self._base_out_path, out_folder)
+        os.makedirs(self.out_path, exist_ok=False)
+
+    def set_ts_nm(self, ts_nm):
+        assert ts_nm in ['mkt_rf', 'smb', 'hml', 'rmw', 'wml', 'call_rate', 'kospi', 'mom', 'beme', 'gpa', 'usdkrw']
+        self.ts_nm = ts_nm
+
+        date_ = datetime.today().strftime('%Y%m%d')
+        dir_count = len([x for x in os.listdir(self._base_out_path)
+                         if os.path.isdir(os.path.join(self._base_out_path, x))])
+        out_folder = self.get_folder_nm(date_, str(dir_count+1))
+        self.make_path(out_folder)
+
+
+def train(base_i, configs, dataset, model, optimizer, is_train=True):
+    if is_train:
+        iter = configs.train_iter
+        model.train()
+    else:
+        iter = configs.eval_iter
+        model.eval()
+
+    losses = 0
+    for it in range(iter):
+        data_train = dataset.generate(base_i, seq_len=configs.seq_len, is_train=is_train)
+        # data_train = dataset_train.generate_curves()
+        data_train.to(tu.device)
+        # Define the loss
+        ((c_x, c_y), t_x), t_y = data_train.query,  data_train.target_y
+        train_query = ((c_x[0], c_y[0]), t_x[0])
+        train_target_y = t_y[0]
+        with torch.set_grad_enabled(is_train):
+            _, _, log_prob, _, _, loss = model(train_query, train_target_y)
+
+            if is_train:
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+        losses += tu.np_ify(loss)
+
+    losses = losses / iter
+    return losses
+
+
+def plot(date_i, plot_i, path, dataset, model):
+    model.eval()
+
+    try:
+        data_test = dataset.generate(date_i, seq_len=1, is_train=False)
+        data_test.to(tu.device)
+    except:
+        print('data generation error: {}'.format(date_i))
+        return False
+
+    with torch.set_grad_enabled(False):
+        ((c_x, c_y), t_x), t_y = data_test.query, data_test.target_y
+        test_query = ((c_x[0], c_y[0]), t_x[0])
+        test_target_y = t_y[0]
+        _, _, log_prob, _, _, loss = model(test_query, test_target_y)
+
+        # Get the predicted mean and variance at the target points for the testing set
+        mu, sigma, _, _, _, _ = model(test_query)
+
+    loss_value, pred_y, std_y, target_y, ((context_x, context_y), target_x) = tu.np_ify(loss), tu.np_ify(
+        mu), tu.np_ify(sigma), tu.np_ify(test_target_y), test_query
+    context_x, context_y, target_x = tu.np_ify(context_x), tu.np_ify(context_y), tu.np_ify(target_x)
+    print('date: {}, loss: {}'.format(date_i, loss_value))
+
+    # Plot the prediction and the context
+    plot_functions(path, plot_i, target_x, target_y, context_x, context_y, pred_y, std_y)
+
+
+def main():
+    configs = Configs('kospi')
+    dataset = TimeSeries(batch_size=configs.batch_size,
+                         max_num_context=configs.max_context_points,
+                         predict_length=configs.predict_length)
+
+    base_y = dataset.get_timeseries(configs.ts_nm)
+    dataset.prepare_entire_dataset(base_y)
+
+    model = LatentModel(configs.num_hidden)
+    model.train()
+    optimizer = torch.optim.Adam(model.parameters(), lr=configs.learning_rate)
+
+    ep = load_model(configs.out_path, model, optimizer)
+    if ep is False:
+        ep = 0
+
+    model.to(tu.device)
+
+    min_eval_loss = 99999
+    earlystop_count = 0
+    pred_point = configs.predict_length // 20
+    for ii, base_i in enumerate(range(10 + configs.seq_len + pred_point, dataset.max_len - 1)):
+        # if ii == 0:
+        #     for _ in range(20):
+        #         train(base_i - pred_point, configs, dataset, model, optimizer, is_train=True)
+
+        ep = 0
+        print("[base_i: {}, ep: {}]".format(base_i, ep))
+        while ep < configs.max_epoch:
+            eval_loss = train(base_i - pred_point, configs, dataset, model, optimizer, is_train=False)
+            if ep > 10 and min_eval_loss > eval_loss:
+                model.save_to_optim()
+                min_eval_loss = eval_loss
+                earlystop_count = 0
+            else:
+                earlystop_count += 1
+
+            print("[base_i: {}, ep: {}] eval_loss: {} / count: {}".format(base_i, ep, eval_loss, earlystop_count))
+            if earlystop_count >= 20:
+                model.load_from_optim()
+                plot(base_i - pred_point, base_i, configs.out_path, dataset, model)
+                plot(base_i, base_i, configs.out_path, dataset, model)
+
+                min_eval_loss = 99999
+                earlystop_count = 0
+                break
+            if ep % 5:
+                plot(0, base_i, configs.out_path, dataset, model)
+                plot(base_i - pred_point, base_i, configs.out_path, dataset, model)
+
+            train_loss = train(base_i - pred_point, configs, dataset, model, optimizer, is_train=True)
+            ep += 1
+
+
+
+
+
+
+
+
+
 @profile
 def main2():
     ts_nm = 'kospi'
@@ -518,24 +645,10 @@ def main2():
     batch_size = 128
     base_i = 100
     dataset = TimeSeries(batch_size=batch_size, max_num_context=MAX_CONTEXT_POINTS, predict_length=120)
-    base_y = dataset.get_timeseries()
+    base_y = dataset.get_timeseries(ts_nm)
     dataset.prepare_entire_dataset(base_y)
 
-
-    # # Train dataset
-    # dataset_train = GPCurvesReader(
-    #     batch_size=16, max_num_context=MAX_CONTEXT_POINTS)
-    #
-    # # Test dataset
-    # dataset_test = GPCurvesReader(
-    #     batch_size=1, max_num_context=MAX_CONTEXT_POINTS, testing=True)
-
-
-    # Sizes of the layers of the MLPs for the encoders and decoder
-    # The final output layer of the decoder outputs two values, one for the mean and
-    # one for the variance of the prediction at the target location
-
-    model = LatentModel(128) #.cuda()
+    model = LatentModel(128)
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
@@ -554,7 +667,6 @@ def main2():
         train_query = ((c_x[0], c_y[0]), t_x[0])
         train_target_y = t_y[0]
         _, _, log_prob, _, _, loss = model(train_query, train_target_y)
-        # _, _, log_prob, _, loss = model(data_train.query,  data_train.target_y)
 
         optimizer.zero_grad()
         loss.backward()
@@ -583,7 +695,7 @@ def main2():
                 print('Iteration: {}, loss: {}'.format(it, loss_value))
 
                 # Plot the prediction and the context
-                plot_functions(path, it + ii, target_x, target_y, context_x, context_y, pred_y, std_y)
+                plot_functions(path, it + ii - 1, target_x, target_y, context_x, context_y, pred_y, std_y)
 
         # Plot the predictions in `PLOT_AFTER` intervals
         if it > 0 and it % 10000 == 0:
@@ -624,217 +736,3 @@ def main2():
 
 
 
-
-def main():
-    train_dataset = torchvision.datasets.MNIST('./data', train=True, download=False, )
-
-    epochs = 200
-    model = LatentModel(128).cuda()
-    model.train()
-
-    optim = torch.optim.Adam(model.parameters(), lr=1e-4)
-    writer = SummaryWriter()
-    global_step = 0
-    for epoch in range(epochs):
-        dloader = DataLoader(train_dataset, batch_size=16, collate_fn=collate_fn, shuffle=True, num_workers=16)
-        pbar = tqdm(dloader)
-        for i, data in enumerate(pbar):
-            global_step += 1
-            adjust_learning_rate(optim, global_step)
-            context_x, context_y, target_x, target_y = data
-            context_x = context_x.cuda()
-            context_y = context_y.cuda()
-            target_x = target_x.cuda()
-            target_y = target_y.cuda()
-
-            # pass through the latent model
-            y_pred, kl, loss = model(context_x, context_y, target_x, target_y)
-
-            # Training step
-            optim.zero_grad()
-            loss.backward()
-            optim.step()
-
-            # Logging
-            writer.add_scalars('training_loss', {
-                'loss': loss,
-                'kl': kl.mean(),
-
-            }, global_step)
-
-        # save model by each epoch
-        # torch.save({'model': model.state_dict(),
-        #         'optimizer': optim.state_dict()},
-        #        os.path.join('./checkpoint', 'checkpoint_%d.pth.tar' % (epoch + 1)))
-
-
-
-# NPRegressionDescription = collections.namedtuple(
-#     "NPRegressionDescription",
-#     ("query", "target_y", "num_total_points", "num_context_points"))
-#
-#
-# def to_device(data: NPRegressionDescription, device='cuda:0'):
-#     ((context_x, context_y), target_x) = data.query
-#     query = ((context_x.to(device), context_y.to(device)), target_x.to(device))
-#     return NPRegressionDescription(
-#             query=query,
-#             target_y=data.target_y.to(device),
-#             num_total_points=data.num_total_points,
-#             num_context_points=data.num_context_points)
-#
-#
-# class GPCurvesReader(object):
-#     """Generates curves using a Gaussian Process (GP).
-#
-#     Supports vector inputs (x) and vector outputs (y). Kernel is
-#     mean-squared exponential, using the x-value l2 coordinate distance scaled by
-#     some factor chosen randomly in a range. Outputs are independent gaussian
-#     processes.
-#     """
-#
-#     def __init__(self,
-#                  batch_size,
-#                  max_num_context,
-#                  x_size=1,
-#                  y_size=1,
-#                  l1_scale=0.6,
-#                  sigma_scale=1.0,
-#                  random_kernel_parameters=True,
-#                  testing=False):
-#         """Creates a regression dataset of functions sampled from a GP.
-#
-#         Args:
-#             batch_size: An integer.
-#             max_num_context: The max number of observations in the context.
-#             x_size: Integer >= 1 for length of "x values" vector.
-#             y_size: Integer >= 1 for length of "y values" vector.
-#             l1_scale: Float; typical scale for kernel distance function.
-#             sigma_scale: Float; typical scale for variance.
-#             random_kernel_parameters: If `True`, the kernel parameters (l1 and sigma)
-#               will be sampled uniformly within [0.1, l1_scale] and [0.1, sigma_scale].
-#             testing: Boolean that indicates whether we are testing. If so there are
-#               more targets for visualization.
-#         """
-#         self._batch_size = batch_size
-#         self._max_num_context = max_num_context
-#         self._x_size = x_size
-#         self._y_size = y_size
-#         self._l1_scale = l1_scale
-#         self._sigma_scale = sigma_scale
-#         self._random_kernel_parameters = random_kernel_parameters
-#         self._testing = testing
-#
-#     def _gaussian_kernel(self, xdata, l1, sigma_f, sigma_noise=2e-2):
-#         """Applies the Gaussian kernel to generate curve data.
-#
-#         Args:
-#             xdata: Tensor of shape [B, num_total_points, x_size] with
-#                 the values of the x-axis data.
-#             l1: Tensor of shape [B, y_size, x_size], the scale
-#                 parameter of the Gaussian kernel.
-#             sigma_f: Tensor of shape [B, y_size], the magnitude
-#                 of the std.
-#             sigma_noise: Float, std of the noise that we add for stability.
-#
-#         Returns:
-#             The kernel, a float tensor of shape
-#             [B, y_size, num_total_points, num_total_points].
-#         """
-#         num_total_points = xdata.shape[1]
-#
-#         # Expand and take the difference
-#         xdata1 = torch.unsqueeze(xdata, dim=1)  # [B, 1, num_total_points, x_size]
-#         xdata2 = torch.unsqueeze(xdata, dim=2)  # [B, num_total_points, 1, x_size]
-#         diff = xdata1 - xdata2  # [B, num_total_points, num_total_points, x_size]
-#
-#         # [B, y_size, num_total_points, num_total_points, x_size]
-#         norm = torch.pow(diff[:, None, :, :, :] / l1[:, :, None, None, :], 2)
-#
-#         norm = torch.sum(norm, -1)  # [B, data_size, num_total_points, num_total_points]
-#
-#         # [B, y_size, num_total_points, num_total_points]
-#         kernel = torch.pow(sigma_f, 2)[:, :, None, None] * torch.exp(-0.5 * norm)
-#
-#         # Add some noise to the diagonal to make the cholesky work.
-#         kernel += (sigma_noise ** 2) * torch.eye(num_total_points)
-#
-#         return kernel
-#
-#     def generate_curves(self):
-#         """Builds the op delivering the data.
-#
-#         Generated functions are `float32` with x values between -2 and 2.
-#
-#         Returns:
-#             A `CNPRegressionDescription` namedtuple.
-#         """
-#         num_context = torch.randint(low=3, high=self._max_num_context, size=[])
-#
-#         # If we are testing we want to have more targets and have them evenly
-#         # distributed in order to plot the function.
-#         if self._testing:
-#             num_target = 400
-#             num_total_points = num_target
-#             x_values = torch.unsqueeze(torch.arange(-2., 2., 1./100, dtype=torch.float32), dim=0).repeat(self._batch_size, 1)
-#             x_values = torch.unsqueeze(x_values, dim=-1)
-#         # During training the number of target points and their x-positions are
-#         # selected at random
-#         else:
-#             num_target = torch.randint(low=0, high=self._max_num_context - num_context, size=[])
-#             num_total_points = num_context + num_target
-#             x_values = torch.FloatTensor(self._batch_size, num_total_points, self._x_size).uniform_(-2, 2)
-#
-#         # Set kernel parameters
-#         # Either choose a set of random parameters for the mini-batch
-#         if self._random_kernel_parameters:
-#             l1 = torch.FloatTensor(self._batch_size, self._y_size,
-#                                     self._x_size).uniform_(0.1, self._l1_scale)
-#             sigma_f = torch.FloatTensor(self._batch_size, self._y_size).uniform_(0.1, self._sigma_scale)
-#
-#         # Or use the same fixed parameters for all mini-batches
-#         else:
-#             l1 = torch.ones([self._batch_size, self._y_size, self._x_size]) * self._l1_scale
-#             sigma_f = torch.ones([self._batch_size, self._y_size]) * self._sigma_scale
-#
-#         # Pass the x_values through the Gaussian kernel
-#         # [batch_size, y_size, num_total_points, num_total_points]
-#         kernel = self._gaussian_kernel(x_values, l1, sigma_f)
-#
-#         # Calculate Cholesky, using double precision for better stability:
-#         cholesky = torch.cholesky(kernel.double()).float()
-#
-#         # Sample a curve
-#         # [batch_size, y_size, num_total_points, 1]
-#         y_values = torch.bmm(cholesky.view(-1, num_total_points, num_total_points),
-#                              torch.randn([self._batch_size * self._y_size, num_total_points, 1])).view(self._batch_size, self._y_size, num_total_points, 1)
-#
-#         # [batch_size, num_total_points, y_size]
-#         y_values = torch.transpose(torch.squeeze(y_values, 3), 1, 2)
-#
-#         if self._testing:
-#             # Select the targets
-#             target_x = x_values
-#             target_y = y_values
-#
-#             # Select the observations
-#             idx = torch.randperm(num_target)
-#             context_x = x_values[:, idx[:num_context]]
-#             context_y = y_values[:, idx[:num_context]]
-#         else:
-#             # Select the targets which will consist of the context points as well as
-#             # some new target points
-#             target_x = x_values[:, :num_target + num_context, :]
-#             target_y = y_values[:, :num_target + num_context, :]
-#
-#             # Select the observations
-#             context_x = x_values[:, :num_context, :]
-#             context_y = y_values[:, :num_context, :]
-#
-#         query = ((context_x, context_y), target_x)
-#
-#         return NPRegressionDescription(
-#             query=query,
-#             target_y=target_y,
-#             num_total_points=target_x.shape[1],
-#             num_context_points=num_context)

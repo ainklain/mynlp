@@ -25,7 +25,7 @@ class Config:
         self.save_steps = 100
         self.early_stopping_count = 5
         self.dropout = 0.4
-        self.learning_rate = 1e-4
+        self.learning_rate = 5e-4
 
         self.train_decaying_factor = 0.99
 
@@ -42,8 +42,8 @@ class Config:
 
         self.shuffle_seek = 1000
         self.d_model = 64
-        self.n_heads = 8
-        self.n_layers = 6
+        self.n_heads = 4
+        self.n_layers = 3
         # self.model_hidden_size = 128
         # self.model_hidden_size = self.embedding_size    # self.set_features_info 에서 재설정
         self.d_ff = self.d_model

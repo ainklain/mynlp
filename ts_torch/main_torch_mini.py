@@ -285,7 +285,7 @@ def run():
 
 def example2():
     # model_predictor_list = ['nmy', 'nmsize']
-    model_predictor_list = ['nmy', 'pos_20', 'nmstd']
+    model_predictor_list = ['nmy', 'nmsize', 'pos_20', 'nmstd']
 
     # model_predictor_list = ['nmir', 'nmy', 'nmsize', 'pos_20', 'nmstd']
     features_structure = {'regression': {'logp_base': {'logp': [0],
@@ -325,7 +325,7 @@ def example():
 
 
 def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure, country='kr'):
-    # i=10; country='kr'; use_macro = False; use_swa=False; model_predictor_list, features_structure=example2()
+    # i=1; country='kr'; use_macro = False; use_swa=False; model_predictor_list, features_structure=example2()
     # use_swa = True
     configs = Config(use_macro=use_macro, use_swa=use_swa)
 
@@ -335,19 +335,19 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
     configs.set_datatype(country + '_stock')
     configs.sampling_days = k_days
     configs.set_kdays(k_days, pred=pred, model_predictor_list=model_predictor_list, features_structure=features_structure)
-    configs.n_heads = 8
+    # configs.n_heads = 8
     # configs.f_name ='testtesttes_04'
     if use_swa:
-        configs.f_name = '{}_{}_swa_profile_test_00{}'.format(country, k_days, i)
+        configs.f_name = '{}_{}_swa_jun_00{}'.format(country, k_days, i)
     else:
-        configs.f_name = '{}_{}_nswa_profile_test_00{}'.format(country, k_days, i)
+        configs.f_name = '{}_{}_nswa_jun_00{}'.format(country, k_days, i)
     if configs.use_maml:
-        num_epochs = 100
+        num_epochs = 1000
     else:
-        num_epochs = 100
+        num_epochs = 1000
 
-    configs.early_stopping_count = 50
-    configs.learning_rate = 5e-4
+    configs.early_stopping_count = 20
+    configs.learning_rate = 1e-4
     configs.update_comment = 'single pred per task'
     config_str = configs.export()
 
@@ -387,8 +387,8 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
     # ds.train_maml(model, optimizer, performer, num_epochs=50, early_stopping_count=configs.early_stopping_count)
     i_profile = 0
     while True:
-        if i_profile == 1:
-            break
+        # if i_profile == 1:
+        #     break
 
         i_profile = 1
         # model = TSModel(configs, features_cls, weight_scheme=configs.weight_scheme)
@@ -402,10 +402,10 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
             else:
                 ds.train(model, optimizer, scheduler, performer, num_epochs=num_epochs)
 
-        # recent_month_end = '2020-03-31'
-        # dataloader_t = ds.dataloader_t(recent_month_end, force_calc=True)
-        # x = performer.extract_portfolio(model, dataloader_t, rate_=configs.app_rate)
-        # x.to_csv('./out/{}/result_{}.csv'.format(configs.f_name, ds.base_idx))
+        recent_month_end = '2020-04-30'
+        dataloader_t = ds.dataloader_t(recent_month_end, force_calc=True)
+        x = performer.extract_portfolio(model, dataloader_t, rate_=configs.app_rate)
+        x.to_csv('./out/{}/result_{}.csv'.format(configs.f_name, ds.base_idx))
 
         ds.next()
         if ds.done:
@@ -415,7 +415,7 @@ def run_weekend(i, use_macro,  use_swa, model_predictor_list, features_structure
             print('something wrong')
             break
 
-    recent_month_end = '2020-03-31'
+    recent_month_end = '2020-04-30'
     dataloader_t = ds.dataloader_t(recent_month_end, force_calc=True)
     x = performer.extract_portfolio(model, dataloader_t, rate_=configs.app_rate)
     x.to_csv('./out/{}/result_{}.csv'.format(configs.f_name, recent_month_end))
